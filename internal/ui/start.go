@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"cmp"
 	"context"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -38,6 +40,7 @@ const (
 	detailKubeConfig
 	detailKubeContext
 	detailEndpoint
+	detailHost
 	detailRange
 )
 
@@ -48,6 +51,8 @@ func (d detail) label() string {
 		return "context"
 	case detailEndpoint:
 		return "endpoint"
+	case detailHost:
+		return "ssh host"
 	case detailRange:
 		return "time range"
 	default:
@@ -58,65 +63,24 @@ func (d detail) label() string {
 type startStep int
 
 const (
-	// stepSaved is only reached when the config file declares sources.
+	// stepSaved is only reached when the config file declares something.
 	stepSaved startStep = iota
-	stepTransport
 	stepCollector
 	stepQuery
 )
 
-var (
-	transports = []source.Transport{source.TransportLocal, source.TransportSSH}
-	collectors = []source.Collector{
-		source.CollectorJournal,
-		source.CollectorKubectl,
-		source.CollectorDocker,
-		source.CollectorCommand,
-	}
-	// databases read over HTTP rather than by running a command. Each is
-	// offered with nothing declared, for an endpoint typed at the prompt.
-	databases = []source.Collector{
-		source.CollectorVictoriaLogs,
-		source.CollectorLoki,
-	}
-)
-
-// choice is one chip of the collector step. A collector that reads from a log
-// database is offered once per declared endpoint, since the endpoint is as much
-// a part of "where the logs are" as the host is for the others.
-type choice struct {
-	collector source.Collector
-	endpoint  source.Endpoint
-}
-
-// label names the chip. A declared endpoint is named by itself: which database
-// it speaks to is already visible in the command preview. One with nothing
-// declared is named by its collector, since that is all it is yet.
-func (c choice) label() string {
-	if c.collector.IsRemoteAPI() {
-		if l := c.endpoint.Label(); l != "" {
-			return l
-		}
-	}
-	return string(c.collector)
-}
-
-// optionsFor lists the collectors offered, followed by one entry per endpoint.
-//
-// A collector that reads from a database is offered even with nothing declared:
-// its endpoint is then typed at the prompt, the way an ssh host is.
-func optionsFor(endpoints []source.Endpoint) []choice {
-	out := make([]choice, 0, len(collectors)+len(databases)+len(endpoints))
-	for _, c := range collectors {
-		out = append(out, choice{collector: c})
-	}
-	for _, c := range databases {
-		out = append(out, choice{collector: c})
-	}
-	for _, e := range endpoints {
-		out = append(out, choice{collector: e.Collector, endpoint: e})
-	}
-	return out
+// collectors are the chips of the first step: what produces the logs. Where
+// they come from is a detail of the collector — an ssh host for the ones that
+// run a command, an endpoint for the ones that query a database — because most
+// sources are read from this machine and a step that says so is a step spent
+// saying nothing.
+var collectors = []source.Collector{
+	source.CollectorJournal,
+	source.CollectorKubectl,
+	source.CollectorDocker,
+	source.CollectorCommand,
+	source.CollectorVictoriaLogs,
+	source.CollectorLoki,
 }
 
 const (
@@ -149,7 +113,6 @@ type startModel struct {
 	w, h int
 
 	step      startStep
-	transport int
 	collector int
 
 	savedFilter textinput.Model
@@ -189,8 +152,9 @@ type startModel struct {
 	savedIdx []int
 	history  config.History
 
-	// options are the collector chips, one of them per declared endpoint.
-	options []choice
+	// endpoints are the log APIs declared in the config file, offered on the
+	// start screen and in the endpoint prompt.
+	endpoints []source.Endpoint
 
 	// cache holds every completion result seen so far, keyed by request, so
 	// stepping back and forth never waits on a listing twice.
@@ -216,7 +180,7 @@ func newStart() startModel {
 	}
 	m := startModel{
 		savedFilter: mk("filter saved sources"),
-		host:        mk("user@host"),
+		host:        mk("user@host — empty reads this machine"),
 		target:      mk(""),
 		query:       mk("grep term or regexp, empty for everything"),
 		kubeconfig:  mk("path to kubeconfig, e.g. /etc/rancher/k3s/k3s.yaml"),
@@ -235,10 +199,10 @@ func newStart() startModel {
 	if m.err == nil {
 		m.err = endpointErr
 	}
-	m.options = optionsFor(endpoints)
+	m.endpoints = endpoints
 	m.history = loadHistory()
-	if len(m.saved) == 0 {
-		m.step = stepTransport
+	if len(m.saved) == 0 && len(m.endpoints) == 0 {
+		m.step = stepCollector
 	} else {
 		m.candidates = m.savedCandidates()
 		m.refilter()
@@ -256,11 +220,15 @@ var (
 	loadHistory = config.LoadHistory
 )
 
-// savedCandidates renders the declared sources as suggestions. A source that
-// does not name a target says so, since picking it opens the prompt rather
-// than the logs.
+// savedCandidates renders what the config file declares: its sources, then its
+// endpoints. An endpoint is offered in its own right because it is already
+// everything a query needs — a place and a way in — and most of them never get
+// a source written for them.
+//
+// Anything that does not name a target says what it will ask for, since picking
+// it opens the prompt rather than the logs.
 func (m startModel) savedCandidates() []complete.Candidate {
-	out := make([]complete.Candidate, 0, len(m.saved))
+	out := make([]complete.Candidate, 0, len(m.saved)+len(m.endpoints))
 	for _, s := range m.saved {
 		cfg, ready, err := s.Stream()
 		if err != nil {
@@ -271,7 +239,7 @@ func (m startModel) savedCandidates() []complete.Candidate {
 		switch {
 		case cfg.Collector.IsRemoteAPI():
 			where = cfg.Endpoint.Label()
-		case cfg.Transport == source.TransportSSH:
+		case cfg.Host != "":
 			where = "ssh://" + cfg.Host
 		}
 		detail := where + " · " + string(cfg.Collector)
@@ -280,25 +248,92 @@ func (m startModel) savedCandidates() []complete.Candidate {
 		}
 		out = append(out, complete.Candidate{Value: s.Name, Detail: detail})
 	}
+	for _, e := range m.endpoints {
+		out = append(out, complete.Candidate{
+			Value:  e.Name,
+			Detail: string(e.Collector) + " · " + endpointWhere(e) + " · " + missingLabel(e.Collector),
+		})
+	}
 	return out
 }
 
-// choice is the collector chip in hand.
-func (m startModel) choice() choice {
-	if m.collector < 0 || m.collector >= len(m.options) {
-		return choice{collector: collectors[0]}
+// endpointWhere names where an endpoint points, short enough for a list. A
+// Grafana datasource is its uid, which is the only thing telling two of them
+// apart.
+func endpointWhere(e source.Endpoint) string {
+	u, err := url.Parse(e.URL)
+	if err != nil {
+		return e.URL
 	}
-	return m.options[m.collector]
+	where := u.Host
+	if _, uid, ok := strings.Cut(u.Path, grafanaProxyPath); ok {
+		where += " / " + uid
+	}
+	return where
 }
 
-// endpoint is the endpoint in hand: the one the chip carries, or, for the chip
-// that carries none, whatever was typed at the prompt.
-func (m startModel) endpoint() source.Endpoint {
-	e := m.choice().endpoint
-	if e.URL == "" {
-		e.URL = normalizeURL(m.endpointURL.Value())
+// grafanaProxyPath is how a datasource uid shows up in an endpoint's URL, which
+// is what makes it worth pulling back out for the list.
+const grafanaProxyPath = "/api/datasources/proxy/uid/"
+
+// savedEndpoint returns the endpoint the saved entry at i names, if it is one
+// rather than a source.
+func (m startModel) savedEndpoint(i int) (source.Endpoint, bool) {
+	i -= len(m.saved)
+	if i < 0 || i >= len(m.endpoints) {
+		return source.Endpoint{}, false
 	}
-	return e
+	return m.endpoints[i], true
+}
+
+// hostValue is the ssh destination in hand, empty for this machine.
+func (m startModel) hostValue() string { return strings.TrimSpace(m.host.Value()) }
+
+// transport follows from the host: naming one is what asks for ssh, so nobody
+// has to choose "local" to say they meant this machine.
+func (m startModel) transport() source.Transport {
+	if m.hostValue() == "" {
+		return source.TransportLocal
+	}
+	return source.TransportSSH
+}
+
+// collectorAt is the chip in hand.
+func (m startModel) collectorAt() source.Collector {
+	if m.collector < 0 || m.collector >= len(collectors) {
+		return collectors[0]
+	}
+	return collectors[m.collector]
+}
+
+// endpoint is the endpoint in hand: the declared one the prompt names, or the
+// URL it holds. Nothing is remembered between the two, so what the prompt shows
+// is always what will be queried.
+func (m startModel) endpoint() source.Endpoint {
+	v := strings.TrimSpace(m.endpointURL.Value())
+	if v == "" {
+		return source.Endpoint{}
+	}
+	for _, e := range m.endpoints {
+		if e.Name == v {
+			return e
+		}
+	}
+	return source.Endpoint{URL: normalizeURL(v)}
+}
+
+// endpointCandidates offers the declared endpoints that speak the collector in
+// hand. One that speaks another API is not a choice here: its paths, query
+// language and tenancy all differ.
+func (m startModel) endpointCandidates() []complete.Candidate {
+	out := make([]complete.Candidate, 0, len(m.endpoints))
+	for _, e := range m.endpoints {
+		if e.Collector != m.collectorAt() {
+			continue
+		}
+		out = append(out, complete.Candidate{Value: e.Name, Detail: endpointWhere(e)})
+	}
+	return out
 }
 
 // normalizeURL fills in the scheme an address typed by hand tends to omit. A
@@ -400,10 +435,21 @@ func missingLabel(c source.Collector) string {
 	}
 }
 
-// openSaved acts on the source at index i: it streams one that names a target,
-// and otherwise unwinds into the prompt with everything it did name already
-// filled in, so a source can pin a cluster and leave the pod open.
+// openSaved acts on the entry at index i: it streams a source that names a
+// target, and otherwise unwinds into the prompt with everything it did name
+// already filled in, so a source can pin a cluster and leave the pod open.
+//
+// An endpoint has nothing but a place, so it always opens the prompt — with the
+// query waiting, which is all it was ever missing.
 func (m startModel) openSaved(i int) (startModel, tea.Cmd) {
+	if e, ok := m.savedEndpoint(i); ok {
+		return m.prefill(source.Config{
+			Collector: e.Collector,
+			Endpoint:  e,
+			Tail:      m.tail,
+			Follow:    m.follow,
+		}, "")
+	}
 	if i < 0 || i >= len(m.saved) {
 		return m, nil
 	}
@@ -422,11 +468,11 @@ func (m startModel) openSaved(i int) (startModel, tea.Cmd) {
 // prefill seeds the manual flow from a config and stops at the step that still
 // needs an answer.
 func (m startModel) prefill(cfg source.Config, query string) (startModel, tea.Cmd) {
-	m.transport = max(slices.Index(transports, cfg.Transport), 0)
-	m.collector = max(slices.IndexFunc(m.options, func(c choice) bool {
-		return c.collector == cfg.Collector && c.endpoint.URL == cfg.Endpoint.URL
-	}), 0)
+	m.collector = max(slices.Index(collectors, cfg.Collector), 0)
 	m.host.SetValue(cfg.Host)
+	// The endpoint is named where it was declared, so what the prompt shows is
+	// what the config file calls it.
+	m.endpointURL.SetValue(cmp.Or(cfg.Endpoint.Name, cfg.Endpoint.URL))
 	m.kubeconfig.SetValue(cfg.KubeConfig)
 	m.kubecontext.SetValue(cfg.KubeContext)
 	m.target.SetValue(config.Target(cfg))
@@ -450,26 +496,25 @@ func (m startModel) request() (complete.Request, bool) {
 	case stepSaved:
 		// Declared sources are already in memory; nothing to look up.
 		return complete.Request{}, false
-	case stepTransport:
-		if transports[m.transport] != source.TransportSSH {
-			return complete.Request{}, false
-		}
-		return complete.Request{Field: complete.FieldHost}, true
 	case stepCollector:
-		if m.detail == detailRange {
-			// A window is written, not listed; the presets stand in for it.
+		switch m.detail {
+		case detailRange, detailEndpoint:
+			// Both are written rather than listed: the presets and the declared
+			// endpoints stand in for a listing.
 			return complete.Request{}, false
+		case detailHost:
+			return complete.Request{Field: complete.FieldHost}, true
 		}
-		if m.choice().collector.IsRemoteAPI() {
+		if m.collectorAt().IsRemoteAPI() {
 			// A query is written, not picked from a listing. What was written
 			// before is still offered, from history.
 			return complete.Request{}, false
 		}
 		req := complete.Request{
 			Field:       complete.FieldTarget,
-			Transport:   transports[m.transport],
-			Host:        strings.TrimSpace(m.host.Value()),
-			Collector:   m.choice().collector,
+			Transport:   m.transport(),
+			Host:        m.hostValue(),
+			Collector:   m.collectorAt(),
 			Elevate:     m.elevate,
 			KubeConfig:  strings.TrimSpace(m.kubeconfig.Value()),
 			KubeContext: strings.TrimSpace(m.kubecontext.Value()),
@@ -504,8 +549,11 @@ func (m *startModel) fetch() tea.Cmd {
 		// with no listing still offers what was used here before, and the
 		// range offers the windows worth reaching for.
 		m.candKey, m.loading = "", false
-		if m.detail == detailRange {
+		switch m.detail {
+		case detailRange:
 			m.candidates = rangePresets
+		case detailEndpoint:
+			m.candidates = m.endpointCandidates()
 		}
 		m.refilter()
 		return m.preload()
@@ -550,16 +598,17 @@ func (m *startModel) preload() tea.Cmd {
 		}
 	}
 
-	switch m.step {
-	case stepTransport:
-		// Reading ssh_config is cheap; do it even while local is selected.
+	if m.step == stepCollector {
+		// Reading ssh_config is cheap, and the host prompt is one key away.
 		queue(complete.Request{Field: complete.FieldHost})
-	case stepCollector:
 		for _, c := range collectors {
+			if c.IsRemoteAPI() {
+				continue
+			}
 			queue(complete.Request{
 				Field:       complete.FieldTarget,
-				Transport:   transports[m.transport],
-				Host:        strings.TrimSpace(m.host.Value()),
+				Transport:   m.transport(),
+				Host:        m.hostValue(),
 				Collector:   c,
 				Elevate:     m.elevate,
 				KubeConfig:  strings.TrimSpace(m.kubeconfig.Value()),
@@ -593,11 +642,29 @@ func (m *startModel) refilter() {
 	if m.step == stepSaved {
 		m.filtered, m.savedIdx = m.filterSaved(m.input().Value())
 	} else {
-		m.filtered = complete.Rank(withRecent(m.candidates, m.recent()), m.input().Value(), m.attr())
+		m.filtered = complete.Rank(withRecent(m.candidates, m.recent()), m.narrowing(), m.attr())
 	}
 	if m.sel >= len(m.filtered) {
 		m.sel = len(m.filtered) - 1
 	}
+}
+
+// narrowing is what the prompt is filtering the suggestions by.
+//
+// A detail prompt holding exactly one of its own choices is showing a
+// selection, not a search: filtering by it would hide the alternatives at the
+// moment the prompt is opened to choose between them.
+func (m startModel) narrowing() string {
+	value := m.input().Value()
+	if m.detail == detailNone {
+		return value
+	}
+	for _, c := range m.candidates {
+		if c.Value == strings.TrimSpace(value) {
+			return ""
+		}
+	}
+	return value
 }
 
 // attr resolves the "field:value" terms of a query against the candidates of
@@ -607,7 +674,7 @@ func (m startModel) attr() complete.Attr {
 	if m.step != stepCollector || m.detail != detailNone {
 		return nil
 	}
-	return complete.AttrFor(m.choice().collector)
+	return complete.AttrFor(m.collectorAt())
 }
 
 // filterSaved narrows the declared sources and records where each survivor came
@@ -636,10 +703,7 @@ func (m startModel) recent() []string {
 	switch {
 	case m.detail == detailRange:
 		return nil
-	case m.step == stepTransport:
-		if transports[m.transport] != source.TransportSSH {
-			return nil
-		}
+	case m.detail == detailHost:
 		return m.history.Hosts
 	case m.step == stepCollector && m.detail == detailKubeConfig:
 		return m.history.KubeConfigs
@@ -707,10 +771,10 @@ func (m *startModel) input() *textinput.Model {
 	// reachable from every step that has one.
 	case m.detail == detailRange:
 		return &m.rangeSpec
+	case m.detail == detailHost:
+		return &m.host
 	case m.step == stepSaved:
 		return &m.savedFilter
-	case m.step == stepTransport:
-		return &m.host
 	case m.step == stepCollector && m.detail == detailKubeConfig:
 		return &m.kubeconfig
 	case m.step == stepCollector && m.detail == detailKubeContext:
@@ -726,13 +790,12 @@ func (m *startModel) input() *textinput.Model {
 
 // kubectlSelected reports whether the kubeconfig applies to the current choice.
 func (m startModel) kubectlSelected() bool {
-	return m.choice().collector == source.CollectorKubectl
+	return m.collectorAt() == source.CollectorKubectl
 }
 
-// active reports whether the current step accepts text.
-func (m startModel) active() bool {
-	return m.step != stepTransport || transports[m.transport] == source.TransportSSH
-}
+// active reports whether the current step accepts text. Every step does now
+// that none of them is a choice between two words.
+func (m startModel) active() bool { return true }
 
 func (m *startModel) focus() {
 	m.savedFilter.Blur()
@@ -749,7 +812,7 @@ func (m *startModel) focus() {
 }
 
 func (m *startModel) syncPlaceholder() {
-	switch m.choice().collector {
+	switch m.collectorAt() {
 	case source.CollectorJournal:
 		m.target.Placeholder = "[user/]unit, e.g. kubelet — empty for the whole journal"
 	case source.CollectorKubectl:
@@ -767,9 +830,9 @@ func (m *startModel) syncPlaceholder() {
 
 func (m startModel) config() source.Config {
 	cfg := source.Config{
-		Transport: transports[m.transport],
-		Host:      strings.TrimSpace(m.host.Value()),
-		Collector: m.choice().collector,
+		Transport: m.transport(),
+		Host:      m.hostValue(),
+		Collector: m.collectorAt(),
 		Endpoint:  m.endpoint(),
 		Tail:      m.tail,
 		Follow:    m.follow,
@@ -851,7 +914,7 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 			}
 		case "tab":
 			if m.step == stepSaved {
-				m.step = stepTransport
+				m.step = stepCollector
 				m.err = nil
 				m.focus()
 				return m, m.fetch()
@@ -891,14 +954,19 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 				return m, m.fetch()
 			}
 		case "ctrl+e":
-			if m.step == stepCollector && m.choice().collector.IsRemoteAPI() &&
-				m.choice().endpoint.Name == "" {
+			if m.step == stepCollector && m.collectorAt().IsRemoteAPI() {
 				m.detail = toggleDetail(m.detail, detailEndpoint)
 				m.focus()
 				return m, m.fetch()
 			}
+		case "ctrl+o":
+			if m.step == stepCollector && !m.collectorAt().IsRemoteAPI() {
+				m.detail = toggleDetail(m.detail, detailHost)
+				m.focus()
+				return m, m.fetch()
+			}
 		case "ctrl+g":
-			if m.step >= stepCollector && rangeSupported(m.choice().collector) {
+			if m.step >= stepCollector && rangeSupported(m.collectorAt()) {
 				m.detail = toggleDetail(m.detail, detailRange)
 				m.err = nil
 				m.focus()
@@ -945,7 +1013,7 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 				m.detail = detailNone
 				m.focus()
 				return m, m.fetch()
-			case m.step > stepTransport, m.step == stepTransport && len(m.saved) > 0:
+			case m.step > stepCollector, m.step == stepCollector && m.hasSaved():
 				m.step--
 				m.err = nil
 				m.focus()
@@ -971,29 +1039,25 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 
 // choices returns how many chips the current step offers.
 func (m startModel) choices() int {
-	switch m.step {
-	case stepTransport:
-		return len(transports)
-	case stepCollector:
-		return len(m.options)
-	default:
-		return 0
+	if m.step == stepCollector {
+		return len(collectors)
 	}
+	return 0
 }
+
+// hasSaved reports whether the config file declared anything to go back to.
+func (m startModel) hasSaved() bool { return len(m.saved)+len(m.endpoints) > 0 }
 
 // cycle moves the chip selection and refreshes the suggestions it invalidates.
 func (m *startModel) cycle(d int) tea.Cmd {
 	n := m.choices()
-	switch m.step {
-	case stepTransport:
-		m.transport = (m.transport + d + n) % n
-	case stepCollector:
+	if n > 0 {
 		m.collector = (m.collector + d + n) % n
 		m.syncPlaceholder()
-		// An endpoint with nowhere to connect asks for that before a query,
-		// the way the ssh transport asks for a host.
+		// A database with nowhere to reach asks for that before a query, the
+		// way a pod cannot be listed before there is a cluster.
 		m.detail = detailNone
-		if m.endpoint().URL == "" && m.choice().collector.IsRemoteAPI() {
+		if m.collectorAt().IsRemoteAPI() && m.endpoint().URL == "" {
 			m.detail = detailEndpoint
 		}
 	}
@@ -1005,18 +1069,13 @@ func (m *startModel) cycle(d int) tea.Cmd {
 func (m startModel) advance() (startModel, tea.Cmd) {
 	// A window left half-written would otherwise read as no window at all,
 	// which is the one thing it certainly does not mean.
-	if err := m.rangeErr(); err != nil && rangeSupported(m.choice().collector) {
+	if err := m.rangeErr(); err != nil && rangeSupported(m.collectorAt()) {
 		m.err = err
 		m.detail = detailRange
 		m.focus()
 		return m, m.fetch()
 	}
 	if m.step < stepQuery {
-		if m.step == stepTransport && transports[m.transport] == source.TransportSSH &&
-			strings.TrimSpace(m.host.Value()) == "" {
-			m.err = errEmptyHost
-			return m, nil
-		}
 		m.step++
 		m.detail = detailNone
 		m.err = nil
@@ -1171,26 +1230,18 @@ func (m startModel) breadcrumb() string {
 	if m.step == stepSaved {
 		return ""
 	}
+	// Where the logs are, when it is anywhere but this machine. Saying "local"
+	// is saying nothing: it is what every source is until told otherwise.
 	var parts []string
-	if m.step > stepTransport {
-		switch {
-		case m.choice().collector.IsRemoteAPI():
-			// The transport is nothing to a database read over HTTP; where it
-			// is reached is the endpoint itself, once there is one.
-			where := m.endpoint().Label()
-			if where == "" {
-				where = string(m.choice().collector)
-			}
+	switch {
+	case m.collectorAt().IsRemoteAPI():
+		if where := m.endpoint().Label(); where != "" {
 			parts = append(parts, where)
-		case transports[m.transport] == source.TransportSSH:
-			parts = append(parts, "ssh://"+strings.TrimSpace(m.host.Value()))
-		default:
-			parts = append(parts, "local")
 		}
+	case m.hostValue() != "":
+		parts = append(parts, "ssh://"+m.hostValue())
 	}
-	if m.step >= stepCollector {
-		parts = append(parts, m.config().Command())
-	}
+	parts = append(parts, m.config().Command())
 	if len(parts) == 0 {
 		return ""
 	}
@@ -1205,22 +1256,13 @@ func (m startModel) chips() string {
 		items []string
 		sel   int
 	)
-	switch m.step {
-	case stepSaved:
-		return ""
-	case stepTransport:
-		for _, t := range transports {
-			items = append(items, string(t))
-		}
-		sel = m.transport
-	case stepCollector:
-		for _, c := range m.options {
-			items = append(items, c.label())
-		}
-		sel = m.collector
-	default:
+	if m.step != stepCollector {
 		return ""
 	}
+	for _, c := range collectors {
+		items = append(items, string(c))
+	}
+	sel = m.collector
 	out := make([]string, len(items))
 	for i, it := range items {
 		if i == sel {
@@ -1248,7 +1290,7 @@ func (m startModel) help() string {
 			key("ctrl+f", "follow "+m.followLabel()),
 			key("ctrl+t", "tail "+tailLabel(m.tail)),
 		}
-		if rangeSupported(m.choice().collector) {
+		if rangeSupported(m.collectorAt()) {
 			parts = append(parts, key("ctrl+g", "range "+m.timeRange().Label()))
 		}
 		return strings.Join(parts, styleHint.Render(" · "))
@@ -1265,17 +1307,18 @@ func (m startModel) help() string {
 		return strings.Join(parts, styleHint.Render(" · "))
 	}
 	parts = append(parts, key("enter", "next"), key("esc", m.escLabel()))
-	if m.step >= stepCollector && rangeSupported(m.choice().collector) {
+	if rangeSupported(m.collectorAt()) {
 		parts = append(parts, key("ctrl+g", "range "+m.timeRange().Label()))
 	}
-	if m.step >= stepCollector && !m.choice().collector.IsRemoteAPI() {
-		parts = append(parts, key("ctrl+s", "sudo "+onOff(m.elevate)))
+	if m.collectorAt().IsRemoteAPI() {
+		parts = append(parts, key("ctrl+e", "endpoint "+endpointLabel(m.endpoint())))
+	} else {
+		parts = append(parts,
+			key("ctrl+o", "host "+hostLabel(m.hostValue())),
+			key("ctrl+s", "sudo "+onOff(m.elevate)))
 	}
-	if m.step == stepCollector && m.kubectlSelected() {
+	if m.kubectlSelected() {
 		parts = append(parts, key("ctrl+k", "kubeconfig"), key("ctrl+x", "context"))
-	}
-	if m.step == stepCollector && m.choice().collector.IsRemoteAPI() && m.choice().endpoint.Name == "" {
-		parts = append(parts, key("ctrl+e", "endpoint"))
 	}
 	if _, ok := m.request(); ok {
 		parts = append(parts, key("ctrl+r", "refresh"))
@@ -1283,10 +1326,27 @@ func (m startModel) help() string {
 	return strings.Join(parts, styleHint.Render(" · "))
 }
 
+// hostLabel says where the collector will run, since "local" is only worth
+// saying next to the key that changes it.
+func hostLabel(host string) string {
+	if host == "" {
+		return styleDim.Render("local")
+	}
+	return styleOK.Render(host)
+}
+
+// endpointLabel says which database will be queried, or that none is chosen.
+func endpointLabel(e source.Endpoint) string {
+	if l := e.Label(); l != "" {
+		return styleOK.Render(l)
+	}
+	return styleDim.Render("none")
+}
+
 // escLabel names what esc will do from here, so quitting is discoverable on
 // the first step rather than only through ctrl+c.
 func (m startModel) escLabel() string {
-	if m.step == stepTransport && len(m.saved) == 0 {
+	if m.step == stepCollector && !m.hasSaved() {
 		return "quit"
 	}
 	return "back"
@@ -1431,7 +1491,7 @@ func (m startModel) emptyLabel() string {
 		// A query that filtered everything away is usually a field typed at a
 		// venture, so name the ones that exist.
 		if terms, _ := complete.ParseQuery(m.input().Value()); len(terms) > 0 {
-			if fields := complete.Fields(m.choice().collector); len(fields) > 0 {
+			if fields := complete.Fields(m.collectorAt()); len(fields) > 0 {
 				return "no match — filters: " + strings.Join(fields, ": ") + ":"
 			}
 		}
@@ -1446,7 +1506,7 @@ func (m startModel) emptyLabel() string {
 		// kubectl reports nothing either way, so name both possibilities.
 		return "no contexts — is the kubeconfig path right?"
 	}
-	switch m.choice().collector {
+	switch m.collectorAt() {
 	case source.CollectorKubectl:
 		return "no pods"
 	case source.CollectorDocker:
@@ -1471,6 +1531,20 @@ func (m startModel) hints() string {
 			"2026-01-02 10:00..12:00    or a date, or RFC 3339",
 		})
 	}
+	if m.detail == detailEndpoint {
+		return m.hintBlock([]string{
+			"https://logs.example.com                       the database itself",
+			"https://grafana/api/datasources/proxy/uid/x    through Grafana",
+			"a name from the config file, for one with a token",
+		})
+	}
+	if m.detail == detailHost {
+		return m.hintBlock([]string{
+			"(empty)     this machine",
+			"node1       a host from ssh_config",
+			"root@node1  anything ssh(1) accepts",
+		})
+	}
 	if m.detail != detailNone {
 		// The examples below are about targets, not about the detail being
 		// edited, so they would only mislead here.
@@ -1481,13 +1555,8 @@ func (m startModel) hints() string {
 	switch m.step {
 	case stepSaved:
 		lines = []string{"no saved sources yet — press tab to configure one by hand"}
-	case stepTransport:
-		lines = []string{
-			"local    read from this machine",
-			"ssh      proxy every command through a node",
-		}
 	case stepCollector:
-		switch m.choice().collector {
+		switch m.collectorAt() {
 		case source.CollectorJournal:
 			lines = []string{
 				"kubelet",

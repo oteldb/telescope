@@ -29,9 +29,19 @@ var vlogsTenantHeaders = []string{"AccountID", "ProjectID"}
 // are dropped by timestamp.
 const vlogsStartOffset = 30 * time.Second
 
-// vlogsQuery is the LogsQL to run, which is the target as typed. An empty
-// target would select the whole database, so it is rejected in Validate.
-func (c Config) vlogsQuery() string { return strings.TrimSpace(c.Target) }
+// vlogsMatchAll selects everything, which is how LogsQL spells the query you
+// have not written yet.
+const vlogsMatchAll = "*"
+
+// vlogsQuery is the LogsQL to run, which is the target as typed. Nothing typed
+// is a tail of the whole database, the way running a collector with no unit or
+// container named is.
+func (c Config) vlogsQuery() string {
+	if q := strings.TrimSpace(c.Target); q != "" {
+		return q
+	}
+	return vlogsMatchAll
+}
 
 // streamVictoriaLogs reads the backfill, then follows.
 func (c Config) streamVictoriaLogs(ctx context.Context, out func(Line) bool) error {

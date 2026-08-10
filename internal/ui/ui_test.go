@@ -135,7 +135,7 @@ func TestPartialSavedSourceUnwinds(t *testing.T) {
 	m = send(t, m, k("enter"))
 	start := m.(Model).start
 	require.Equal(t, stepCollector, start.step, "it lands on the step still missing")
-	require.Equal(t, source.TransportSSH, transports[start.transport])
+	require.Equal(t, source.TransportSSH, start.transport())
 	require.Equal(t, source.CollectorKubectl, collectors[start.collector])
 	require.Equal(t, "node1", start.host.Value())
 	require.Equal(t, "/root/.kube/ops.kubeconfig", start.kubeconfig.Value())
@@ -165,7 +165,7 @@ func TestPartialSavedSourceUnwinds(t *testing.T) {
 // TestKubeContextEditor: ctrl+x picks a context, which is the only way to use
 // a kubeconfig whose current-context is unset.
 func TestKubeContextEditor(t *testing.T) {
-	m := send(t, New(), size(), k("enter"), k("tab")) // kubectl
+	m := send(t, New(), size(), k("tab")) // kubectl
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlK})
 	for _, r := range "/root/.kube/reader.kubeconfig" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -205,7 +205,7 @@ func TestKubeContextEditor(t *testing.T) {
 // TestEmptyListingExplainsItself: a kubeconfig with no contexts is an answer,
 // not a missing one, and must not fall through to unrelated target examples.
 func TestEmptyListingExplainsItself(t *testing.T) {
-	m := send(t, New(), size(), k("enter"), k("tab")) // kubectl
+	m := send(t, New(), size(), k("tab")) // kubectl
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlX})
 	m = send(t, m, candidates(m))
 
@@ -258,15 +258,15 @@ func TestSavedFilteringAndFallthrough(t *testing.T) {
 
 	// tab leaves the picker for the manual flow, esc comes back.
 	m = send(t, m, k("tab"))
-	require.Equal(t, stepTransport, m.(Model).start.step)
+	require.Equal(t, stepCollector, m.(Model).start.step)
 	m = send(t, m, k("esc"))
 	require.Equal(t, stepSaved, m.(Model).start.step)
 }
 
-func TestNoSavedSourcesSkipsThePicker(t *testing.T) {
+func TestNothingDeclaredSkipsThePicker(t *testing.T) {
 	withSaved(t, nil, config.History{})
 	m := send(t, New(), size())
-	require.Equal(t, stepTransport, m.(Model).start.step)
+	require.Equal(t, stepCollector, m.(Model).start.step)
 	require.Contains(t, screen(t, m), "esc quit")
 }
 
@@ -291,15 +291,14 @@ func TestHistoryFloatsRecentToTheTop(t *testing.T) {
 		Hosts: []string{"node9"},
 	})
 
-	m := send(t, New(), size(), k("enter"))
+	m := send(t, New(), size())
 	m = send(t, m, candidates(m, "alpha", "kubelet", "zeta"))
 
 	got := m.(Model).start.filtered
 	require.Equal(t, "kubelet", got[0].Value, "the last unit used comes first")
 
 	// A remembered host the ssh config no longer lists is still offered.
-	m = send(t, New(), size(), k("esc"))
-	m = send(t, m, k("tab"))
+	m = send(t, New(), size(), tea.KeyMsg{Type: tea.KeyCtrlO})
 	m = send(t, m, candidates(m, "other"))
 	values := make([]string, 0, 2)
 	for _, c := range m.(Model).start.filtered {
@@ -311,10 +310,8 @@ func TestHistoryFloatsRecentToTheTop(t *testing.T) {
 func TestConnectingRemembersTheSource(t *testing.T) {
 	withSaved(t, nil, config.History{})
 
-	m := send(t, New(), size(), k("tab"))
-	for _, r := range "node1" {
-		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-	}
+	m := send(t, New(), size(), tea.KeyMsg{Type: tea.KeyCtrlO})
+	m = typeIn(t, m, "node1")
 	m = send(t, m, k("enter"), k("tab"), k("tab")) // docker
 	for _, r := range "app" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -331,15 +328,16 @@ func TestStartScreen(t *testing.T) {
 	out := screen(t, m)
 
 	require.Contains(t, out, "telemetry viewer")
-	require.Contains(t, out, "local")
-	require.Contains(t, out, "ssh")
+	require.Contains(t, out, "journalctl")
+	require.Contains(t, out, "victorialogs", "every collector is on the first screen")
+	require.Contains(t, out, "ctrl+o host local", "where it runs is a detail, not a step")
 	require.Contains(t, out, "tab")
 	require.Equal(t, 30, strings.Count(out, "\n")+1, "start screen fills the window")
 }
 
 func TestStartFlowReachesQuery(t *testing.T) {
 	// local ▸ tab to kubectl ▸ target ▸ query.
-	m := send(t, New(), size(), k("enter"), k("tab"))
+	m := send(t, New(), size(), k("tab"))
 	out := screen(t, m)
 	require.Contains(t, out, "journalctl")
 	require.Contains(t, out, "kubectl")
@@ -360,7 +358,7 @@ func candidates(m tea.Model, values ...string) tea.Msg {
 }
 
 func TestCompletionListsAndFilters(t *testing.T) {
-	m := send(t, New(), size(), k("enter"), k("tab"), k("tab")) // docker
+	m := send(t, New(), size(), k("tab"), k("tab")) // docker
 	m = send(t, m, candidates(m, "oteldb", "clickhouse", "otel-collector"))
 
 	out := screen(t, m)
@@ -379,7 +377,7 @@ func TestCompletionListsAndFilters(t *testing.T) {
 // TestCompletionFilterTerms covers the GitHub-style query: "ns:oteldb" narrows
 // the pods to a namespace, and only what is left of the query is a target.
 func TestCompletionFilterTerms(t *testing.T) {
-	m := send(t, New(), size(), k("enter"), k("tab")) // kubectl
+	m := send(t, New(), size(), k("tab")) // kubectl
 	m = send(t, m, candidates(m,
 		"oteldb/api-79c", "oteldb/deployment/api", "kube-system/coredns-7d7", "kube-system/kube-apiserver-1"))
 
@@ -411,7 +409,7 @@ func TestCompletionFilterTerms(t *testing.T) {
 // TestUnknownFilterFieldIsSearchedFor: a colon in a value is the container
 // syntax, so only known fields may act as filters.
 func TestUnknownFilterFieldIsSearchedFor(t *testing.T) {
-	m := send(t, New(), size(), k("enter"), k("tab")) // kubectl
+	m := send(t, New(), size(), k("tab")) // kubectl
 	m = send(t, m, candidates(m, "oteldb/oteldb-ingest-0:ingest", "oteldb/api-79c"))
 
 	for _, r := range "ingest-0:ing" {
@@ -423,7 +421,7 @@ func TestUnknownFilterFieldIsSearchedFor(t *testing.T) {
 }
 
 func TestSuggestionMatchesAreHighlighted(t *testing.T) {
-	m := send(t, New(), size(), k("enter"), k("tab"), k("tab")) // docker
+	m := send(t, New(), size(), k("tab"), k("tab")) // docker
 	m = send(t, m, candidates(m, "oteldb-0"))
 	for _, r := range "otdb" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -446,7 +444,7 @@ func TestSuggestionMatchesAreHighlighted(t *testing.T) {
 }
 
 func TestCompletionAccept(t *testing.T) {
-	m := send(t, New(), size(), k("enter"), k("tab"), k("tab"))
+	m := send(t, New(), size(), k("tab"), k("tab"))
 	m = send(t, m, candidates(m, "oteldb", "clickhouse"))
 
 	// Down highlights the first suggestion, tab inserts it.
@@ -459,7 +457,7 @@ func TestCompletionAccept(t *testing.T) {
 }
 
 func TestCompletionEnterAcceptsHighlighted(t *testing.T) {
-	m := send(t, New(), size(), k("enter"), k("tab"), k("tab"))
+	m := send(t, New(), size(), k("tab"), k("tab"))
 	m = send(t, m, candidates(m, "oteldb", "clickhouse"))
 
 	m = send(t, m, k("down"), k("down"), k("enter"))
@@ -470,7 +468,7 @@ func TestCompletionEnterAcceptsHighlighted(t *testing.T) {
 // TestCompletionIgnoresStaleReply guards against a slow listing from a
 // previously selected collector overwriting the current one.
 func TestCompletionIgnoresStaleReply(t *testing.T) {
-	m := send(t, New(), size(), k("enter"))
+	m := send(t, New(), size())
 	stale := candidatesMsg{key: m.(Model).start.candKey, items: []complete.Candidate{{Value: "stale-unit"}}}
 
 	m = send(t, m, k("tab")) // move to kubectl, invalidating the request
@@ -479,7 +477,7 @@ func TestCompletionIgnoresStaleReply(t *testing.T) {
 }
 
 func TestCompletionTabCyclesChipsWhenNothingHighlighted(t *testing.T) {
-	m := send(t, New(), size(), k("enter"))
+	m := send(t, New(), size())
 	m = send(t, m, candidates(m, "kubelet"))
 
 	// Nothing is highlighted yet, so tab still switches the collector.
@@ -488,7 +486,7 @@ func TestCompletionTabCyclesChipsWhenNothingHighlighted(t *testing.T) {
 }
 
 func TestCompletionErrorIsShown(t *testing.T) {
-	m := send(t, New(), size(), k("enter"), k("tab"), k("tab"))
+	m := send(t, New(), size(), k("tab"), k("tab"))
 	m = send(t, m, candidatesMsg{
 		key: m.(Model).start.candKey,
 		err: errors.New("docker: command not found"),
@@ -496,12 +494,34 @@ func TestCompletionErrorIsShown(t *testing.T) {
 	require.Contains(t, screen(t, m), "docker: command not found")
 }
 
-func TestHostCompletionOnlyForSSH(t *testing.T) {
-	m := send(t, New(), size())
-	require.Empty(t, m.(Model).start.candKey, "local has no host to complete")
+// TestHostIsADetail: naming a host is what asks for ssh, so nobody has to
+// choose "local" to say they meant this machine.
+func TestHostIsADetail(t *testing.T) {
+	m := send(t, New(), size(), k("tab")) // kubectl
+	require.Equal(t, source.TransportLocal, m.(Model).start.transport())
 
-	m = send(t, m, k("tab"))
-	require.Equal(t, "host", m.(Model).start.candKey)
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
+	require.Equal(t, detailHost, m.(Model).start.detail)
+	require.Equal(t, "host", m.(Model).start.candKey, "ssh_config is where the hosts come from")
+
+	m = typeIn(t, m, "node1")
+	m = send(t, m, k("enter"))
+	start := m.(Model).start
+	require.Equal(t, detailNone, start.detail)
+	require.Equal(t, source.TransportSSH, start.transport(), "a host is what makes it ssh")
+
+	req, ok := start.request()
+	require.True(t, ok)
+	require.Equal(t, source.TransportSSH, req.Transport, "and the pods are listed over it")
+	require.Equal(t, "node1", req.Host)
+	require.Contains(t, screen(t, m), "ssh://node1")
+
+	// Clearing it goes back to this machine, with nothing to choose.
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
+	for range 5 {
+		m = send(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	require.Equal(t, source.TransportLocal, m.(Model).start.transport())
 }
 
 // countingFetcher records how many times each request key was looked up.
@@ -533,6 +553,10 @@ func runCmds(m tea.Model, cmd tea.Cmd) tea.Model {
 		}
 	case candidatesMsg:
 		m, _ = m.Update(msg)
+	case initMsg:
+		var next tea.Cmd
+		m, next = m.Update(msg)
+		m = runCmds(m, next)
 	}
 	return m
 }
@@ -540,24 +564,25 @@ func runCmds(m tea.Model, cmd tea.Cmd) tea.Model {
 func TestCompletionPreloadsAndCaches(t *testing.T) {
 	calls := countingFetcher(t, "alpha")
 
-	m, cmd := New().Update(size())
-	m, cmd = m.Update(k("enter")) // into the collector step
+	m, cmd := New().Update(initMsg{}) // the collector step is the first one
 	m = runCmds(m, cmd)
+	m, _ = m.Update(size())
 
-	// Every collector was warmed, not just the selected one.
+	// Every collector was warmed, not just the selected one, and so was the
+	// host list the ssh prompt will want.
 	require.Positive(t, (*calls)[targetKey(source.CollectorJournal)])
 	require.Positive(t, (*calls)[targetKey(source.CollectorDocker)])
 	require.Positive(t, (*calls)[targetKey(source.CollectorKubectl)])
+	require.Positive(t, (*calls)["host"])
 
-	// Walking the chips and stepping back and forth must hit the cache. Going
-	// back to the transport step additionally warms the host list.
+	// Walking the chips and stepping back and forth must hit the cache.
 	for range 3 {
 		m, cmd = m.Update(k("tab"))
 		m = runCmds(m, cmd)
 	}
-	m, cmd = m.Update(k("esc"))
-	m = runCmds(m, cmd)
 	m, cmd = m.Update(k("enter"))
+	m = runCmds(m, cmd)
+	m, cmd = m.Update(k("esc"))
 	m = runCmds(m, cmd)
 
 	require.ElementsMatch(t, []string{
@@ -576,13 +601,12 @@ func TestCompletionPreloadsAndCaches(t *testing.T) {
 func TestCompletionRefreshDropsCache(t *testing.T) {
 	calls := countingFetcher(t, "alpha")
 
-	m, cmd := New().Update(size())
-	m, cmd = m.Update(k("enter"))
+	m, cmd := New().Update(initMsg{})
 	m = runCmds(m, cmd)
 	require.Equal(t, 1, (*calls)[targetKey(source.CollectorJournal)])
 
-	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
-	m = runCmds(m, cmd)
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	runCmds(m, cmd)
 	require.Equal(t, 2, (*calls)[targetKey(source.CollectorJournal)], "refresh re-runs the listing")
 }
 
@@ -596,8 +620,8 @@ func TestHostsPreloadedAtInit(t *testing.T) {
 
 	require.Equal(t, 1, (*calls)["host"])
 
-	// Switching to ssh shows them without another lookup.
-	m2, cmd = m2.Update(k("tab"))
+	// Opening the host prompt shows them without another lookup.
+	m2, cmd = m2.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
 	m2 = runCmds(m2, cmd)
 	require.Equal(t, 1, (*calls)["host"])
 	require.Contains(t, screen(t, m2), "node1")
@@ -623,7 +647,7 @@ func keysOf(m map[string]int) []string {
 // TestUserUnitReachesCommand checks that the user/ prefix survives the whole
 // way from a suggestion to the journalctl invocation.
 func TestUserUnitReachesCommand(t *testing.T) {
-	m := send(t, New(), size(), k("enter")) // journalctl
+	m := send(t, New(), size()) // journalctl
 	m = send(t, m, candidates(m, "sshd", "user/syncthing"))
 
 	m = send(t, m, k("down"), k("down"), k("tab"))
@@ -636,11 +660,10 @@ func TestUserUnitReachesCommand(t *testing.T) {
 // TestElevatedKubectlOverSSH walks the flow a root-only kubeconfig on a remote
 // node needs: ssh host, kubectl, sudo on, a typed config path, then a pod.
 func TestElevatedKubectlOverSSH(t *testing.T) {
-	m := send(t, New(), size(), k("tab")) // ssh
-	for _, r := range "node1" {
-		m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-	}
-	m = send(t, m, k("enter"), k("tab")) // collector step, kubectl
+	m := send(t, New(), size(), k("tab")) // kubectl
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
+	m = typeIn(t, m, "node1")
+	m = send(t, m, k("enter"))
 
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlS})
 	require.True(t, m.(Model).start.elevate)
@@ -685,7 +708,6 @@ func TestKubeConfigChangeRefetchesPods(t *testing.T) {
 	calls := countingFetcher(t, "ns/pod")
 
 	m, cmd := New().Update(size())
-	m, cmd = m.Update(k("enter"))
 	m = runCmds(m, cmd)
 	m, cmd = m.Update(k("tab")) // kubectl
 	m = runCmds(m, cmd)
@@ -699,8 +721,8 @@ func TestKubeConfigChangeRefetchesPods(t *testing.T) {
 	for _, r := range "/tmp/kube.yaml" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
-	m, cmd = m.Update(k("enter"))
-	m = runCmds(m, cmd)
+	_, cmd = m.Update(k("enter"))
+	runCmds(m, cmd)
 
 	withConfig := complete.Request{
 		Field:      complete.FieldTarget,
@@ -726,7 +748,7 @@ func leftEdge(out string) []int {
 // the widest line: the command preview grows with every keystroke, which used
 // to move the prompt box under the cursor.
 func TestPromptDoesNotShiftWhileTyping(t *testing.T) {
-	m := send(t, New(), size(), k("enter"), k("tab")) // kubectl
+	m := send(t, New(), size(), k("tab")) // kubectl
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlK})
 
 	want := leftEdge(screen(t, m))
@@ -788,7 +810,7 @@ func TestSuggestionPaging(t *testing.T) {
 	for i := range values {
 		values[i] = "ns/pod-" + strconv.Itoa(i)
 	}
-	m := send(t, New(), tea.WindowSizeMsg{Width: 100, Height: 30}, k("enter"))
+	m := send(t, New(), tea.WindowSizeMsg{Width: 100, Height: 30}, k("tab"))
 	m = send(t, m, candidates(m, values...))
 	page := m.(Model).start.listHeight()
 	require.Positive(t, page)
@@ -884,7 +906,7 @@ func TestEntryViewEndScrolls(t *testing.T) {
 // state in one column. Capping the value column at half the row used to let
 // long names push their state right, leaving a ragged edge.
 func TestStatesLineUp(t *testing.T) {
-	m := send(t, New(), size(), k("enter"))
+	m := send(t, New(), size())
 	m = send(t, m, candidates(m,
 		"git/forgejo-runner-0",
 		"cert-manager/cert-manager-cainjector-757c6bcb69-x4qgm",
@@ -911,7 +933,7 @@ func TestRowsWidenWithTheTerminal(t *testing.T) {
 	const long = "clickhouse/chi-altinity-clickhouse-operator-6974f69488-87p5x"
 
 	rowFor := func(w int) string {
-		m := send(t, New(), tea.WindowSizeMsg{Width: w, Height: 30}, k("enter"))
+		m := send(t, New(), tea.WindowSizeMsg{Width: w, Height: 30})
 		m = send(t, m, candidates(m, long))
 		// The value is truncated on a narrow terminal, so match on its head.
 		for line := range strings.SplitSeq(screen(t, m), "\n") {
@@ -951,7 +973,7 @@ func TestStartScreenStartsNearTheTop(t *testing.T) {
 	for i := range values {
 		values[i] = "ns/pod-" + strconv.Itoa(i)
 	}
-	m := send(t, New(), size(), k("enter"))
+	m := send(t, New(), size())
 	m = send(t, m, candidates(m, values...))
 	m = send(t, m, tea.WindowSizeMsg{Width: 120, Height: 60})
 
@@ -972,7 +994,7 @@ func TestStartScreenStartsNearTheTop(t *testing.T) {
 func TestSuggestionsOutgrowThePromptBar(t *testing.T) {
 	const long = "storage/oteldb-clickhouse-57784dbf84-htwbk:clickhouse-server"
 
-	m := send(t, New(), size(), k("enter"))
+	m := send(t, New(), size())
 	m = send(t, m, candidates(m, long))
 	m = send(t, m, tea.WindowSizeMsg{Width: 280, Height: 40})
 
@@ -1021,7 +1043,7 @@ func TestCompletionListGrowsWithTheWindow(t *testing.T) {
 		return n
 	}
 
-	m := send(t, New(), size(), k("enter"))
+	m := send(t, New(), size())
 	m = send(t, m, candidates(m, values...))
 
 	short, tall := count(24, m), count(60, m)
@@ -1037,7 +1059,7 @@ func TestCompletionWindowFollowsSelection(t *testing.T) {
 	for i := range values {
 		values[i] = "ns/pod-" + strconv.Itoa(i)
 	}
-	m := send(t, New(), size(), tea.WindowSizeMsg{Width: 100, Height: 24}, k("enter"))
+	m := send(t, New(), size(), tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = send(t, m, candidates(m, values...))
 
 	for range 20 {
@@ -1065,6 +1087,7 @@ func TestEscQuitsFromTheFirstStep(t *testing.T) {
 	require.True(t, quits(m), "esc on the first step quits")
 
 	// Deeper in, esc walks back instead.
+	m = typeIn(t, m, "kubelet")
 	m = send(t, m, k("enter"))
 	require.False(t, quits(m))
 	require.Contains(t, screen(t, m), "esc back")
@@ -1077,12 +1100,21 @@ func TestEscQuitsFromTheFirstStep(t *testing.T) {
 
 	m = send(t, m, k("esc"))
 	require.Equal(t, -1, m.(Model).start.sel, "esc cleared the highlight")
-	require.Equal(t, stepCollector, m.(Model).start.step, "and did not also step back")
+	require.Equal(t, stepQuery, m.(Model).start.step, "and did not also step back")
 }
 
-func TestStartRejectsEmptySSHHost(t *testing.T) {
-	m := send(t, New(), size(), k("tab"), k("enter"))
-	require.Contains(t, screen(t, m), "ssh transport requires a host")
+// TestEmptyHostIsLocal: the step that asked which of the two it was is gone,
+// and an unanswered host prompt is not an error.
+func TestEmptyHostIsLocal(t *testing.T) {
+	m := send(t, New(), size(), tea.KeyMsg{Type: tea.KeyCtrlO}, k("enter"))
+	require.Equal(t, stepCollector, m.(Model).start.step, "enter left the detail, not the step")
+	require.Equal(t, source.TransportLocal, m.(Model).start.transport())
+	require.NotContains(t, screen(t, m), "requires a host")
+
+	m = send(t, m, k("enter"), k("enter"))
+	cfg := m.(Model).logs.cfg
+	require.Equal(t, source.TransportLocal, cfg.Transport)
+	require.Equal(t, []string{"sh", "-c", cfg.Command()}, cfg.Argv())
 }
 
 func logsModel(t *testing.T, lines ...string) tea.Model {
@@ -1150,7 +1182,7 @@ func TestEntryView(t *testing.T) {
 func TestLogViewStreamError(t *testing.T) {
 	cfg := source.Config{Collector: source.CollectorDocker, Container: "app"}
 	m := send(t, New(), size(), connectMsg{cfg: cfg},
-		streamErrMsg{err: errEmptyHost})
+		streamErrMsg{err: errors.New("ssh: connect failed")})
 	require.Contains(t, screen(t, m), "failed")
 }
 
@@ -1183,7 +1215,6 @@ func tabs(n int) []tea.Msg {
 
 // firstDeclared is how many tabs reach the first endpoint from the config file:
 // past the command collectors and the undeclared database chips.
-func firstDeclared() int { return len(collectors) + len(databases) }
 
 // withEndpoints makes New() see declared endpoints, as a config file with an
 // endpoints section would.
@@ -1197,31 +1228,68 @@ func withEndpoints(t *testing.T, endpoints []config.Endpoint, sources []config.S
 	t.Cleanup(func() { loadConfig = prev })
 }
 
-// TestEndpointIsACollectorChip: an endpoint is offered next to the collectors,
-// since choosing one is choosing where the logs are.
-func TestEndpointIsACollectorChip(t *testing.T) {
+// TestEndpointOpensFromTheStartScreen: an endpoint is already a place and a way
+// in, so it is offered next to the declared sources rather than only inside the
+// manual flow. Choosing one lands on the query, which is all it was missing.
+func TestEndpointOpensFromTheStartScreen(t *testing.T) {
 	withEndpoints(t, []config.Endpoint{
-		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com"},
-		{Name: "staging", Type: "victorialogs", URL: "https://staging.example.com"},
+		{Name: "prod", Type: "victorialogs", URL: "https://grafana.example.com/api/datasources/proxy/uid/abc"},
+		{Name: "staging", Type: "loki", URL: "https://staging.example.com"},
 	}, nil)
 
-	// transport, then the collector chips.
-	m := send(t, New(), size(), k("enter"))
+	m := send(t, New(), size())
+	require.Equal(t, stepSaved, m.(Model).start.step, "endpoints alone are enough to have a picker")
 	out := screen(t, m)
 	require.Contains(t, out, "prod")
+	require.Contains(t, out, "grafana.example.com / abc", "the datasource uid tells two apart")
 	require.Contains(t, out, "staging")
+	require.Contains(t, out, "type a query")
 
-	// The command collectors come first, then the undeclared databases, then
-	// the declared endpoints in order.
-	m = send(t, m, tabs(firstDeclared()+1)...)
+	m = send(t, m, k("down"), k("down"), k("enter"))
 	start := m.(Model).start
-	require.Equal(t, source.CollectorVictoriaLogs, start.choice().collector)
-	require.Equal(t, "staging", start.choice().endpoint.Name)
-	require.Contains(t, screen(t, m), "LogsQL", "the prompt asks for a query")
+	require.Equal(t, stepCollector, start.step)
+	require.Equal(t, source.CollectorLoki, start.collectorAt())
+	require.Equal(t, "staging", start.endpoint().Name)
+	require.Contains(t, screen(t, m), "LogQL", "the prompt asks for a query")
 
 	// A query is written, not listed, so the endpoint is never probed.
 	_, ok := start.request()
 	require.False(t, ok)
+}
+
+// TestEndpointIsPickedFromAList: with more endpoints than fit a row of chips,
+// the endpoint is chosen the way an ssh host is.
+func TestEndpointIsPickedFromAList(t *testing.T) {
+	withEndpoints(t, []config.Endpoint{
+		{Name: "humo-management", Type: "victorialogs", URL: "https://grafana.example.com", Datasource: "aaa"},
+		{Name: "humo-observer", Type: "victorialogs", URL: "https://grafana.example.com", Datasource: "bbb"},
+		{Name: "logs-loki", Type: "loki", URL: "https://loki.example.com"},
+	}, nil)
+
+	// tab leaves the picker for the manual flow; the chips are the collectors
+	// themselves, one per kind and never one per endpoint.
+	m := send(t, New(), size(), k("tab"))
+	require.Len(t, collectors, 6)
+	m = send(t, m, tabs(4)...) // victorialogs
+	require.Equal(t, source.CollectorVictoriaLogs, m.(Model).start.collectorAt())
+	require.Equal(t, detailEndpoint, m.(Model).start.detail,
+		"a database with nowhere to reach asks for that first")
+
+	out := screen(t, m)
+	require.Contains(t, out, "humo-management")
+	require.Contains(t, out, "humo-observer")
+	require.NotContains(t, out, "logs-loki", "a Loki endpoint is not a choice for LogsQL")
+
+	// Typing narrows them, and enter takes the highlighted one.
+	m = typeIn(t, m, "obs")
+	m = send(t, m, k("down"), k("enter"))
+	require.Equal(t, "humo-observer", m.(Model).start.endpoint().Name)
+	require.Equal(t,
+		"https://grafana.example.com/api/datasources/proxy/uid/bbb",
+		m.(Model).start.endpoint().URL)
+
+	m = send(t, m, k("enter"))
+	require.Equal(t, detailNone, m.(Model).start.detail, "enter returns to the query")
 }
 
 // TestEndpointQueryOpens: what is typed is the query, terms and all.
@@ -1231,10 +1299,7 @@ func TestEndpointQueryOpens(t *testing.T) {
 	}, nil)
 
 	m := send(t, New(), size(), k("enter"))
-	m = send(t, m, tabs(firstDeclared())...)
-	for _, r := range "level:error app:api" {
-		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-	}
+	m = typeIn(t, m, "level:error app:api")
 	m = send(t, m, k("enter"), k("enter"))
 
 	cfg := m.(Model).logs.cfg
@@ -1243,8 +1308,23 @@ func TestEndpointQueryOpens(t *testing.T) {
 	require.Equal(t, "https://logs.example.com", cfg.Endpoint.URL)
 }
 
+// TestVictoriaLogsOpensWithoutAQuery: LogsQL has a match-all, so an endpoint is
+// enough on its own — the way a journal with no unit named is.
+func TestVictoriaLogsOpensWithoutAQuery(t *testing.T) {
+	withEndpoints(t, []config.Endpoint{
+		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com"},
+	}, nil)
+
+	m := send(t, New(), size(), k("enter"), k("enter"), k("enter"))
+	cfg := m.(Model).logs.cfg
+	require.Equal(t, source.CollectorVictoriaLogs, cfg.Collector)
+	require.Empty(t, cfg.Target)
+	require.NoError(t, cfg.Validate())
+	require.Contains(t, cfg.Command(), "*")
+}
+
 // TestEndpointTokenFailureIsReported: an endpoint telescope cannot authenticate
-// to is not offered as a choice that fails later.
+// to says so where it is chosen.
 func TestEndpointTokenFailureIsReported(t *testing.T) {
 	withEndpoints(t, []config.Endpoint{
 		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com",
@@ -1254,8 +1334,7 @@ func TestEndpointTokenFailureIsReported(t *testing.T) {
 	m := send(t, New(), size())
 	out := screen(t, m)
 	require.Contains(t, out, "TELESCOPE_TEST_UNSET")
-	require.Len(t, m.(Model).start.options, firstDeclared(),
-		"only the undeclared databases are offered")
+	require.Empty(t, m.(Model).start.endpoints, "an endpoint without its token is not offered")
 }
 
 // TestEndpointOffersRecentQueries: a query is not listable, so history is the
@@ -1274,7 +1353,6 @@ func TestEndpointOffersRecentQueries(t *testing.T) {
 	t.Cleanup(func() { loadHistory = prev })
 
 	m := send(t, New(), size(), k("enter"))
-	m = send(t, m, tabs(firstDeclared())...)
 	out := screen(t, m)
 	require.Contains(t, out, "level:error")
 	require.NotContains(t, out, "app:elsewhere", "a query belongs to the endpoint it was written for")
@@ -1283,9 +1361,8 @@ func TestEndpointOffersRecentQueries(t *testing.T) {
 // TestTypedEndpoint: a database with no declaration is reachable by typing its
 // URL, the way an ssh host is, and no secret is involved.
 func TestTypedEndpoint(t *testing.T) {
-	m := send(t, New(), size(), k("enter"))
-	// past the command collectors, onto the first undeclared database.
-	m = send(t, m, tabs(len(collectors))...)
+	m := send(t, New(), size())
+	m = send(t, m, tabs(4)...) // victorialogs
 	require.Equal(t, detailEndpoint, m.(Model).start.detail,
 		"an endpoint with nowhere to connect asks for that first")
 	require.Contains(t, screen(t, m), "endpoint")
@@ -1329,8 +1406,8 @@ func TestTypedEndpointIsRemembered(t *testing.T) {
 	}
 	t.Cleanup(func() { loadHistory = prev })
 
-	m := send(t, New(), size(), k("enter"))
-	m = send(t, m, tabs(len(collectors))...)
+	m := send(t, New(), size())
+	m = send(t, m, tabs(4)...) // victorialogs
 	require.Contains(t, screen(t, m), "https://logs.example.com")
 }
 
@@ -1346,7 +1423,7 @@ func typeIn(t *testing.T, m tea.Model, s string) tea.Model {
 // TestTimeRangePicker: ctrl+g opens the window the source is read over, offers
 // the ones worth reaching for, and shows what the chosen one resolves to.
 func TestTimeRangePicker(t *testing.T) {
-	m := send(t, New(), size(), k("enter"), k("tab"), k("tab")) // docker
+	m := send(t, New(), size(), k("tab"), k("tab")) // docker
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlG})
 	require.Equal(t, detailRange, m.(Model).start.detail)
 
@@ -1374,7 +1451,7 @@ func TestTimeRangePicker(t *testing.T) {
 // TestTimeRangeRejectsNonsense: a window that does not read as one is reported
 // where it was typed, rather than quietly reading everything.
 func TestTimeRangeRejectsNonsense(t *testing.T) {
-	m := send(t, New(), size(), k("enter"), k("tab"), k("tab")) // docker
+	m := send(t, New(), size(), k("tab"), k("tab")) // docker
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlG})
 	m = typeIn(t, m, "yesteryear")
 	m = send(t, m, k("enter"))
@@ -1386,9 +1463,9 @@ func TestTimeRangeRejectsNonsense(t *testing.T) {
 // TestTimeRangeIsNotOfferedForCommand: a free-form command is whatever was
 // typed, so its bounds belong in it.
 func TestTimeRangeIsNotOfferedForCommand(t *testing.T) {
-	m := send(t, New(), size(), k("enter"))
-	m = send(t, m, tabs(len(collectors)-1)...)
-	require.Equal(t, source.CollectorCommand, m.(Model).start.choice().collector)
+	m := send(t, New(), size())
+	m = send(t, m, tabs(3)...) // command
+	require.Equal(t, source.CollectorCommand, m.(Model).start.collectorAt())
 	require.NotContains(t, screen(t, m), "ctrl+g")
 
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlG})

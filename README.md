@@ -14,13 +14,7 @@ go run ./cmd/telescope
 
 ## Sources
 
-A source is a **transport** and a **collector**. ssh is a transport, not a
-source, so every collector works locally and on a remote node alike.
-
-| transport | |
-| --- | --- |
-| `local` | run on this machine |
-| `ssh` | run on `[user@]host`, through `ssh(1)` |
+A source is a **collector** and where it reads from.
 
 | collector | reads |
 | --- | --- |
@@ -31,9 +25,14 @@ source, so every collector works locally and on a remote node alike.
 | `victorialogs` | a [VictoriaLogs](https://docs.victoriametrics.com/victorialogs/) query, over HTTP |
 | `loki` | a [Loki](https://grafana.com/oss/loki/) query, over HTTP |
 
-The last two read from a log database rather than a host, so they run no command
-and the transport, `sudo` and the kubeconfig mean nothing to them. See
-[Endpoints](#endpoints).
+The first four run a command, on this machine unless you name an ssh host
+(`ctrl+o`, or `host:` in the config file) — then every one of them runs through
+`ssh(1)` instead. Naming a host is what asks for ssh: there is no step that
+makes you say "local" first.
+
+The last two run no command at all. They query a log database over HTTP, so the
+host, `sudo` and the kubeconfig mean nothing to them; what they need instead is
+an **endpoint** (`ctrl+e`). See [Endpoints](#endpoints).
 
 Targets use a compact syntax, the same in the prompt and in the config file:
 
@@ -86,15 +85,16 @@ whatever was typed — bound it in the command itself.
 | `↑` `↓`, `ctrl+p` `ctrl+n` | move through suggestions |
 | `pgup` `pgdown` | page through them |
 | `home` `end` | first, last suggestion |
-| `tab` | accept the highlighted suggestion, else switch source kind |
-| `shift+tab` | previous source kind |
+| `tab` | accept the highlighted suggestion, else switch collector |
+| `shift+tab` | previous collector |
 | `enter` | accept the highlighted suggestion, else go to the next step |
 | `esc` | drop the highlight, leave the editor, go back a step, then quit |
 | `ctrl+r` | re-run the current listing, ignoring the cache |
 | `ctrl+s` | toggle `sudo -n` |
 | `ctrl+k` | edit the kubeconfig path (kubectl) |
 | `ctrl+x` | edit the context (kubectl) |
-| `ctrl+e` | edit the endpoint URL (victorialogs, loki) |
+| `ctrl+e` | pick the endpoint (victorialogs, loki) |
+| `ctrl+o` | set the ssh host, empty for this machine |
 | `ctrl+g` | edit the time range |
 | `ctrl+f` | toggle follow |
 | `ctrl+t` | cycle tail: 100, 1000, 10000, all |
@@ -166,7 +166,7 @@ thing — `ns`, `kind`, `container`, `scope` — do fill in what the target leav
 unsaid, so pressing enter on `ns:oteldb kind:deploy api` reads `deploy/api` from
 `oteldb` rather than from `default`. Whatever the target spells out itself wins.
 
-Everything but the ssh hosts is listed **through the chosen transport**, with
+Everything but the ssh hosts is listed **wherever the logs will be read**, with
 the same privileges, kubeconfig and context the logs will use, so picking a
 remote node lists that node's units and containers.
 
@@ -201,7 +201,6 @@ sources:
   # A cluster reachable only as root on a node that refuses root logins.
   # No pod named, so picking it opens the prompt with the rest filled in.
   - name: k3s-ops
-    transport: ssh
     host: node1
     collector: kubectl
     kubeconfig: /root/.kube/ops.kubeconfig
@@ -224,8 +223,8 @@ marks those with what they will ask for.
 | `name` | required | shown in the picker |
 | `collector` | required | `journalctl`, `kubectl`, `docker`, `command`, `victorialogs`, `loki`; taken from the endpoint when one is named |
 | `endpoint` | | a declared endpoint, required by `victorialogs` |
-| `transport` | `local` | `local` or `ssh` |
-| `host` | | ssh destination, required when `transport: ssh` |
+| `host` | | ssh destination; unset reads this machine |
+| `transport` | `local` | `local` or `ssh`; naming a `host` is enough |
 | `unit` | | systemd unit, `user/` prefix accepted |
 | `user_unit` | `false` | read the user journal |
 | `namespace` | | Kubernetes namespace |
@@ -245,8 +244,16 @@ start screen rather than ignored.
 
 ### Endpoints
 
-A collector that reads from a log database needs an endpoint. Endpoints are
-declared once and referred to by name:
+**An endpoint is a place; a source is a thing to read there.** The endpoint
+carries what is the same for every query — the URL, the datasource, the tenant
+and the credential — so a second query costs three lines and no secret. It is
+the same split as `host:` for ssh, where the connection is not the pod.
+
+Most endpoints never need a source at all: telescope offers every declared one
+on the start screen, and picking it opens the query prompt with the place
+already chosen. Write a `sources:` entry only for a query worth naming.
+
+Endpoints are declared once and referred to by name:
 
 ```yaml
 endpoints:
@@ -287,21 +294,29 @@ sources:
 | `token` | | where the bearer token is read from; see below |
 | `tenant` | | `AccountID:ProjectID` for VictoriaLogs, the org id for Loki |
 | `headers` | | anything else the endpoint or its proxy needs |
+| `proxy` | | reach this endpoint through `http://…` or `socks5h://…` |
 | `insecure` | `false` | skip TLS verification |
 
-Every declared endpoint is offered on the start screen next to the collectors,
-so a query can be written without declaring a source for it. Queries are
-remembered per endpoint, and offered back there.
+Queries are remembered per endpoint and offered back there.
 
 A source naming an endpoint does not need a `collector`: the endpoint already
 says which API it speaks, and saying otherwise is an error rather than a silent
 mistranslation.
 
-An endpoint needs no declaration at all when it needs no credentials: choosing
-`victorialogs` or `loki` asks for a URL, `ctrl+e` returns to it, and the URLs typed there
-are remembered like ssh hosts. A missing scheme is filled in — `https://`, or
-`http://` for a loopback address. Anything needing a token belongs in the config
-file, since the prompt writes what it is given to the history in plain text.
+`ctrl+e` picks the endpoint from all the declared ones that speak the chosen
+database — a list, filtered as you type, not a chip per endpoint, since a
+handful of environments fills a row of chips immediately.
+
+An endpoint needs no declaration at all when it needs no credentials: the same
+prompt takes a URL, and the ones typed there are remembered like ssh hosts. A
+missing scheme is filled in — `https://`, or `http://` for a loopback address.
+Anything needing a token belongs in the config file, since the prompt writes
+what it is given to the history in plain text.
+
+`proxy` is per endpoint on purpose: one database behind a corporate proxy should
+not push every other request through it. Unset, the proxy comes from the
+environment (`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`), so a SOCKS setup that
+already works for everything else needs nothing here.
 
 **The token is named, never written.** The config file stays shareable, and the
 secret keeps the permissions it already has. One of three, at most:
@@ -336,6 +351,9 @@ The proxy comes from the environment, so an endpoint reachable only through
 `HTTPS_PROXY` or `ALL_PROXY=socks5h://…` needs nothing further.
 
 The target is the query, in that database's own language, **sent as written**.
+LogsQL has a match-all, so an empty one tails everything the endpoint has — the
+way a journal with no unit named does. LogQL has none: Loki selects streams by
+label, and a query without a selector is a parse error from the server.
 `field:value` there belongs to [LogsQL][logsql], not to telescope's own filter,
 and no compact syntax is compiled into [LogQL][logql]: label names are whatever
 the shipper wrote them as — `k8s_namespace_name` as readily as `namespace` — so

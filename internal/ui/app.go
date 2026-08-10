@@ -5,9 +5,6 @@ import (
 	"context"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/go-faster/errors"
-
-	"github.com/oteldb/telescope/internal/complete"
 	"github.com/oteldb/telescope/internal/config"
 	"github.com/oteldb/telescope/internal/logs"
 	"github.com/oteldb/telescope/internal/source"
@@ -18,8 +15,6 @@ const storeLimit = 200_000
 
 // readBatch bounds how many lines are folded into a single update.
 const readBatch = 2048
-
-var errEmptyHost = errors.New("ssh transport requires a host")
 
 type state int
 
@@ -48,21 +43,19 @@ func New() Model {
 
 // Init implements [tea.Model].
 //
-// The ssh host list is preloaded even though the first step opens on the local
-// transport, so switching to ssh never waits. The request is built inline
-// rather than through the start model because Init cannot record bookkeeping
-// on its value receiver; the reply is cached by key when it lands.
+// The listings the first screen will want are warmed through a message rather
+// than started here: Init cannot record what it asked for on its value
+// receiver, and a request nobody remembers is a request that runs twice.
 func (m Model) Init() tea.Cmd {
-	req := complete.Request{Field: complete.FieldHost}
-	return tea.Batch(textinputBlink, func() tea.Msg {
-		items, err := fetcher(context.Background(), req)
-		return candidatesMsg{key: req.Key(), items: items, err: err}
-	})
+	return tea.Batch(textinputBlink, func() tea.Msg { return initMsg{} })
 }
 
 // Update implements [tea.Model].
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case initMsg:
+		return m, m.start.fetch()
+
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.start, _ = m.start.Update(msg)
@@ -172,6 +165,7 @@ type (
 		lines  []source.Line
 		closed bool
 	}
+	initMsg      struct{}
 	openEntryMsg struct{ entry *logs.Entry }
 	backMsg      struct{}
 	quitMsg      struct{}

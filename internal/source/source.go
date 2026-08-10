@@ -41,19 +41,6 @@ func (c Collector) IsRemoteAPI() bool {
 	return c == CollectorVictoriaLogs || c == CollectorLoki
 }
 
-// queryLanguage names what a collector's target is written in, for the messages
-// that ask for one.
-func (c Collector) queryLanguage() string {
-	switch c {
-	case CollectorVictoriaLogs:
-		return "LogsQL"
-	case CollectorLoki:
-		return "LogQL"
-	default:
-		return "query"
-	}
-}
-
 // Config describes a log stream to open.
 type Config struct {
 	Transport Transport
@@ -111,12 +98,16 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(c.Endpoint.URL) == "" {
 			return fmt.Errorf("%s requires an endpoint", c.Collector)
 		}
-		if strings.TrimSpace(c.Target) == "" {
-			return fmt.Errorf("%s requires a %s query", c.Collector, c.Collector.queryLanguage())
+		if err := c.Endpoint.ProxyError(); err != nil {
+			return err
 		}
+		// LogsQL has a match-all, so a query is optional there. Loki has none:
+		// every query selects streams by label, and one without a selector is a
+		// parse error from the server.
 		if c.Collector == CollectorLoki && !strings.Contains(c.Target, "{") {
-			// Loki has no bare form: every query selects streams by label, and
-			// a query without a selector is a parse error from the server.
+			if strings.TrimSpace(c.Target) == "" {
+				return fmt.Errorf("loki requires a LogQL query, as in {app=\"api\"}")
+			}
 			return fmt.Errorf("LogQL needs a stream selector, as in {app=\"api\"}")
 		}
 	case CollectorKubectl:

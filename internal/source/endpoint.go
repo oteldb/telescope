@@ -39,6 +39,10 @@ type Endpoint struct {
 	// Header carries anything else the endpoint or the proxy in front of it
 	// needs.
 	Header map[string]string
+	// Proxy reaches this endpoint through a proxy of its own, as
+	// "http://proxy:3128" or "socks5h://127.0.0.1:1080". Empty takes the proxy
+	// from the environment, which is what every other tool does.
+	Proxy string
 	// Insecure skips TLS verification, for an endpoint behind a private CA.
 	Insecure bool
 }
@@ -106,11 +110,14 @@ func (e Endpoint) setTenant(req *http.Request, names ...string) {
 
 // httpClient dials the endpoint. It has no overall timeout because a followed
 // stream is meant to stay open; the timeouts that remain bound the parts of a
-// request that should never block, and the proxy comes from the environment so
-// an endpoint reachable only through SOCKS works like every other tool.
+// request that should never block.
+//
+// The proxy is the endpoint's own when it names one, and the environment's
+// otherwise: one database behind a corporate proxy should not force every other
+// request through it.
 func httpClient(e Endpoint) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.Proxy = http.ProxyFromEnvironment
+	tr.Proxy = e.proxy()
 	tr.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	tr.TLSHandshakeTimeout = 10 * time.Second
 	tr.ResponseHeaderTimeout = 30 * time.Second
@@ -119,6 +126,37 @@ func httpClient(e Endpoint) *http.Client {
 		tr.TLSClientConfig.InsecureSkipVerify = true
 	}
 	return &http.Client{Transport: tr}
+}
+
+// proxy resolves how the endpoint is reached. A proxy that does not parse is
+// reported when the endpoint is used, since a request is where a caller can be
+// told about it; an unparseable one must never silently fall back to a direct
+// connection the user did not ask for.
+//
+// net/http dials socks5 and socks5h itself, so no scheme needs special care
+// here.
+func (e Endpoint) proxy() func(*http.Request) (*url.URL, error) {
+	raw := strings.TrimSpace(e.Proxy)
+	if raw == "" {
+		return http.ProxyFromEnvironment
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return func(*http.Request) (*url.URL, error) {
+			return nil, errors.Errorf("endpoint %q: cannot use proxy %q", e.Label(), raw)
+		}
+	}
+	return http.ProxyURL(u)
+}
+
+// ProxyError reports whether the endpoint's proxy can be used at all, so a
+// mistyped one is caught where it is declared.
+func (e Endpoint) ProxyError() error {
+	if strings.TrimSpace(e.Proxy) == "" {
+		return nil
+	}
+	_, err := e.proxy()(&http.Request{})
+	return err
 }
 
 // maxErrorBody bounds how much of a failed response is quoted back.

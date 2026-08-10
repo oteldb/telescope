@@ -37,6 +37,10 @@ type Endpoint struct {
 	// for VictoriaLogs.
 	Tenant string            `yaml:"tenant,omitempty"`
 	Header map[string]string `yaml:"headers,omitempty"`
+	// Proxy reaches this endpoint through a proxy of its own:
+	// "http://proxy.corp:3128" or "socks5h://127.0.0.1:1080". Unset takes the
+	// proxy from the environment.
+	Proxy string `yaml:"proxy,omitempty"`
 	// Insecure skips TLS verification, for an endpoint behind a private CA.
 	Insecure bool `yaml:"insecure,omitempty"`
 }
@@ -83,7 +87,12 @@ func (e Endpoint) Validate() error {
 	if !source.Collector(e.Type).IsRemoteAPI() {
 		return errors.Errorf("type must be victorialogs or loki, not %q", e.Type)
 	}
-	return e.Token.Validate()
+	if err := e.Token.Validate(); err != nil {
+		return err
+	}
+	// Checked here rather than on first use: a proxy that cannot be parsed is a
+	// mistake in the file, and the file is where it can be fixed.
+	return (source.Endpoint{Proxy: e.Proxy}).ProxyError()
 }
 
 // Resolve reads the token and returns the endpoint to query.
@@ -99,6 +108,7 @@ func (e Endpoint) Resolve() (source.Endpoint, error) {
 		URL:       strings.TrimRight(strings.TrimSpace(e.URL), "/"),
 		Tenant:    e.Tenant,
 		Header:    e.Header,
+		Proxy:     strings.TrimSpace(e.Proxy),
 		Insecure:  e.Insecure,
 	}
 	if ds := strings.TrimSpace(e.Datasource); ds != "" {

@@ -186,9 +186,12 @@ func TestVictoriaLogsValidate(t *testing.T) {
 	cfg := vlogsConfig("https://logs.example.com", true)
 	require.NoError(t, cfg.Validate())
 
+	// LogsQL has a match-all, so nothing typed is a tail of the whole
+	// database rather than a source that cannot open.
 	noQuery := cfg
 	noQuery.Target = "  "
-	require.ErrorContains(t, noQuery.Validate(), "LogsQL")
+	require.NoError(t, noQuery.Validate())
+	require.Equal(t, "logsql '*'", noQuery.Command())
 
 	noEndpoint := cfg
 	noEndpoint.Endpoint = Endpoint{}
