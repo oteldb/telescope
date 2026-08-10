@@ -84,6 +84,9 @@ func QueryText(query string) string {
 // prefix of the real namespace fills in that prefix, so the text always wins
 // where the two disagree.
 func Target(query string, c source.Collector) string {
+	if literal(c) {
+		return strings.TrimSpace(query)
+	}
 	terms, text := ParseQuery(query)
 	text = strings.TrimSpace(text)
 	if text == "" || len(terms) == 0 {
@@ -98,6 +101,11 @@ func Target(query string, c source.Collector) string {
 		return text
 	}
 }
+
+// literal reports whether the collector's target is a query language of its
+// own, in which "field:value" belongs to that language rather than to
+// telescope's filter.
+func literal(c source.Collector) bool { return c.IsRemoteAPI() }
 
 func kubeTarget(terms []Term, text string) string {
 	ns, target, container := source.ParseKubeTarget(text)
@@ -178,7 +186,13 @@ type Attr func(c Candidate, field string) string
 // AttrFor returns the attributes of a collector's candidates. They are read
 // back out of the candidate's own value, which is the compact target syntax, so
 // a remembered value filters like a listed one.
+//
+// It is nil for a collector whose target is a query language of its own, where
+// "field:value" is the user's query and not a filter over it.
 func AttrFor(c source.Collector) Attr {
+	if literal(c) {
+		return nil
+	}
 	switch c {
 	case source.CollectorKubectl:
 		return kubeAttr

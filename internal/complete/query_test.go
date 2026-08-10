@@ -72,6 +72,17 @@ func TestRankTerms(t *testing.T) {
 	}
 }
 
+// TestLogsQLIsNotFiltered: a prompt holding a query language of its own has no
+// attributes to filter by, so "level:error" narrows nothing locally and is sent
+// as written.
+func TestLogsQLIsNotFiltered(t *testing.T) {
+	require.Nil(t, AttrFor(source.CollectorVictoriaLogs))
+
+	recent := []Candidate{{Value: "level:error"}, {Value: "app:api"}}
+	require.Equal(t, []string{"level:error"},
+		values(Rank(recent, "level:error", AttrFor(source.CollectorVictoriaLogs))))
+}
+
 func TestAttrFor(t *testing.T) {
 	for _, tt := range []struct {
 		collector source.Collector
@@ -130,6 +141,8 @@ func TestTarget(t *testing.T) {
 		{"scope already spelled out", source.CollectorJournal, "scope:user user/syncthing", "user/syncthing"},
 		{"system scope is the default", source.CollectorJournal, "scope:system sshd", "sshd"},
 		{"docker has nothing to fold in", source.CollectorDocker, "image:app api", "api"},
+		// LogsQL is itself written as "field:value", so none of it is ours.
+		{"logsql is untouched", source.CollectorVictoriaLogs, "ns:oteldb error", "ns:oteldb error"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.want, Target(tt.query, tt.collector))

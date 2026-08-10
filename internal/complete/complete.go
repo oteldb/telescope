@@ -87,8 +87,10 @@ const (
 // Rank filters candidates by query and orders the survivors.
 //
 // A query may carry "field:value" terms, which narrow the set before anything
-// is ranked; attr resolves them and may be nil when the candidates have no
-// fields worth naming. See [ParseQuery].
+// is ranked; attr resolves them. A nil attr means the candidates have no fields
+// to filter on, and the whole query is then taken literally — which is what a
+// prompt holding a query language of its own, such as LogsQL, needs. See
+// [ParseQuery].
 //
 // The rest of the query matches fuzzily: its characters have to appear in order
 // but need not be adjacent, so "otdb0" finds "oteldb-0". Ordering is by tier
@@ -99,7 +101,10 @@ const (
 // An empty query keeps the given order, which is how recently used values stay
 // on top.
 func Rank(items []Candidate, query string, attr Attr) []Candidate {
-	terms, text := ParseQuery(query)
+	terms, text := []Term(nil), query
+	if attr != nil {
+		terms, text = ParseQuery(query)
+	}
 	if len(terms) > 0 {
 		kept := make([]Candidate, 0, len(items))
 		for _, c := range items {

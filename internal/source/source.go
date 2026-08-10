@@ -21,11 +21,19 @@ type Collector string
 
 // Supported collectors.
 const (
-	CollectorJournal Collector = "journalctl"
-	CollectorKubectl Collector = "kubectl"
-	CollectorDocker  Collector = "docker"
-	CollectorCommand Collector = "command"
+	CollectorJournal      Collector = "journalctl"
+	CollectorKubectl      Collector = "kubectl"
+	CollectorDocker       Collector = "docker"
+	CollectorCommand      Collector = "command"
+	CollectorVictoriaLogs Collector = "victorialogs"
 )
+
+// IsRemoteAPI reports whether the collector reads from a log database over
+// HTTP. Such a collector runs no command, so the transport, sudo and the
+// kubeconfig mean nothing to it.
+func (c Collector) IsRemoteAPI() bool {
+	return c == CollectorVictoriaLogs
+}
 
 // Config describes a log stream to open.
 type Config struct {
@@ -43,8 +51,10 @@ type Config struct {
 	Namespace string
 	// Target is what [CollectorKubectl] reads: a pod name, a "kind/name"
 	// reference such as "deploy/api", or, when it contains "=", a label
-	// selector.
+	// selector. For [CollectorVictoriaLogs] it is the LogsQL query.
 	Target string
+	// Endpoint is the log API [Collector.IsRemoteAPI] collectors read from.
+	Endpoint Endpoint
 	// Container narrows [CollectorKubectl] to a container and names the
 	// container for [CollectorDocker].
 	Container string
@@ -66,10 +76,17 @@ type Config struct {
 
 // Validate reports whether the config has everything needed to build a command.
 func (c Config) Validate() error {
-	if c.Transport == TransportSSH && strings.TrimSpace(c.Host) == "" {
+	if c.Transport == TransportSSH && strings.TrimSpace(c.Host) == "" && !c.Collector.IsRemoteAPI() {
 		return fmt.Errorf("ssh transport requires a host")
 	}
 	switch c.Collector {
+	case CollectorVictoriaLogs:
+		if strings.TrimSpace(c.Endpoint.URL) == "" {
+			return fmt.Errorf("victorialogs requires an endpoint")
+		}
+		if c.vlogsQuery() == "" {
+			return fmt.Errorf("victorialogs requires a LogsQL query")
+		}
 	case CollectorKubectl:
 		if strings.TrimSpace(c.Target) == "" {
 			return fmt.Errorf("kubectl requires a pod, a resource such as deploy/name, or a label selector")
@@ -89,9 +106,13 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// Command returns the shell command producing the logs, without the transport wrapper.
+// Command returns the shell command producing the logs, without the transport
+// wrapper. For a [Collector.IsRemoteAPI] collector there is no command, and the
+// result only describes the query; it is never executed.
 func (c Config) Command() string {
 	switch c.Collector {
+	case CollectorVictoriaLogs:
+		return "logsql " + Quote(c.vlogsQuery())
 	case CollectorJournal:
 		args := []string{"journalctl"}
 		if c.UserUnit {
@@ -176,6 +197,9 @@ func (c Config) elevated(args []string) string {
 // Shelling out to ssh(1) rather than dialing ourselves keeps ~/.ssh/config,
 // ProxyJump, the agent and known_hosts working without reimplementing them.
 func (c Config) Argv() []string {
+	if c.Collector.IsRemoteAPI() {
+		return nil
+	}
 	cmd := c.Command()
 	if c.Transport != TransportSSH {
 		return []string{"sh", "-c", cmd}
@@ -204,6 +228,11 @@ func (c Config) Argv() []string {
 // Title is a short human-readable description of the stream.
 func (c Config) Title() string {
 	where := "local"
+	if c.Collector.IsRemoteAPI() {
+		// The endpoint stands in for the host, and carries a token that must not
+		// reach the screen.
+		return string(c.Collector) + "://" + c.Endpoint.Label() + " · " + c.Command()
+	}
 	if c.Transport == TransportSSH {
 		where = "ssh://" + strings.TrimSpace(c.Host)
 	}

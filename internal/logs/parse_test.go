@@ -52,6 +52,14 @@ func TestParse(t *testing.T) {
 			time:       time.Unix(1700000000, 123000000),
 		},
 		{
+			name:       "victorialogs",
+			line:       `{"_time":"2026-08-10T10:00:00Z","_stream":"{app=\"api\"}","_msg":"boom","level":"error"}`,
+			structured: true,
+			body:       "boom",
+			level:      zapcore.ErrorLevel,
+			time:       time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC),
+		},
+		{
 			name:  "plain text",
 			line:  "just a line",
 			body:  "just a line",

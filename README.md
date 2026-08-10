@@ -3,7 +3,8 @@
 A terminal log viewer for the [oteldb](https://github.com/oteldb/oteldb) project.
 
 It streams logs from `journalctl`, `kubectl`, `docker` or any command, locally
-or through `ssh`, and pretty prints them with [go-faster/pl](https://github.com/go-faster/pl).
+or through `ssh`, and from a VictoriaLogs database, directly or through a
+Grafana datasource. It pretty prints them with [go-faster/pl](https://github.com/go-faster/pl).
 Structured lines are rendered by level and field; anything unstructured passes
 through with timestamps, levels, numbers and paths highlighted.
 
@@ -27,6 +28,11 @@ source, so every collector works locally and on a remote node alike.
 | `kubectl` | a pod, a container, or a label selector |
 | `docker` | a container |
 | `command` | anything writing to stdout |
+| `victorialogs` | a [VictoriaLogs](https://docs.victoriametrics.com/victorialogs/) query, over HTTP |
+
+`victorialogs` reads from a log database rather than a host, so it runs no
+command and the transport, `sudo` and the kubeconfig mean nothing to it. See
+[Endpoints](#endpoints).
 
 Targets use a compact syntax, the same in the prompt and in the config file:
 
@@ -188,13 +194,14 @@ marks those with what they will ask for.
 | field | default | |
 | --- | --- | --- |
 | `name` | required | shown in the picker |
-| `collector` | required | `journalctl`, `kubectl`, `docker`, `command` |
+| `collector` | required | `journalctl`, `kubectl`, `docker`, `command`, `victorialogs` |
+| `endpoint` | | a declared endpoint, required by `victorialogs` |
 | `transport` | `local` | `local` or `ssh` |
 | `host` | | ssh destination, required when `transport: ssh` |
 | `unit` | | systemd unit, `user/` prefix accepted |
 | `user_unit` | `false` | read the user journal |
 | `namespace` | | Kubernetes namespace |
-| `target` | | pod name or label selector, `ns/pod:container` accepted |
+| `target` | | pod name or label selector, `ns/pod:container` accepted; the query for `victorialogs` |
 | `container` | | container, for kubectl or docker |
 | `kubeconfig` | | passed as `--kubeconfig` |
 | `context` | | passed as `--context` |
@@ -206,6 +213,63 @@ marks those with what they will ask for.
 
 A malformed file, or a source naming an unknown collector, is reported on the
 start screen rather than ignored.
+
+### Endpoints
+
+A collector that reads from a log database needs an endpoint. Endpoints are
+declared once and referred to by name:
+
+```yaml
+endpoints:
+  # A Grafana datasource: the URL is the Grafana, and telescope resolves the
+  # datasource proxy path against it.
+  - name: prod
+    url: https://grafana.example.com
+    datasource: adm5h5433d8hsa
+    token_env: GRAFANA_TOKEN
+    tenant: "1:1"
+
+  # The database itself, with no Grafana in front of it.
+  - name: local
+    url: http://127.0.0.1:9428
+
+sources:
+  - name: prod api
+    collector: victorialogs
+    endpoint: prod
+    target: 'kubernetes.namespace:oteldb level:error'
+```
+
+| field | | |
+| --- | --- | --- |
+| `name` | required | referred to by a source's `endpoint` |
+| `url` | required | the base the API paths hang off |
+| `datasource` | | Grafana datasource uid, appended to `url` as a proxy path |
+| `token_env` | | environment variable holding a bearer token |
+| `token_file` | | file holding one, `~` accepted |
+| `tenant` | | `AccountID:ProjectID`, for a multi-tenant database |
+| `headers` | | anything else the endpoint or its proxy needs |
+| `insecure` | `false` | skip TLS verification |
+
+**The token is named, never written.** The config file stays shareable, and the
+secret keeps the permissions it already has. An endpoint whose token cannot be
+read marks its own sources invalid in the picker and leaves the rest working.
+
+The proxy comes from the environment, so an endpoint reachable only through
+`HTTPS_PROXY` or `ALL_PROXY=socks5h://…` needs nothing further.
+
+For `victorialogs` the target is the [LogsQL][logsql] query, sent as written —
+`field:value` there belongs to LogsQL, not to telescope's own filter. `tail`
+becomes the query's limit, and `follow` live-tails it, picking up where the
+history ended. VictoriaLogs holds new entries back briefly before serving them,
+so a followed line appears a few seconds after it was written.
+
+The `_time` and `_msg` of each entry are rendered as the line's timestamp and
+message rather than as fields named after VictoriaLogs' envelope; everything
+else, `_stream` included, is left as it came. A query can drop what it does not
+want with `| drop _stream_id`.
+
+[logsql]: https://docs.victoriametrics.com/victorialogs/logsql/
 
 ## History
 

@@ -1,0 +1,106 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/go-faster/errors"
+
+	"github.com/oteldb/telescope/internal/source"
+)
+
+// grafanaProxyPath is where Grafana proxies a datasource's own API, so an
+// endpoint can name a Grafana and a datasource rather than the full URL.
+const grafanaProxyPath = "/api/datasources/proxy/uid/"
+
+// Endpoint is a log API declared in the config file.
+//
+// The token is named, not written: telescope reads it from the environment or
+// from a file, so the config stays shareable and the secret keeps whatever
+// permissions it already has.
+type Endpoint struct {
+	Name string `yaml:"name"`
+	URL  string `yaml:"url"`
+	// Datasource is a Grafana datasource uid. When set, URL is the Grafana
+	// itself and the datasource proxy path is appended to it.
+	Datasource string `yaml:"datasource,omitempty"`
+
+	// TokenEnv names an environment variable holding a bearer token, which is
+	// what a Grafana service account issues.
+	TokenEnv string `yaml:"token_env,omitempty"`
+	// TokenFile names a file holding one, for a secret that never enters the
+	// environment.
+	TokenFile string `yaml:"token_file,omitempty"`
+
+	// Tenant selects one tenant of a multi-tenant database, "AccountID:ProjectID"
+	// for VictoriaLogs.
+	Tenant string            `yaml:"tenant,omitempty"`
+	Header map[string]string `yaml:"headers,omitempty"`
+	// Insecure skips TLS verification, for an endpoint behind a private CA.
+	Insecure bool `yaml:"insecure,omitempty"`
+}
+
+// Validate reports whether the endpoint is structurally usable. Whether its
+// token can be read is left to [Endpoint.Resolve]: a config naming an endpoint
+// the user has no token for should still open every other source.
+func (e Endpoint) Validate() error {
+	if strings.TrimSpace(e.Name) == "" {
+		return errors.New("name is required")
+	}
+	if strings.TrimSpace(e.URL) == "" {
+		return errors.New("url is required")
+	}
+	if e.TokenEnv != "" && e.TokenFile != "" {
+		return errors.New("token_env and token_file are mutually exclusive")
+	}
+	return nil
+}
+
+// Resolve reads the token and returns the endpoint to query.
+func (e Endpoint) Resolve() (source.Endpoint, error) {
+	out := source.Endpoint{
+		Name:     e.Name,
+		URL:      strings.TrimRight(strings.TrimSpace(e.URL), "/"),
+		Tenant:   e.Tenant,
+		Header:   e.Header,
+		Insecure: e.Insecure,
+	}
+	if ds := strings.TrimSpace(e.Datasource); ds != "" {
+		out.URL += grafanaProxyPath + ds
+	}
+
+	switch {
+	case e.TokenEnv != "":
+		token := strings.TrimSpace(os.Getenv(e.TokenEnv))
+		if token == "" {
+			return source.Endpoint{}, errors.Errorf("endpoint %q: $%s is not set", e.Name, e.TokenEnv)
+		}
+		out.Token = token
+	case e.TokenFile != "":
+		path, err := expandHome(e.TokenFile)
+		if err != nil {
+			return source.Endpoint{}, err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return source.Endpoint{}, errors.Wrapf(err, "endpoint %q: read token", e.Name)
+		}
+		out.Token = strings.TrimSpace(string(data))
+	}
+	return out, nil
+}
+
+// expandHome resolves a leading ~, which is what a path in a config file is
+// most likely to be written with.
+func expandHome(path string) (string, error) {
+	rest, ok := strings.CutPrefix(path, "~")
+	if !ok {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", errors.Wrap(err, "home directory")
+	}
+	return filepath.Join(home, rest), nil
+}

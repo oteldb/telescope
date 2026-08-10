@@ -202,7 +202,10 @@ func (m startModel) savedCandidates() []complete.Candidate {
 			continue
 		}
 		where := "local"
-		if cfg.Transport == source.TransportSSH {
+		switch {
+		case cfg.Collector.IsRemoteAPI():
+			where = cfg.Endpoint.Label()
+		case cfg.Transport == source.TransportSSH:
 			where = "ssh://" + cfg.Host
 		}
 		detail := where + " · " + string(cfg.Collector)
@@ -232,6 +235,8 @@ func missingLabel(c source.Collector) string {
 		return "pick a container"
 	case source.CollectorCommand:
 		return "type a command"
+	case source.CollectorVictoriaLogs:
+		return "type a query"
 	default:
 		return "pick a unit"
 	}

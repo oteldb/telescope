@@ -29,11 +29,19 @@ type Stream struct {
 	cancel context.CancelFunc
 }
 
-// Start spawns the command described by cfg.
+// Start opens the stream described by cfg, spawning a command or, for a
+// [Collector.IsRemoteAPI] collector, querying the endpoint over HTTP.
 func Start(ctx context.Context, cfg Config) (*Stream, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	if cfg.Collector.IsRemoteAPI() {
+		return startAPI(ctx, cfg)
+	}
+	return startCommand(ctx, cfg)
+}
+
+func startCommand(ctx context.Context, cfg Config) (*Stream, error) {
 	argv := cfg.Argv()
 
 	ctx, cancel := context.WithCancel(ctx)

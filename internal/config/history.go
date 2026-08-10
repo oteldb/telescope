@@ -30,8 +30,13 @@ type History struct {
 // one there sends kubectl looking for something that was never present.
 func Scope(cfg source.Config) string {
 	parts := []string{string(cfg.Transport), cfg.Host, string(cfg.Collector)}
-	if cfg.Collector == source.CollectorKubectl {
+	switch {
+	case cfg.Collector == source.CollectorKubectl:
 		parts = append(parts, cfg.KubeConfig, cfg.KubeContext)
+	case cfg.Collector.IsRemoteAPI():
+		// A query belongs to the database it was written for, and never to the
+		// host telescope happens to run on.
+		parts = []string{string(cfg.Collector), cfg.Endpoint.Label()}
 	}
 	return strings.Join(parts, "|")
 }
@@ -73,10 +78,12 @@ func loadHistoryFrom(path string) (History, error) {
 
 // Remember records what a stream used, most recent first.
 func (h *History) Remember(cfg source.Config) {
-	if cfg.Transport == source.TransportSSH {
-		h.Hosts = push(h.Hosts, cfg.Host)
+	if !cfg.Collector.IsRemoteAPI() {
+		if cfg.Transport == source.TransportSSH {
+			h.Hosts = push(h.Hosts, cfg.Host)
+		}
+		h.KubeConfigs = push(h.KubeConfigs, cfg.KubeConfig)
 	}
-	h.KubeConfigs = push(h.KubeConfigs, cfg.KubeConfig)
 
 	if target := Target(cfg); target != "" {
 		if h.Targets == nil {

@@ -30,6 +30,16 @@ type Source struct {
 	Host      string `yaml:"host,omitempty"`
 	Collector string `yaml:"collector"`
 
+	// Endpoint names one of the declared endpoints, for a collector that reads
+	// from a log database rather than a host.
+	Endpoint string `yaml:"endpoint,omitempty"`
+	// Resolved is the endpoint Endpoint names, filled in by [Load].
+	Resolved source.Endpoint `yaml:"-"`
+	// resolveErr is why the endpoint's token could not be read. It is kept
+	// rather than returned so one unreadable token does not take the whole
+	// config down with it.
+	resolveErr error
+
 	Unit       string `yaml:"unit,omitempty"`
 	UserUnit   bool   `yaml:"user_unit,omitempty"`
 	Namespace  string `yaml:"namespace,omitempty"`
@@ -53,7 +63,10 @@ type Source struct {
 
 // Config is the contents of the config file.
 type Config struct {
-	Sources []Source `yaml:"sources"`
+	// Endpoints are the log APIs sources may read from, declared once and
+	// referred to by name.
+	Endpoints []Endpoint `yaml:"endpoints,omitempty"`
+	Sources   []Source   `yaml:"sources"`
 }
 
 // Path is where the config file is read from, honoring XDG_CONFIG_HOME.
@@ -87,12 +100,42 @@ func loadFrom(path string) (Config, error) {
 	if err := yaml.Unmarshal(data, &c); err != nil {
 		return Config{}, errors.Wrapf(err, "parse %s", path)
 	}
+	if err := c.resolveEndpoints(); err != nil {
+		return Config{}, err
+	}
 	for i, s := range c.Sources {
 		if err := s.Validate(); err != nil {
 			return Config{}, errors.Wrapf(err, "source %d", i+1)
 		}
 	}
 	return c, nil
+}
+
+// resolveEndpoints attaches each source's endpoint to it. Naming an endpoint
+// that was never declared is a mistake in the file; failing to read its token
+// is not, and is carried on the source instead.
+func (c *Config) resolveEndpoints() error {
+	byName := make(map[string]Endpoint, len(c.Endpoints))
+	for i, e := range c.Endpoints {
+		if err := e.Validate(); err != nil {
+			return errors.Wrapf(err, "endpoint %d", i+1)
+		}
+		if _, ok := byName[e.Name]; ok {
+			return errors.Errorf("endpoint %q is declared twice", e.Name)
+		}
+		byName[e.Name] = e
+	}
+	for i, s := range c.Sources {
+		if s.Endpoint == "" {
+			continue
+		}
+		e, ok := byName[s.Endpoint]
+		if !ok {
+			return errors.Errorf("source %q names undeclared endpoint %q", s.Name, s.Endpoint)
+		}
+		c.Sources[i].Resolved, c.Sources[i].resolveErr = e.Resolve()
+	}
+	return nil
 }
 
 // Validate reports whether the declared source is usable. A source that names
@@ -102,6 +145,9 @@ func (s Source) Validate() error {
 	if s.Name == "" {
 		return errors.New("name is required")
 	}
+	// Whether a token can be read is environment, not declaration: it is
+	// reported when the source is opened, not when the file is parsed.
+	s.resolveErr = nil
 	_, _, err := s.Stream()
 	return err
 }
@@ -124,6 +170,7 @@ func (s Source) Stream() (cfg source.Config, ready bool, err error) {
 		Args:        s.Args,
 		KubeConfig:  s.KubeConfig,
 		KubeContext: s.Context,
+		Endpoint:    s.Resolved,
 		Elevate:     s.Sudo,
 		Tail:        defaultTail,
 		Follow:      defaultFollow,
@@ -141,11 +188,20 @@ func (s Source) Stream() (cfg source.Config, ready bool, err error) {
 		return source.Config{}, false, errors.Errorf("unknown transport %q", s.Transport)
 	}
 	switch cfg.Collector {
-	case source.CollectorJournal, source.CollectorKubectl, source.CollectorDocker, source.CollectorCommand:
+	case source.CollectorJournal, source.CollectorKubectl, source.CollectorDocker,
+		source.CollectorCommand, source.CollectorVictoriaLogs:
 	default:
 		return source.Config{}, false, errors.Errorf("unknown collector %q", s.Collector)
 	}
-	if cfg.Transport == source.TransportSSH && strings.TrimSpace(cfg.Host) == "" {
+	if cfg.Collector.IsRemoteAPI() {
+		if s.Endpoint == "" {
+			return source.Config{}, false, errors.Errorf("collector %q requires an endpoint", s.Collector)
+		}
+		if s.resolveErr != nil {
+			return cfg, false, s.resolveErr
+		}
+	}
+	if cfg.Transport == source.TransportSSH && strings.TrimSpace(cfg.Host) == "" && !cfg.Collector.IsRemoteAPI() {
 		return source.Config{}, false, errors.New("ssh transport requires a host")
 	}
 	// A journal unit may carry the compact user/ prefix, as in the prompt.
@@ -187,6 +243,8 @@ func Target(cfg source.Config) string {
 		return target
 	case source.CollectorDocker:
 		return cfg.Container
+	case source.CollectorVictoriaLogs:
+		return cfg.Target
 	default:
 		return cfg.Args
 	}

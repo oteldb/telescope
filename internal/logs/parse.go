@@ -12,11 +12,12 @@ import (
 )
 
 // timeKeys, levelKeys and bodyKeys are the field aliases understood on input,
-// covering zap, OTEL log records, logrus, bunyan and friends.
+// covering zap, OTEL log records, logrus, bunyan, the underscored fields
+// VictoriaLogs answers with, and friends.
 var (
-	timeKeys  = []string{"ts", "time", "timestamp", "@timestamp", "Timestamp", "ObservedTimestamp"}
+	timeKeys  = []string{"ts", "time", "timestamp", "@timestamp", "Timestamp", "ObservedTimestamp", "_time"}
 	levelKeys = []string{"level", "lvl", "severity", "SeverityText", "severity_text"}
-	bodyKeys  = []string{"msg", "message", "Body", "body"}
+	bodyKeys  = []string{"msg", "message", "Body", "body", "_msg"}
 	traceKeys = []string{"trace_id", "traceID", "TraceID", "traceid"}
 	spanKeys  = []string{"span_id", "spanID", "SpanID", "spanid"}
 )
