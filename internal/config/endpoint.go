@@ -82,6 +82,11 @@ func (e Endpoint) Validate() error {
 }
 
 // Resolve reads the token and returns the endpoint to query.
+//
+// The endpoint is returned even when the token cannot be read: what it is and
+// which API it speaks is in the file, and only the secret is missing. A caller
+// that needs the token checks the error; one that only needs to know what was
+// declared does not have to.
 func (e Endpoint) Resolve() (source.Endpoint, error) {
 	out := source.Endpoint{
 		Name:      e.Name,
@@ -99,17 +104,17 @@ func (e Endpoint) Resolve() (source.Endpoint, error) {
 	case e.TokenEnv != "":
 		token := strings.TrimSpace(os.Getenv(e.TokenEnv))
 		if token == "" {
-			return source.Endpoint{}, errors.Errorf("endpoint %q: $%s is not set", e.Name, e.TokenEnv)
+			return out, errors.Errorf("endpoint %q: $%s is not set", e.Name, e.TokenEnv)
 		}
 		out.Token = token
 	case e.TokenFile != "":
 		path, err := expandHome(e.TokenFile)
 		if err != nil {
-			return source.Endpoint{}, err
+			return out, err
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return source.Endpoint{}, errors.Wrapf(err, "endpoint %q: read token", e.Name)
+			return out, errors.Wrapf(err, "endpoint %q: read token", e.Name)
 		}
 		out.Token = strings.TrimSpace(string(data))
 	}

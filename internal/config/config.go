@@ -17,6 +17,17 @@ import (
 // appDir is the per-user directory telescope keeps its files in.
 const appDir = "telescope"
 
+// collectorNames are the collectors a source may declare, for the message that
+// says so when it declares something else.
+var collectorNames = []string{
+	string(source.CollectorJournal),
+	string(source.CollectorKubectl),
+	string(source.CollectorDocker),
+	string(source.CollectorCommand),
+	string(source.CollectorVictoriaLogs),
+	string(source.CollectorLoki),
+}
+
 // Defaults applied to a declared source that does not say otherwise.
 const (
 	defaultTail   = 1000
@@ -111,6 +122,11 @@ func loadFrom(path string) (Config, error) {
 	}
 	for i, s := range c.Sources {
 		if err := s.Validate(); err != nil {
+			// Named rather than numbered wherever possible: counting entries in
+			// a file to find the broken one is work the message can do.
+			if s.Name != "" {
+				return Config{}, errors.Wrapf(err, "source %q", s.Name)
+			}
 			return Config{}, errors.Wrapf(err, "source %d", i+1)
 		}
 	}
@@ -204,8 +220,13 @@ func (s Source) Stream() (cfg source.Config, ready bool, err error) {
 	switch cfg.Collector {
 	case source.CollectorJournal, source.CollectorKubectl, source.CollectorDocker,
 		source.CollectorCommand, source.CollectorVictoriaLogs, source.CollectorLoki:
+	case "":
+		return source.Config{}, false, errors.Errorf(
+			"collector is required: one of %s — or name an endpoint, which says which it is",
+			strings.Join(collectorNames, ", "))
 	default:
-		return source.Config{}, false, errors.Errorf("unknown collector %q", s.Collector)
+		return source.Config{}, false, errors.Errorf(
+			"unknown collector %q: want one of %s", s.Collector, strings.Join(collectorNames, ", "))
 	}
 	if cfg.Collector.IsRemoteAPI() {
 		if s.Endpoint == "" {

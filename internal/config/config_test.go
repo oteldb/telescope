@@ -118,6 +118,48 @@ sources:
 	require.NotContains(t, got.Command(), " -f", "a window that has closed is not followed")
 }
 
+// TestUnreadableTokenKeepsTheConfig: a token telescope cannot read is the
+// environment, not the file. It must not take the config down with it, and
+// least of all by claiming the source declared no collector — which is what
+// happens if an endpoint that failed to resolve forgets what it was.
+func TestUnreadableTokenKeepsTheConfig(t *testing.T) {
+	cfg, err := loadFrom(write(t, `
+endpoints:
+  - name: prod
+    type: victorialogs
+    url: https://logs.example.com
+    token_env: TELESCOPE_TEST_UNSET
+sources:
+  - name: prod logs
+    endpoint: prod
+  - name: local docker
+    collector: docker
+    container: api
+`))
+	require.NoError(t, err, "one unreadable token is not a broken config")
+	require.Len(t, cfg.Sources, 2)
+
+	// The source that needs it says why, where it is chosen.
+	_, ready, err := cfg.Sources[0].Stream()
+	require.False(t, ready)
+	require.ErrorContains(t, err, "TELESCOPE_TEST_UNSET")
+
+	// And the ones that do not need it still open.
+	docker, ready, err := cfg.Sources[1].Stream()
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Equal(t, source.CollectorDocker, docker.Collector)
+}
+
+// TestSourceErrorsAreNamed: an error names the source it is about, since a
+// number means counting entries in the file to find it.
+func TestSourceErrorsAreNamed(t *testing.T) {
+	_, err := loadFrom(write(t, "sources:\n  - name: prod logs\n    target: pod\n"))
+	require.ErrorContains(t, err, `source "prod logs"`)
+	require.ErrorContains(t, err, "collector is required")
+	require.ErrorContains(t, err, "name an endpoint")
+}
+
 func TestLoadMissingFileIsEmpty(t *testing.T) {
 	cfg, err := loadFrom(filepath.Join(t.TempDir(), "absent.yaml"))
 	require.NoError(t, err)
