@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,9 +17,9 @@ const grafanaProxyPath = "/api/datasources/proxy/uid/"
 
 // Endpoint is a log API declared in the config file.
 //
-// The token is named, not written: telescope reads it from the environment or
-// from a file, so the config stays shareable and the secret keeps whatever
-// permissions it already has.
+// The token is named, not written: telescope reads it from the environment, a
+// file or a command, so the config stays shareable and the secret keeps
+// whatever permissions it already has. See [Token].
 type Endpoint struct {
 	Name string `yaml:"name"`
 	URL  string `yaml:"url"`
@@ -28,11 +29,14 @@ type Endpoint struct {
 	// itself and the datasource proxy path is appended to it.
 	Datasource string `yaml:"datasource,omitempty"`
 
-	// TokenEnv names an environment variable holding a bearer token, which is
-	// what a Grafana service account issues.
-	TokenEnv string `yaml:"token_env,omitempty"`
-	// TokenFile names a file holding one, for a secret that never enters the
-	// environment.
+	// Token says where the bearer token is read from: an environment variable,
+	// a file, or a command such as a keyring lookup.
+	Token Token `yaml:"token,omitempty"`
+
+	// TokenEnv and TokenFile are the spellings token replaced. They are read
+	// only to say so: a key that is silently ignored looks like an endpoint
+	// with no credentials at all.
+	TokenEnv  string `yaml:"token_env,omitempty"`
 	TokenFile string `yaml:"token_file,omitempty"`
 
 	// Tenant selects one tenant of a multi-tenant database, "AccountID:ProjectID"
@@ -52,7 +56,7 @@ func (c Config) Resolved() ([]source.Endpoint, error) {
 		errs []error
 	)
 	for _, e := range c.Endpoints {
-		resolved, err := e.Resolve()
+		resolved, err := c.resolve(e)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -60,6 +64,16 @@ func (c Config) Resolved() ([]source.Endpoint, error) {
 		out = append(out, resolved)
 	}
 	return out, errors.Join(errs...)
+}
+
+// resolve returns what [Config.resolveEndpoints] already read, so a token
+// command runs once per run rather than once per caller. A config built by
+// hand, as a test does, has nothing recorded and resolves on the spot.
+func (c Config) resolve(e Endpoint) (source.Endpoint, error) {
+	if got, ok := c.resolved[e.Name]; ok {
+		return got.endpoint, got.err
+	}
+	return e.Resolve()
 }
 
 // Validate reports whether the endpoint is structurally usable. Whether its
@@ -75,10 +89,13 @@ func (e Endpoint) Validate() error {
 	if !source.Collector(e.Type).IsRemoteAPI() {
 		return errors.Errorf("type must be victorialogs or loki, not %q", e.Type)
 	}
-	if e.TokenEnv != "" && e.TokenFile != "" {
-		return errors.New("token_env and token_file are mutually exclusive")
+	if e.TokenEnv != "" {
+		return errors.Errorf("token_env is now token: {env: %s}", e.TokenEnv)
 	}
-	return nil
+	if e.TokenFile != "" {
+		return errors.Errorf("token_file is now token: {file: %s}", e.TokenFile)
+	}
+	return e.Token.Validate()
 }
 
 // Resolve reads the token and returns the endpoint to query.
@@ -100,24 +117,11 @@ func (e Endpoint) Resolve() (source.Endpoint, error) {
 		out.URL += grafanaProxyPath + ds
 	}
 
-	switch {
-	case e.TokenEnv != "":
-		token := strings.TrimSpace(os.Getenv(e.TokenEnv))
-		if token == "" {
-			return out, errors.Errorf("endpoint %q: $%s is not set", e.Name, e.TokenEnv)
-		}
-		out.Token = token
-	case e.TokenFile != "":
-		path, err := expandHome(e.TokenFile)
-		if err != nil {
-			return out, err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return out, errors.Wrapf(err, "endpoint %q: read token", e.Name)
-		}
-		out.Token = strings.TrimSpace(string(data))
+	token, err := e.Token.Read(context.Background())
+	if err != nil {
+		return out, errors.Wrapf(err, "endpoint %q", e.Name)
 	}
+	out.Token = token
 	return out, nil
 }
 

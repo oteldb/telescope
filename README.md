@@ -256,8 +256,16 @@ endpoints:
     type: victorialogs
     url: https://grafana.example.com
     datasource: adm5h5433d8hsa
-    token_env: GRAFANA_TOKEN
+    token:
+      env: GRAFANA_TOKEN
     tenant: "1:1"
+
+  # The token from a keyring, a password manager, anything with a CLI.
+  - name: staging
+    type: victorialogs
+    url: https://logs.staging.example.com
+    token:
+      exec: secret-tool lookup service telescope account staging
 
   # The database itself, with no Grafana in front of it.
   - name: local
@@ -276,8 +284,7 @@ sources:
 | `type` | required | `victorialogs` or `loki` |
 | `url` | required | the base the API paths hang off |
 | `datasource` | | Grafana datasource uid, appended to `url` as a proxy path |
-| `token_env` | | environment variable holding a bearer token |
-| `token_file` | | file holding one, `~` accepted |
+| `token` | | where the bearer token is read from; see below |
 | `tenant` | | `AccountID:ProjectID` for VictoriaLogs, the org id for Loki |
 | `headers` | | anything else the endpoint or its proxy needs |
 | `insecure` | `false` | skip TLS verification |
@@ -297,8 +304,33 @@ are remembered like ssh hosts. A missing scheme is filled in — `https://`, or
 file, since the prompt writes what it is given to the history in plain text.
 
 **The token is named, never written.** The config file stays shareable, and the
-secret keeps the permissions it already has. An endpoint whose token cannot be
-read marks its own sources invalid in the picker and leaves the rest working.
+secret keeps the permissions it already has. One of three, at most:
+
+| `token:` | |
+| --- | --- |
+| `env: NAME` | an environment variable |
+| `file: PATH` | a file, `~` accepted |
+| `exec: …` | a command, whose first line of output is the token |
+
+`exec` takes either a command line, run through `sh -c` so a pipe works, or a
+list of arguments, which needs no quoting:
+
+```yaml
+    token:
+      exec: pass show grafana/prod | head -1
+    token:
+      exec: ["bw", "get", "password", "grafana-prod"]
+```
+
+That covers a keyring (`secret-tool lookup …`), `pass`, Bitwarden, 1Password,
+Proton Pass — anything with a CLI. The command inherits the terminal, and
+telescope reads its config before taking over the screen, so a manager that
+needs to ask for a passphrase can still ask. It runs once per run, per endpoint,
+and only for endpoints that are declared; what it writes to stderr is kept for
+the error, and it is given a minute to answer.
+
+An endpoint whose token cannot be read marks its own sources invalid in the
+picker and leaves the rest working.
 
 The proxy comes from the environment, so an endpoint reachable only through
 `HTTPS_PROXY` or `ALL_PROXY=socks5h://…` needs nothing further.

@@ -1247,7 +1247,8 @@ func TestEndpointQueryOpens(t *testing.T) {
 // to is not offered as a choice that fails later.
 func TestEndpointTokenFailureIsReported(t *testing.T) {
 	withEndpoints(t, []config.Endpoint{
-		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com", TokenEnv: "TELESCOPE_TEST_UNSET"},
+		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com",
+			Token: config.Token{Env: "TELESCOPE_TEST_UNSET"}},
 	}, nil)
 
 	m := send(t, New(), size())

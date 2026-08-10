@@ -128,7 +128,8 @@ endpoints:
   - name: prod
     type: victorialogs
     url: https://logs.example.com
-    token_env: TELESCOPE_TEST_UNSET
+    token:
+      env: TELESCOPE_TEST_UNSET
 sources:
   - name: prod logs
     endpoint: prod

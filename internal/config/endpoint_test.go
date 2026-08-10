@@ -18,7 +18,8 @@ endpoints:
     type: victorialogs
     url: https://grafana.example.com
     datasource: abc123
-    token_env: TELESCOPE_TEST_TOKEN
+    token:
+      env: TELESCOPE_TEST_TOKEN
     tenant: "1:1"
     headers:
       X-Scope: logs
@@ -55,7 +56,8 @@ endpoints:
   - name: prod
     type: victorialogs
     url: https://logs.example.com
-    token_file: `+tokenPath+`
+    token:
+      file: `+tokenPath+`
 sources:
   - name: prod
     collector: victorialogs
@@ -77,7 +79,8 @@ endpoints:
   - name: prod
     type: victorialogs
     url: https://logs.example.com
-    token_env: TELESCOPE_TEST_UNSET_TOKEN
+    token:
+      env: TELESCOPE_TEST_UNSET_TOKEN
 sources:
   - name: prod
     collector: victorialogs
@@ -157,10 +160,19 @@ endpoints:
   - name: prod
     type: victorialogs
     url: https://logs.example.com
-    token_env: A
-    token_file: /b
+    token:
+      env: A
+      file: /b
 sources: []
-`, "mutually exclusive"},
+`, "token names env and file"},
+		{"the spelling token replaced", `
+endpoints:
+  - name: prod
+    type: victorialogs
+    url: https://logs.example.com
+    token_env: GRAFANA_TOKEN
+sources: []
+`, "token_env is now token: {env: GRAFANA_TOKEN}"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := loadFrom(write(t, tt.content))

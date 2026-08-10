@@ -84,6 +84,18 @@ type Config struct {
 	// referred to by name.
 	Endpoints []Endpoint `yaml:"endpoints,omitempty"`
 	Sources   []Source   `yaml:"sources"`
+
+	// resolved is every endpoint as read once at load, keyed by name. A token
+	// may cost a keyring prompt, so it is read once per run and not once per
+	// place that asks for it.
+	resolved map[string]resolvedEndpoint
+}
+
+// resolvedEndpoint is one endpoint as it came out of [Endpoint.Resolve],
+// including the reason its token could not be read.
+type resolvedEndpoint struct {
+	endpoint source.Endpoint
+	err      error
 }
 
 // Path is where the config file is read from, honoring XDG_CONFIG_HOME.
@@ -137,25 +149,29 @@ func loadFrom(path string) (Config, error) {
 // that was never declared is a mistake in the file; failing to read its token
 // is not, and is carried on the source instead.
 func (c *Config) resolveEndpoints() error {
-	byName := make(map[string]Endpoint, len(c.Endpoints))
+	c.resolved = make(map[string]resolvedEndpoint, len(c.Endpoints))
 	for i, e := range c.Endpoints {
 		if err := e.Validate(); err != nil {
+			if e.Name != "" {
+				return errors.Wrapf(err, "endpoint %q", e.Name)
+			}
 			return errors.Wrapf(err, "endpoint %d", i+1)
 		}
-		if _, ok := byName[e.Name]; ok {
+		if _, ok := c.resolved[e.Name]; ok {
 			return errors.Errorf("endpoint %q is declared twice", e.Name)
 		}
-		byName[e.Name] = e
+		resolved, err := e.Resolve()
+		c.resolved[e.Name] = resolvedEndpoint{endpoint: resolved, err: err}
 	}
 	for i, s := range c.Sources {
 		if s.Endpoint == "" {
 			continue
 		}
-		e, ok := byName[s.Endpoint]
+		got, ok := c.resolved[s.Endpoint]
 		if !ok {
 			return errors.Errorf("source %q names undeclared endpoint %q", s.Name, s.Endpoint)
 		}
-		c.Sources[i].Resolved, c.Sources[i].resolveErr = e.Resolve()
+		c.Sources[i].Resolved, c.Sources[i].resolveErr = got.endpoint, got.err
 	}
 	return nil
 }
