@@ -491,6 +491,29 @@ func TestSuggestionPaging(t *testing.T) {
 	require.Equal(t, 0, sel(m))
 }
 
+// TestMultilineEntryKeepsOneRow: a stacktrace used to be drawn into the list
+// verbatim, pushing every row below it down and breaking the framed height.
+func TestMultilineEntryKeepsOneRow(t *testing.T) {
+	m := logsModel(t,
+		`{"level":"info","msg":"before"}`,
+		`{"level":"error","msg":"boom","error":"wrapped:\n    a.go:1\n  - inner"}`,
+		`{"level":"info","msg":"after"}`,
+	)
+	out := screen(t, m)
+
+	require.Equal(t, 30, strings.Count(out, "\n")+1, "the view still fills exactly the window")
+	require.NotContains(t, out, "a.go:1", "the trace is folded away in the list")
+	require.Contains(t, out, "⏎2", "and its size is shown instead")
+	require.Contains(t, out, "before")
+	require.Contains(t, out, "after")
+
+	// Opening the entry shows the whole thing.
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyUp}, k("enter"))
+	entry := screen(t, m)
+	require.Contains(t, entry, "a.go:1")
+	require.Contains(t, entry, "inner")
+}
+
 func TestLogViewJumpKeys(t *testing.T) {
 	lines := make([]string, 200)
 	for i := range lines {

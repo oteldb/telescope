@@ -246,9 +246,13 @@ func renderLine(e *logs.Entry, selected bool, hoff, width int) string {
 	if selected {
 		marker = styleSelected.Render("▎ ")
 	}
-	text := e.Text
+	text := e.Head
 	if e.Stderr {
 		text = styleErr.Render("!") + " " + text
+	}
+	if e.Extra > 0 {
+		// A stacktrace would otherwise take over the list; the entry view has it.
+		text += styleDim.Render(fmt.Sprintf(" ⏎%d", e.Extra))
 	}
 	if hoff > 0 {
 		text = ansi.TruncateLeft(text, hoff, "")

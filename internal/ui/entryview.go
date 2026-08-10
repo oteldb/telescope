@@ -117,7 +117,10 @@ func (m entryModel) lines(width int) []string {
 
 	out = append(out, "")
 	out = append(out, styleTitle.Render("rendered"))
-	out = append(out, "  "+ansi.Truncate(e.Text, max(width-2, 1), "…"))
+	// The full rendering, stacktrace and all: this is where it belongs.
+	for l := range strings.SplitSeq(e.Text, "\n") {
+		out = append(out, "  "+ansi.Truncate(l, max(width-2, 1), "…"))
+	}
 
 	if len(e.Record.Fields) > 0 {
 		out = append(out, "", styleTitle.Render("fields"))

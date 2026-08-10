@@ -2,6 +2,7 @@ package logs
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -32,6 +33,24 @@ func TestStoreHighlightsOnlyUnstructured(t *testing.T) {
 	structured := s.Append(line(`{"level":"info","msg":"hi"}`))
 	require.True(t, structured.Record.Structured)
 	require.Contains(t, structured.Text, "hi")
+}
+
+// TestStoreFoldsMultilineRenders: pl renders a stacktrace or a multi-line
+// error across several lines, but the log list draws one row per entry, so the
+// remainder has to be counted rather than emitted.
+func TestStoreFoldsMultilineRenders(t *testing.T) {
+	s := NewStore(10)
+
+	e := s.Append(line(`{"level":"error","msg":"boom","error":"wrapped:\n    a.go:1\n  - inner"}`))
+	require.Contains(t, e.Text, "\n", "the full rendering keeps its lines")
+	require.NotContains(t, e.Head, "\n", "the list gets a single line")
+	require.Equal(t, 2, e.Extra, "and a count of what was folded")
+	require.Contains(t, e.Head, "boom")
+	require.True(t, strings.HasSuffix(e.Head, ansiReset), "no color leaks past the cut")
+
+	single := s.Append(line(`{"level":"info","msg":"fine"}`))
+	require.Equal(t, single.Text, single.Head)
+	require.Zero(t, single.Extra)
 }
 
 func TestViewFilter(t *testing.T) {

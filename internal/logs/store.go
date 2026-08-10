@@ -1,6 +1,7 @@
 package logs
 
 import (
+	"strings"
 	"time"
 
 	"github.com/go-faster/pl"
@@ -10,9 +11,16 @@ import (
 
 // Entry is one received line: the bytes, its parsed record and its rendering.
 type Entry struct {
-	Seq    int
-	Raw    []byte
-	Text   string // rendered with ANSI colors
+	Seq int
+	Raw []byte
+	// Text is the full rendering, which spans several lines when the record
+	// carries a stacktrace or a multi-line error.
+	Text string
+	// Head is the first line of Text and Extra counts the rest. The log list
+	// shows one row per entry, so the remainder is folded away until the entry
+	// is opened.
+	Head   string
+	Extra  int
 	Stderr bool
 	At     time.Time // Record time, falling back to arrival time
 	Record Record
@@ -51,10 +59,20 @@ func (s *Store) Append(l source.Line) *Entry {
 		text = Highlight(text)
 	}
 
+	head, rest, multiline := strings.Cut(text, "\n")
+	extra := 0
+	if multiline {
+		extra = strings.Count(rest, "\n") + 1
+		// Splitting can cut a color sequence off from its reset.
+		head += ansiReset
+	}
+
 	e := &Entry{
 		Seq:    s.seq,
 		Raw:    l.Data,
 		Text:   text,
+		Head:   head,
+		Extra:  extra,
 		Stderr: l.Stderr,
 		At:     rec.Time,
 		Record: rec,
