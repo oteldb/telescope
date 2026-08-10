@@ -49,31 +49,20 @@ func TestRequestKey(t *testing.T) {
 
 func TestParsers(t *testing.T) {
 	t.Run("unit", func(t *testing.T) {
-		c, ok := parseUnit("nginx.service loaded active running A web server")
-		require.True(t, ok)
-		require.Equal(t, Candidate{Value: "nginx", State: "running"}, c)
-
-		_, ok = parseUnit("sys-devices.device loaded active plugged")
-		require.False(t, ok, "only services are offered")
-
-		_, ok = parseUnit("")
-		require.False(t, ok)
+		require.Equal(t, []Candidate{{Value: "nginx", State: "running"}},
+			parseUnit("nginx.service loaded active running A web server"))
+		require.Empty(t, parseUnit("sys-devices.device loaded active plugged"), "only services are offered")
+		require.Empty(t, parseUnit(""))
 	})
 	t.Run("pod", func(t *testing.T) {
-		c, ok := parsePod("oteldb   oteldb-0   Running")
-		require.True(t, ok)
-		require.Equal(t, Candidate{Value: "oteldb/oteldb-0", State: "Running"}, c)
-
-		_, ok = parsePod("lonely")
-		require.False(t, ok)
+		require.Equal(t, []Candidate{{Value: "oteldb/oteldb-0", State: "Running"}},
+			parsePod("oteldb oteldb-0 Running oteldb <none>"))
+		require.Empty(t, parsePod("lonely"))
 	})
 	t.Run("container", func(t *testing.T) {
-		c, ok := parseContainer("app\tapp:latest\trunning")
-		require.True(t, ok)
-		require.Equal(t, Candidate{Value: "app", State: "running", Detail: "app:latest"}, c)
-
-		_, ok = parseContainer("\t \t")
-		require.False(t, ok)
+		require.Equal(t, []Candidate{{Value: "app", State: "running", Detail: "app:latest"}},
+			parseContainer("app\tapp:latest\trunning"))
+		require.Empty(t, parseContainer("\t \t"))
 	})
 }
 
@@ -155,6 +144,70 @@ func TestListToleratesFailingSource(t *testing.T) {
 	require.Equal(t, []string{"sshd"}, values(got))
 }
 
+// TestParsePodContainers: a pod with several containers has to name them,
+// because kubectl refuses to pick one, and init containers are what a pod
+// stuck in Init is about.
+func TestParsePodContainers(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		line string
+		want []Candidate
+	}{
+		{
+			name: "single container is offered bare",
+			line: "flux-system helm-controller-7c4 Running manager <none>",
+			want: []Candidate{{Value: "flux-system/helm-controller-7c4", State: "Running"}},
+		},
+		{
+			name: "several containers are named",
+			line: "cert-manager cert-manager-b77 Running cert-manager-controller,cloudflared-doh <none>",
+			want: []Candidate{
+				{Value: "cert-manager/cert-manager-b77", State: "Running", Detail: "2 containers"},
+				{Value: "cert-manager/cert-manager-b77:cert-manager-controller", State: "Running", Detail: "container"},
+				{Value: "cert-manager/cert-manager-b77:cloudflared-doh", State: "Running", Detail: "container"},
+			},
+		},
+		{
+			name: "init containers are always named",
+			line: "ns pod Init:0/1 app init-db",
+			want: []Candidate{
+				{Value: "ns/pod", State: "Init:0/1"},
+				{Value: "ns/pod:init-db", State: "Init:0/1", Detail: "init container"},
+			},
+		},
+		{
+			name: "columns may be missing entirely",
+			line: "ns pod Running",
+			want: []Candidate{{Value: "ns/pod", State: "Running"}},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, parsePod(tt.line))
+		})
+	}
+}
+
+// TestGuardKeepsTheRealReason: a guard explains what it wanted, but must not
+// hide why the check actually failed.
+func TestGuardKeepsTheRealReason(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("listing runs through sh")
+	}
+	prev := listers[source.CollectorKubectl]
+	listers[source.CollectorKubectl] = lister{sources: []listSource{{
+		build: static(guard(
+			"echo 'sudo: a password is required' >&2; false",
+			"no kubernetes context is configured",
+			"echo unreachable")),
+		parse: parsePod,
+	}}}
+	t.Cleanup(func() { listers[source.CollectorKubectl] = prev })
+
+	_, err := list(t.Context(), Request{Collector: source.CollectorKubectl})
+	require.ErrorContains(t, err, "sudo: a password is required")
+	require.ErrorContains(t, err, "no kubernetes context is configured")
+}
+
 func TestKubectlCommand(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -212,16 +265,11 @@ func TestRequestKeySeparatesPrivilegeAndConfig(t *testing.T) {
 }
 
 func TestParseKubeConfig(t *testing.T) {
-	c, ok := parseKubeConfig("/etc/rancher/k3s/k3s.yaml\tdefault")
-	require.True(t, ok)
-	require.Equal(t, Candidate{Value: "/etc/rancher/k3s/k3s.yaml", Detail: "default"}, c)
-
-	c, ok = parseKubeConfig("/home/me/.kube/config\t")
-	require.True(t, ok)
-	require.Equal(t, Candidate{Value: "/home/me/.kube/config"}, c)
-
-	_, ok = parseKubeConfig("  \t ")
-	require.False(t, ok)
+	require.Equal(t, []Candidate{{Value: "/etc/rancher/k3s/k3s.yaml", Detail: "default"}},
+		parseKubeConfig("/etc/rancher/k3s/k3s.yaml\tdefault"))
+	require.Equal(t, []Candidate{{Value: "/home/me/.kube/config"}},
+		parseKubeConfig("/home/me/.kube/config\t"))
+	require.Empty(t, parseKubeConfig("  \t "))
 }
 
 // TestKubeConfigProbe runs the real probe against a fake home, checking it
@@ -247,14 +295,12 @@ func TestKubeConfigProbe(t *testing.T) {
 }
 
 func TestParseUserUnit(t *testing.T) {
-	c, ok := parseUserUnit("syncthing.service loaded active running Sync")
-	require.True(t, ok)
-	require.Equal(t, Candidate{Value: "user/syncthing", State: "running", Detail: "user"}, c)
+	require.Equal(t, []Candidate{{Value: "user/syncthing", State: "running", Detail: "user"}},
+		parseUserUnit("syncthing.service loaded active running Sync"))
 
 	// A line without a state column still says where the unit lives.
-	c, ok = parseUserUnit("syncthing.service loaded")
-	require.True(t, ok)
-	require.Equal(t, Candidate{Value: "user/syncthing", Detail: "user"}, c)
+	require.Equal(t, []Candidate{{Value: "user/syncthing", Detail: "user"}},
+		parseUserUnit("syncthing.service loaded"))
 }
 
 func values(items []Candidate) []string {

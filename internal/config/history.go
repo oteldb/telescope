@@ -66,7 +66,7 @@ func (h *History) Remember(cfg source.Config) {
 	}
 	h.KubeConfigs = push(h.KubeConfigs, cfg.KubeConfig)
 
-	if target := targetOf(cfg); target != "" {
+	if target := Target(cfg); target != "" {
 		if h.Targets == nil {
 			h.Targets = map[string][]string{}
 		}
@@ -97,34 +97,6 @@ func (h History) Save() error {
 		return errors.Wrap(err, "write history")
 	}
 	return nil
-}
-
-// targetOf reconstructs the value the user typed into the prompt, so it can be
-// offered back verbatim.
-func targetOf(cfg source.Config) string {
-	switch cfg.Collector {
-	case source.CollectorJournal:
-		if cfg.Unit == "" {
-			return ""
-		}
-		if cfg.UserUnit {
-			return source.UserUnitPrefix + cfg.Unit
-		}
-		return cfg.Unit
-	case source.CollectorKubectl:
-		target := cfg.Target
-		if cfg.Namespace != "" {
-			target = cfg.Namespace + "/" + target
-		}
-		if cfg.Container != "" {
-			target += ":" + cfg.Container
-		}
-		return target
-	case source.CollectorDocker:
-		return cfg.Container
-	default:
-		return cfg.Args
-	}
 }
 
 // push moves v to the front, dropping any earlier occurrence and trimming the

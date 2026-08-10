@@ -53,11 +53,11 @@ var kubeConfigLister = lister{sources: []listSource{{
 }}}
 
 // parseKubeConfig reads "path<tab>context".
-func parseKubeConfig(line string) (Candidate, bool) {
+func parseKubeConfig(line string) []Candidate {
 	path, ctx, _ := strings.Cut(line, "\t")
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return Candidate{}, false
+		return nil
 	}
-	return Candidate{Value: path, Detail: strings.TrimSpace(ctx)}, true
+	return []Candidate{{Value: path, Detail: strings.TrimSpace(ctx)}}
 }

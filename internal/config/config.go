@@ -5,6 +5,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-faster/errors"
 	"github.com/go-faster/yaml"
@@ -93,18 +94,24 @@ func loadFrom(path string) (Config, error) {
 	return c, nil
 }
 
-// Validate reports whether the declared source can be turned into a stream.
+// Validate reports whether the declared source is usable. A source that names
+// a cluster but no pod is valid: it pre-fills the prompt rather than opening
+// straight away.
 func (s Source) Validate() error {
 	if s.Name == "" {
 		return errors.New("name is required")
 	}
-	_, err := s.Stream()
+	_, _, err := s.Stream()
 	return err
 }
 
-// Stream converts a declared source into a runnable stream config.
-func (s Source) Stream() (source.Config, error) {
-	cfg := source.Config{
+// Stream converts a declared source into a stream config.
+//
+// Ready reports whether it names everything needed to open. When it does not,
+// the config is still returned so the prompt can start from it, which is how a
+// source that pins a host and a kubeconfig but leaves the pod open behaves.
+func (s Source) Stream() (cfg source.Config, ready bool, err error) {
+	cfg = source.Config{
 		Transport:  source.Transport(or(s.Transport, string(source.TransportLocal))),
 		Host:       s.Host,
 		Collector:  source.Collector(s.Collector),
@@ -129,7 +136,15 @@ func (s Source) Stream() (source.Config, error) {
 	switch cfg.Transport {
 	case source.TransportLocal, source.TransportSSH:
 	default:
-		return source.Config{}, errors.Errorf("unknown transport %q", s.Transport)
+		return source.Config{}, false, errors.Errorf("unknown transport %q", s.Transport)
+	}
+	switch cfg.Collector {
+	case source.CollectorJournal, source.CollectorKubectl, source.CollectorDocker, source.CollectorCommand:
+	default:
+		return source.Config{}, false, errors.Errorf("unknown collector %q", s.Collector)
+	}
+	if cfg.Transport == source.TransportSSH && strings.TrimSpace(cfg.Host) == "" {
+		return source.Config{}, false, errors.New("ssh transport requires a host")
 	}
 	// A journal unit may carry the compact user/ prefix, as in the prompt.
 	if cfg.Collector == source.CollectorJournal && cfg.Unit != "" {
@@ -143,10 +158,36 @@ func (s Source) Stream() (source.Config, error) {
 			cfg.Namespace, cfg.Target, cfg.Container = ns, target, container
 		}
 	}
-	if err := cfg.Validate(); err != nil {
-		return source.Config{}, err
+	// Anything still missing is something the prompt can ask for.
+	return cfg, cfg.Validate() == nil, nil
+}
+
+// Target reconstructs the value that would be typed into the prompt for cfg,
+// so a declared or remembered source can be offered back verbatim.
+func Target(cfg source.Config) string {
+	switch cfg.Collector {
+	case source.CollectorJournal:
+		if cfg.Unit == "" {
+			return ""
+		}
+		if cfg.UserUnit {
+			return source.UserUnitPrefix + cfg.Unit
+		}
+		return cfg.Unit
+	case source.CollectorKubectl:
+		target := cfg.Target
+		if cfg.Namespace != "" {
+			target = cfg.Namespace + "/" + target
+		}
+		if cfg.Container != "" {
+			target += ":" + cfg.Container
+		}
+		return target
+	case source.CollectorDocker:
+		return cfg.Container
+	default:
+		return cfg.Args
 	}
-	return cfg, nil
 }
 
 func or(v, fallback string) string {

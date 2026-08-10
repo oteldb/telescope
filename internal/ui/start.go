@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -9,7 +10,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/go-faster/errors"
 
 	"github.com/oteldb/telescope/internal/complete"
 	"github.com/oteldb/telescope/internal/config"
@@ -108,8 +108,11 @@ type startModel struct {
 
 	// saved are the sources declared in the config file, and history is what
 	// previous runs reached for.
-	saved   []config.Source
-	history config.History
+	saved []config.Source
+	// savedIdx maps each filtered suggestion back to its source, since two
+	// sources may share a name and filtering reorders them.
+	savedIdx []int
+	history  config.History
 
 	// cache holds every completion result seen so far, keyed by request, so
 	// stepping back and forth never waits on a listing twice.
@@ -152,7 +155,7 @@ func newStart() startModel {
 		m.step = stepTransport
 	} else {
 		m.candidates = m.savedCandidates()
-		m.filtered = m.candidates
+		m.refilter()
 	}
 
 	m.syncPlaceholder()
@@ -167,11 +170,13 @@ var (
 	loadHistory = config.LoadHistory
 )
 
-// savedCandidates renders the declared sources as suggestions.
+// savedCandidates renders the declared sources as suggestions. A source that
+// does not name a target says so, since picking it opens the prompt rather
+// than the logs.
 func (m startModel) savedCandidates() []complete.Candidate {
 	out := make([]complete.Candidate, 0, len(m.saved))
 	for _, s := range m.saved {
-		cfg, err := s.Stream()
+		cfg, ready, err := s.Stream()
 		if err != nil {
 			out = append(out, complete.Candidate{Value: s.Name, State: "invalid", Detail: err.Error()})
 			continue
@@ -180,26 +185,67 @@ func (m startModel) savedCandidates() []complete.Candidate {
 		if cfg.Transport == source.TransportSSH {
 			where = "ssh://" + cfg.Host
 		}
-		out = append(out, complete.Candidate{Value: s.Name, Detail: where + " · " + string(cfg.Collector)})
+		detail := where + " · " + string(cfg.Collector)
+		if !ready {
+			detail += " · " + missingLabel(cfg.Collector)
+		}
+		out = append(out, complete.Candidate{Value: s.Name, Detail: detail})
 	}
 	return out
 }
 
-// openSaved starts the stream declared under name.
-func (m startModel) openSaved(name string) (startModel, tea.Cmd) {
-	for _, s := range m.saved {
-		if s.Name != name {
-			continue
-		}
-		cfg, err := s.Stream()
-		if err != nil {
-			m.err = err
-			return m, nil
-		}
+// missingLabel names what an incomplete source will ask for.
+func missingLabel(c source.Collector) string {
+	switch c {
+	case source.CollectorKubectl:
+		return "pick a pod"
+	case source.CollectorDocker:
+		return "pick a container"
+	case source.CollectorCommand:
+		return "type a command"
+	default:
+		return "pick a unit"
+	}
+}
+
+// openSaved acts on the source at index i: it streams one that names a target,
+// and otherwise unwinds into the prompt with everything it did name already
+// filled in, so a source can pin a cluster and leave the pod open.
+func (m startModel) openSaved(i int) (startModel, tea.Cmd) {
+	if i < 0 || i >= len(m.saved) {
+		return m, nil
+	}
+	s := m.saved[i]
+	cfg, ready, err := s.Stream()
+	if err != nil {
+		m.err = err
+		return m, nil
+	}
+	if ready {
 		return m, func() tea.Msg { return connectMsg{cfg: cfg, query: s.Query} }
 	}
-	m.err = errors.Errorf("no saved source named %q", name)
-	return m, nil
+	return m.prefill(cfg, s.Query)
+}
+
+// prefill seeds the manual flow from a config and stops at the step that still
+// needs an answer.
+func (m startModel) prefill(cfg source.Config, query string) (startModel, tea.Cmd) {
+	m.transport = max(slices.Index(transports, cfg.Transport), 0)
+	m.collector = max(slices.Index(collectors, cfg.Collector), 0)
+	m.host.SetValue(cfg.Host)
+	m.kubeconfig.SetValue(cfg.KubeConfig)
+	m.target.SetValue(config.Target(cfg))
+	m.query.SetValue(query)
+	m.elevate = cfg.Elevate
+	m.tail, m.follow = cfg.Tail, cfg.Follow
+
+	m.step = stepCollector
+	m.editKube = false
+	m.err = nil
+	m.syncPlaceholder()
+	m.focus()
+	m.input().CursorEnd()
+	return m, m.fetch()
 }
 
 // request describes what the current step can complete.
@@ -327,10 +373,33 @@ var fetcher = complete.Fetch
 // refilter narrows the suggestions to what has been typed, with the values
 // this machine reached for before floated to the top.
 func (m *startModel) refilter() {
-	m.filtered = complete.Rank(withRecent(m.candidates, m.recent()), m.input().Value())
+	if m.step == stepSaved {
+		m.filtered, m.savedIdx = m.filterSaved(m.input().Value())
+	} else {
+		m.filtered = complete.Rank(withRecent(m.candidates, m.recent()), m.input().Value())
+	}
 	if m.sel >= len(m.filtered) {
 		m.sel = len(m.filtered) - 1
 	}
+}
+
+// filterSaved narrows the declared sources and records where each survivor came
+// from, consuming each origin once so identical names stay distinct.
+func (m startModel) filterSaved(query string) ([]complete.Candidate, []int) {
+	all := m.savedCandidates()
+	ranked := complete.Rank(all, query)
+
+	idx := make([]int, len(ranked))
+	taken := make([]bool, len(all))
+	for i, c := range ranked {
+		for j, a := range all {
+			if !taken[j] && a == c {
+				idx[i], taken[j] = j, true
+				break
+			}
+		}
+	}
+	return ranked, idx
 }
 
 // recent returns the remembered values for the current step, newest first.
@@ -559,13 +628,10 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 			return m, nil
 		case "enter":
 			if m.step == stepSaved {
-				name := strings.TrimSpace(m.saved[0].Name)
-				if m.sel >= 0 && m.sel < len(m.filtered) {
-					name = m.filtered[m.sel].Value
-				} else if len(m.filtered) > 0 {
-					name = m.filtered[0].Value
+				if len(m.filtered) == 0 {
+					return m, nil
 				}
-				return m.openSaved(name)
+				return m.openSaved(m.savedIdx[max(m.sel, 0)])
 			}
 			if m.sel >= 0 {
 				m.accept()

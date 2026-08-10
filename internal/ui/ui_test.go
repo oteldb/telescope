@@ -24,6 +24,10 @@ func TestMain(m *testing.M) {
 	fetcher = func(context.Context, complete.Request) ([]complete.Candidate, error) {
 		return nil, nil
 	}
+	// Never read the developer's own config or history; withSaved supplies
+	// whatever a test needs.
+	loadConfig = func() (config.Config, error) { return config.Config{}, nil }
+	loadHistory = func() config.History { return config.History{} }
 	os.Exit(m.Run())
 }
 
@@ -106,6 +110,63 @@ func TestSavedSourcesOpenFirst(t *testing.T) {
 	m = send(t, m, k("down"), k("down"), k("enter"))
 	require.Equal(t, "navidrome", m.(Model).logs.cfg.Container)
 	require.Contains(t, screen(t, m), "docker logs")
+}
+
+// TestPartialSavedSourceUnwinds covers the shape of a real config: an entry
+// that pins a node, a kubeconfig and sudo, leaving the pod to be picked.
+func TestPartialSavedSourceUnwinds(t *testing.T) {
+	withSaved(t, []config.Source{{
+		Name:       "k3s-ops",
+		Transport:  "ssh",
+		Host:       "node1",
+		Collector:  "kubectl",
+		KubeConfig: "/root/.kube/ops.kubeconfig",
+		Sudo:       true,
+	}}, config.History{})
+
+	m := send(t, New(), size())
+	require.Contains(t, screen(t, m), "pick a pod", "the picker says it is not ready")
+
+	m = send(t, m, k("enter"))
+	start := m.(Model).start
+	require.Equal(t, stepCollector, start.step, "it lands on the step still missing")
+	require.Equal(t, source.TransportSSH, transports[start.transport])
+	require.Equal(t, source.CollectorKubectl, collectors[start.collector])
+	require.Equal(t, "node1", start.host.Value())
+	require.Equal(t, "/root/.kube/ops.kubeconfig", start.kubeconfig.Value())
+	require.True(t, start.elevate)
+	require.Contains(t, screen(t, m), "pod[:container]", "the prompt asks for what is missing")
+
+	// The pods are listed for that cluster, not the default one.
+	require.Equal(t, complete.Request{
+		Field:      complete.FieldTarget,
+		Transport:  source.TransportSSH,
+		Host:       "node1",
+		Collector:  source.CollectorKubectl,
+		Elevate:    true,
+		KubeConfig: "/root/.kube/ops.kubeconfig",
+	}.Key(), start.candKey)
+
+	// Picking a pod completes it.
+	m = send(t, m, candidates(m, "oteldb/oteldb-0"))
+	// down highlights, enter accepts it, then enter advances and enter opens.
+	m = send(t, m, k("down"), k("enter"), k("enter"), k("enter"))
+	require.Equal(t,
+		"sudo -n kubectl --kubeconfig=/root/.kube/ops.kubeconfig "+
+			"logs -n oteldb oteldb-0 --tail 1000 -f",
+		m.(Model).logs.cfg.Command())
+}
+
+// TestSavedSourcesMayShareAName: the picker acts on what is highlighted, not
+// on the first entry that happens to match by name.
+func TestSavedSourcesMayShareAName(t *testing.T) {
+	withSaved(t, []config.Source{
+		{Name: "same", Collector: "docker", Container: "first"},
+		{Name: "same", Collector: "docker", Container: "second"},
+	}, config.History{})
+
+	m := send(t, New(), size(), k("down"), k("down"), k("enter"))
+	require.Equal(t, "second", m.(Model).logs.cfg.Container)
 }
 
 func TestSavedSourceCarriesQuery(t *testing.T) {

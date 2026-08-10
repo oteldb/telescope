@@ -38,8 +38,9 @@ sources:
 	require.NoError(t, err)
 	require.Len(t, cfg.Sources, 2)
 
-	pods, err := cfg.Sources[0].Stream()
+	pods, ready, err := cfg.Sources[0].Stream()
 	require.NoError(t, err)
+	require.True(t, ready, "it names a pod, so it opens straight away")
 	require.Equal(t, source.TransportSSH, pods.Transport)
 	require.True(t, pods.Elevate)
 	require.Equal(t, "oteldb", pods.Namespace, "the compact ns/pod form is split")
@@ -52,8 +53,9 @@ sources:
 			"logs -n oteldb oteldb-0 --tail 1000 -f",
 		pods.Command())
 
-	docker, err := cfg.Sources[1].Stream()
+	docker, ready, err := cfg.Sources[1].Stream()
 	require.NoError(t, err)
+	require.True(t, ready)
 	require.Equal(t, source.TransportLocal, docker.Transport, "transport defaults to local")
 	require.Equal(t, 50, docker.Tail)
 	require.False(t, docker.Follow, "follow: false is not mistaken for unset")
@@ -63,10 +65,33 @@ func TestLoadUserUnitPrefix(t *testing.T) {
 	cfg, err := loadFrom(write(t, "sources:\n  - name: sync\n    collector: journalctl\n    unit: user/syncthing\n"))
 	require.NoError(t, err)
 
-	got, err := cfg.Sources[0].Stream()
+	got, ready, err := cfg.Sources[0].Stream()
 	require.NoError(t, err)
+	require.True(t, ready)
 	require.True(t, got.UserUnit)
 	require.Equal(t, "syncthing", got.Unit)
+}
+
+// TestPartialSourceIsValid: a source may pin a cluster and leave the pod for
+// the prompt, which is how one config entry covers a whole kubeconfig.
+func TestPartialSourceIsValid(t *testing.T) {
+	cfg, err := loadFrom(write(t, `
+sources:
+  - name: k3s-ops
+    transport: ssh
+    host: node1
+    collector: kubectl
+    kubeconfig: /root/.kube/ops.kubeconfig
+    sudo: true
+`))
+	require.NoError(t, err, "an unfinished source is not a broken one")
+
+	got, ready, err := cfg.Sources[0].Stream()
+	require.NoError(t, err)
+	require.False(t, ready, "it still needs a pod")
+	require.Equal(t, "/root/.kube/ops.kubeconfig", got.KubeConfig)
+	require.True(t, got.Elevate)
+	require.Equal(t, "node1", got.Host)
 }
 
 func TestLoadMissingFileIsEmpty(t *testing.T) {
@@ -84,7 +109,6 @@ func TestLoadRejectsBadSources(t *testing.T) {
 		{"no name", "sources:\n  - collector: docker\n    container: app\n", "name is required"},
 		{"unknown collector", "sources:\n  - name: x\n    collector: nope\n", "unknown collector"},
 		{"unknown transport", "sources:\n  - name: x\n    transport: telnet\n    collector: docker\n    container: a\n", "unknown transport"},
-		{"kubectl without target", "sources:\n  - name: x\n    collector: kubectl\n", "pod name"},
 		{"ssh without host", "sources:\n  - name: x\n    transport: ssh\n    collector: journalctl\n", "requires a host"},
 		{"malformed yaml", "sources: [oops\n", "parse"},
 	} {

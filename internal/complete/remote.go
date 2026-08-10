@@ -3,6 +3,7 @@ package complete
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/go-faster/errors"
@@ -22,7 +23,10 @@ const maxCandidates = 5000
 // has a perfectly valid context and only reveals itself by hanging; that case
 // is bounded by [Timeout] instead.
 func guard(check, msg, cmd string) string {
-	return fmt.Sprintf("%s >/dev/null 2>&1 || { echo %q >&2; exit 1; }; %s", check, msg, cmd)
+	// The check's own stderr is kept: when sudo refuses or a host key is
+	// unknown, that reason matters more than the guard's summary, which would
+	// otherwise blame a missing context for someone else's failure.
+	return fmt.Sprintf("%s >/dev/null || { echo %q >&2; exit 1; }; %s", check, msg, cmd)
 }
 
 // listSource is one command producing candidates.
@@ -30,8 +34,9 @@ type listSource struct {
 	// build returns the command to run through the request's transport. It
 	// takes the request because privileges and the kubeconfig change it.
 	build func(r Request) string
-	// parse turns one output line into a candidate.
-	parse func(line string) (Candidate, bool)
+	// parse turns one output line into candidates. A line can yield several:
+	// a pod offers its containers alongside itself.
+	parse func(line string) []Candidate
 }
 
 // static is a listing command that does not depend on the request.
@@ -95,8 +100,9 @@ var listers = map[source.Collector]lister{
 			k := kubectl(r)
 			return guard("command -v kubectl", "kubectl is not installed",
 				guard(k+" config current-context", "no kubernetes context is configured",
-					k+" get pods --all-namespaces --no-headers "+
-						"-o custom-columns=:.metadata.namespace,:.metadata.name,:.status.phase"))
+					k+" get pods --all-namespaces --no-headers -o custom-columns="+
+						":.metadata.namespace,:.metadata.name,:.status.phase,"+
+						":.spec.containers[*].name,:.spec.initContainers[*].name"))
 		},
 		parse: parsePod,
 	}}},
@@ -173,9 +179,7 @@ func run(ctx context.Context, r Request, src listSource, limit int) ([]Candidate
 		if len(out) >= limit {
 			continue
 		}
-		if c, ok := src.parse(string(line.Data)); ok {
-			out = append(out, c)
-		}
+		out = append(out, src.parse(string(line.Data))...)
 	}
 
 	if err := <-s.Done(); err != nil && len(out) == 0 {
@@ -189,52 +193,95 @@ func run(ctx context.Context, r Request, src listSource, limit int) ([]Candidate
 
 // parseUnit reads a line of "systemctl list-units --plain" output:
 // "nginx.service loaded active running A web server".
-func parseUnit(line string) (Candidate, bool) {
+func parseUnit(line string) []Candidate {
 	f := strings.Fields(line)
 	if len(f) == 0 || !strings.HasSuffix(f[0], ".service") {
-		return Candidate{}, false
+		return nil
 	}
 	c := Candidate{Value: strings.TrimSuffix(f[0], ".service")}
 	if len(f) >= 4 {
 		c.State = f[3]
 	}
-	return c, true
+	return []Candidate{c}
 }
 
 // parseUserUnit reads the same output as [parseUnit] for a user manager,
 // tagging the candidate so it reaches journalctl with --user.
-func parseUserUnit(line string) (Candidate, bool) {
-	c, ok := parseUnit(line)
-	if !ok {
-		return c, false
+func parseUserUnit(line string) []Candidate {
+	out := parseUnit(line)
+	for i := range out {
+		out[i].Value = source.UserUnitPrefix + out[i].Value
+		out[i].Detail = "user"
 	}
-	c.Value = source.UserUnitPrefix + c.Value
-	c.Detail = "user"
-	return c, true
+	return out
 }
 
-// parsePod reads "namespace name phase" and emits the compact "ns/pod" target.
-func parsePod(line string) (Candidate, bool) {
+// parsePod reads "namespace name phase containers initContainers" and emits the
+// compact "ns/pod" target plus a "ns/pod:container" for every container worth
+// naming.
+//
+// A pod with one container is offered on its own, since kubectl picks that
+// container by default. A pod with several is offered both ways: bare for the
+// default-container annotation, and per container because otherwise kubectl
+// refuses to choose.
+func parsePod(line string) []Candidate {
 	f := strings.Fields(line)
 	if len(f) < 2 {
-		return Candidate{}, false
+		return nil
 	}
-	c := Candidate{Value: f[0] + "/" + f[1]}
+	pod := f[0] + "/" + f[1]
+
+	state := ""
 	if len(f) >= 3 {
-		c.State = f[2]
+		state = f[2]
 	}
-	return c, true
+	containers := splitColumn(get(f, 3))
+	inits := splitColumn(get(f, 4))
+
+	head := Candidate{Value: pod, State: state}
+	if len(containers) > 1 {
+		head.Detail = strconv.Itoa(len(containers)) + " containers"
+	}
+	out := []Candidate{head}
+
+	if len(containers) > 1 {
+		for _, c := range containers {
+			out = append(out, Candidate{Value: pod + ":" + c, State: state, Detail: "container"})
+		}
+	}
+	// Init containers are always named: they are never the default, and their
+	// logs are what a pod stuck in Init is about.
+	for _, c := range inits {
+		out = append(out, Candidate{Value: pod + ":" + c, State: state, Detail: "init container"})
+	}
+	return out
+}
+
+// splitColumn reads a custom-columns list, which is comma separated and prints
+// <none> when the field is absent.
+func splitColumn(s string) []string {
+	if s == "" || s == "<none>" {
+		return nil
+	}
+	return strings.Split(s, ",")
+}
+
+func get(f []string, i int) string {
+	if i < len(f) {
+		return f[i]
+	}
+	return ""
 }
 
 // parseContainer reads the tab-separated docker ps format.
-func parseContainer(line string) (Candidate, bool) {
+func parseContainer(line string) []Candidate {
 	f := strings.Split(line, "\t")
 	if len(f) == 0 || strings.TrimSpace(f[0]) == "" {
-		return Candidate{}, false
+		return nil
 	}
 	c := Candidate{Value: strings.TrimSpace(f[0])}
 	if len(f) >= 3 {
 		c.State, c.Detail = strings.TrimSpace(f[2]), strings.TrimSpace(f[1])
 	}
-	return c, true
+	return []Candidate{c}
 }
