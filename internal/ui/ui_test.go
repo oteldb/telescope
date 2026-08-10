@@ -466,6 +466,31 @@ func TestRenderDetail(t *testing.T) {
 		renderDetail(complete.Candidate{State: "running", Detail: "app:latest"}))
 }
 
+// TestStatesLineUp: names of wildly different lengths must still put their
+// state in one column. Capping the value column at half the row used to let
+// long names push their state right, leaving a ragged edge.
+func TestStatesLineUp(t *testing.T) {
+	m := send(t, New(), size(), k("enter"))
+	m = send(t, m, candidates(m,
+		"git/forgejo-runner-0",
+		"cert-manager/cert-manager-cainjector-757c6bcb69-x4qgm",
+		"kube-system/cilium-29x2j",
+		"local-path-storage/local-path-provisioner-6d59db9dcc-kmlj7",
+		"oteldb/otelgateway-76f445c9c6-j9vkg",
+	))
+
+	var columns []int
+	for line := range strings.SplitSeq(screen(t, m), "\n") {
+		if i := strings.Index(line, "running"); i >= 0 {
+			columns = append(columns, i)
+		}
+	}
+	require.Len(t, columns, 5, "every suggestion shows its state")
+	for _, c := range columns[1:] {
+		require.Equal(t, columns[0], c, "states are ragged: %v", columns)
+	}
+}
+
 // TestRowsWidenWithTheTerminal checks that a long value keeps its detail
 // column on a wide terminal instead of being truncated at a fixed width.
 func TestRowsWidenWithTheTerminal(t *testing.T) {
@@ -474,8 +499,9 @@ func TestRowsWidenWithTheTerminal(t *testing.T) {
 	rowFor := func(w int) string {
 		m := send(t, New(), tea.WindowSizeMsg{Width: w, Height: 30}, k("enter"))
 		m = send(t, m, candidates(m, long))
+		// The value is truncated on a narrow terminal, so match on its head.
 		for line := range strings.SplitSeq(screen(t, m), "\n") {
-			if strings.Contains(line, long) {
+			if strings.Contains(line, long[:30]) {
 				return strings.TrimRight(line, " ")
 			}
 		}
@@ -484,9 +510,11 @@ func TestRowsWidenWithTheTerminal(t *testing.T) {
 
 	narrow, wide := rowFor(70), rowFor(160)
 	require.NotEmpty(t, narrow)
-	require.NotContains(t, narrow, "running", "the detail does not fit at 70 columns")
-	require.Contains(t, narrow, "…", "it is truncated instead")
-	require.Contains(t, wide, "running", "at 160 columns it fits")
+	// Room for the state is always reserved: the value gives way, not the state.
+	require.Contains(t, narrow, "…", "the value is truncated at 70 columns")
+	require.Contains(t, narrow, "running")
+	require.Contains(t, wide, long, "at 160 columns the whole value fits")
+	require.Contains(t, wide, "running")
 	require.Greater(t, len(wide), len(narrow))
 }
 

@@ -48,8 +48,11 @@ var (
 // maxCompletions is how many suggestions are listed under the prompt, and
 // detailColumn caps how far the detail column is pushed right.
 const (
-	// maxContentWidth keeps the centered screen readable on a wide terminal.
+	// maxContentWidth keeps the centered screen readable on a wide terminal,
+	// and minDetailWidth is the room always left for a state word next to a
+	// value, wide enough for the longest one worth reading.
 	maxContentWidth = 120
+	minDetailWidth  = 20
 )
 
 // connectMsg asks the app to open a stream.
@@ -571,11 +574,15 @@ func (m startModel) promptWidth() int {
 	return min(m.contentWidth()-2, maxPromptWidth)
 }
 
-// detailColumn is where suggestion details line up. Half the row keeps long
-// values from pushing details off the end while still leaving room to read
-// them.
-func (m startModel) detailColumn() int {
-	return m.promptWidth() / 2
+// valueColumn is how wide the value column is: the widest value on screen, so
+// states line up, bounded so a single very long name cannot push every state
+// off the row.
+func (m startModel) valueColumn(window []complete.Candidate) int {
+	widest := 0
+	for _, c := range window {
+		widest = max(widest, lipgloss.Width(c.Value))
+	}
+	return min(widest, max(m.promptWidth()-minDetailWidth, 10))
 }
 
 // resizeInputs keeps the text inputs matched to the prompt bar.
@@ -716,24 +723,25 @@ func (m startModel) completions(limit int) string {
 	}
 	window := m.filtered[start : start+shown]
 
-	// Align the state and detail columns against the widest value actually
-	// shown.
-	valueWidth := 0
-	for _, c := range window {
-		valueWidth = max(valueWidth, lipgloss.Width(c.Value))
-	}
-	valueWidth = min(valueWidth, m.detailColumn())
+	valueWidth := m.valueColumn(window)
 
 	rows := make([]string, 0, shown+1)
 	for i, c := range window {
-		marker, value := "  ", c.Value
-		if start+i == m.sel {
-			marker, value = styleSelected.Render("▎ "), styleSelected.Render(c.Value)
+		// Truncate rather than overflow the column, so every state starts at
+		// the same offset no matter how long a name is.
+		label := c.Value
+		if lipgloss.Width(label) > valueWidth {
+			label = ansi.Truncate(label, valueWidth, "…")
 		}
-		row := marker + value
+		pad := strings.Repeat(" ", max(valueWidth-lipgloss.Width(label), 0))
+
+		marker := "  "
+		if start+i == m.sel {
+			marker, label = styleSelected.Render("▎ "), styleSelected.Render(label)
+		}
+		row := marker + label + pad
 		if c.State != "" || c.Detail != "" {
-			pad := max(valueWidth-lipgloss.Width(c.Value), 0)
-			row += strings.Repeat(" ", pad) + "  " + renderDetail(c)
+			row += "  " + renderDetail(c)
 		}
 		// Truncate rather than let the block wrap: a long image name would
 		// otherwise push the rest of the list down.
