@@ -77,6 +77,12 @@ func (s *Store) Append(l source.Line) *Entry {
 		At:     rec.Time,
 		Record: rec,
 	}
+	// A source that reports the time out of band, such as a log database,
+	// knows better than the arrival time; a time inside the line still wins,
+	// since that is when the application says it happened.
+	if e.At.IsZero() {
+		e.At = l.At
+	}
 	if e.At.IsZero() {
 		e.At = time.Now()
 	}

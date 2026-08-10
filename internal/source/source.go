@@ -26,13 +26,27 @@ const (
 	CollectorDocker       Collector = "docker"
 	CollectorCommand      Collector = "command"
 	CollectorVictoriaLogs Collector = "victorialogs"
+	CollectorLoki         Collector = "loki"
 )
 
 // IsRemoteAPI reports whether the collector reads from a log database over
 // HTTP. Such a collector runs no command, so the transport, sudo and the
 // kubeconfig mean nothing to it.
 func (c Collector) IsRemoteAPI() bool {
-	return c == CollectorVictoriaLogs
+	return c == CollectorVictoriaLogs || c == CollectorLoki
+}
+
+// queryLanguage names what a collector's target is written in, for the messages
+// that ask for one.
+func (c Collector) queryLanguage() string {
+	switch c {
+	case CollectorVictoriaLogs:
+		return "LogsQL"
+	case CollectorLoki:
+		return "LogQL"
+	default:
+		return "query"
+	}
 }
 
 // Config describes a log stream to open.
@@ -80,12 +94,17 @@ func (c Config) Validate() error {
 		return fmt.Errorf("ssh transport requires a host")
 	}
 	switch c.Collector {
-	case CollectorVictoriaLogs:
+	case CollectorVictoriaLogs, CollectorLoki:
 		if strings.TrimSpace(c.Endpoint.URL) == "" {
-			return fmt.Errorf("victorialogs requires an endpoint")
+			return fmt.Errorf("%s requires an endpoint", c.Collector)
 		}
-		if c.vlogsQuery() == "" {
-			return fmt.Errorf("victorialogs requires a LogsQL query")
+		if strings.TrimSpace(c.Target) == "" {
+			return fmt.Errorf("%s requires a %s query", c.Collector, c.Collector.queryLanguage())
+		}
+		if c.Collector == CollectorLoki && !strings.Contains(c.Target, "{") {
+			// Loki has no bare form: every query selects streams by label, and
+			// a query without a selector is a parse error from the server.
+			return fmt.Errorf("LogQL needs a stream selector, as in {app=\"api\"}")
 		}
 	case CollectorKubectl:
 		if strings.TrimSpace(c.Target) == "" {
@@ -113,6 +132,8 @@ func (c Config) Command() string {
 	switch c.Collector {
 	case CollectorVictoriaLogs:
 		return "logsql " + Quote(c.vlogsQuery())
+	case CollectorLoki:
+		return "logql " + Quote(c.lokiQuery())
 	case CollectorJournal:
 		args := []string{"journalctl"}
 		if c.UserUnit {

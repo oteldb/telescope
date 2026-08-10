@@ -22,6 +22,8 @@ const grafanaProxyPath = "/api/datasources/proxy/uid/"
 type Endpoint struct {
 	Name string `yaml:"name"`
 	URL  string `yaml:"url"`
+	// Type is the API the endpoint speaks: "victorialogs" or "loki".
+	Type string `yaml:"type"`
 	// Datasource is a Grafana datasource uid. When set, URL is the Grafana
 	// itself and the datasource proxy path is appended to it.
 	Datasource string `yaml:"datasource,omitempty"`
@@ -70,6 +72,9 @@ func (e Endpoint) Validate() error {
 	if strings.TrimSpace(e.URL) == "" {
 		return errors.New("url is required")
 	}
+	if !source.Collector(e.Type).IsRemoteAPI() {
+		return errors.Errorf("type must be victorialogs or loki, not %q", e.Type)
+	}
 	if e.TokenEnv != "" && e.TokenFile != "" {
 		return errors.New("token_env and token_file are mutually exclusive")
 	}
@@ -79,11 +84,12 @@ func (e Endpoint) Validate() error {
 // Resolve reads the token and returns the endpoint to query.
 func (e Endpoint) Resolve() (source.Endpoint, error) {
 	out := source.Endpoint{
-		Name:     e.Name,
-		URL:      strings.TrimRight(strings.TrimSpace(e.URL), "/"),
-		Tenant:   e.Tenant,
-		Header:   e.Header,
-		Insecure: e.Insecure,
+		Name:      e.Name,
+		Collector: source.Collector(e.Type),
+		URL:       strings.TrimRight(strings.TrimSpace(e.URL), "/"),
+		Tenant:    e.Tenant,
+		Header:    e.Header,
+		Insecure:  e.Insecure,
 	}
 	if ds := strings.TrimSpace(e.Datasource); ds != "" {
 		out.URL += grafanaProxyPath + ds

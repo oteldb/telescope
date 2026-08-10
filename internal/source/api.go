@@ -31,6 +31,8 @@ func startAPI(ctx context.Context, cfg Config) (*Stream, error) {
 		switch cfg.Collector {
 		case CollectorVictoriaLogs:
 			err = cfg.streamVictoriaLogs(ctx, out)
+		case CollectorLoki:
+			err = cfg.streamLoki(ctx, out)
 		}
 		close(s.lines)
 		if ctx.Err() != nil {

@@ -3,8 +3,8 @@
 A terminal log viewer for the [oteldb](https://github.com/oteldb/oteldb) project.
 
 It streams logs from `journalctl`, `kubectl`, `docker` or any command, locally
-or through `ssh`, and from a VictoriaLogs database, directly or through a
-Grafana datasource. It pretty prints them with [go-faster/pl](https://github.com/go-faster/pl).
+or through `ssh`, and from a VictoriaLogs or Loki database, directly or through
+a Grafana datasource. It pretty prints them with [go-faster/pl](https://github.com/go-faster/pl).
 Structured lines are rendered by level and field; anything unstructured passes
 through with timestamps, levels, numbers and paths highlighted.
 
@@ -29,9 +29,10 @@ source, so every collector works locally and on a remote node alike.
 | `docker` | a container |
 | `command` | anything writing to stdout |
 | `victorialogs` | a [VictoriaLogs](https://docs.victoriametrics.com/victorialogs/) query, over HTTP |
+| `loki` | a [Loki](https://grafana.com/oss/loki/) query, over HTTP |
 
-`victorialogs` reads from a log database rather than a host, so it runs no
-command and the transport, `sudo` and the kubeconfig mean nothing to it. See
+The last two read from a log database rather than a host, so they run no command
+and the transport, `sudo` and the kubeconfig mean nothing to them. See
 [Endpoints](#endpoints).
 
 Targets use a compact syntax, the same in the prompt and in the config file:
@@ -68,6 +69,7 @@ one of its pods.
 | `ctrl+s` | toggle `sudo -n` |
 | `ctrl+k` | edit the kubeconfig path (kubectl) |
 | `ctrl+x` | edit the context (kubectl) |
+| `ctrl+e` | edit the endpoint URL (victorialogs, loki) |
 | `ctrl+f` | toggle follow |
 | `ctrl+t` | cycle tail: 100, 1000, 10000, all |
 | `ctrl+c` | quit |
@@ -194,14 +196,14 @@ marks those with what they will ask for.
 | field | default | |
 | --- | --- | --- |
 | `name` | required | shown in the picker |
-| `collector` | required | `journalctl`, `kubectl`, `docker`, `command`, `victorialogs` |
+| `collector` | required | `journalctl`, `kubectl`, `docker`, `command`, `victorialogs`, `loki`; taken from the endpoint when one is named |
 | `endpoint` | | a declared endpoint, required by `victorialogs` |
 | `transport` | `local` | `local` or `ssh` |
 | `host` | | ssh destination, required when `transport: ssh` |
 | `unit` | | systemd unit, `user/` prefix accepted |
 | `user_unit` | `false` | read the user journal |
 | `namespace` | | Kubernetes namespace |
-| `target` | | pod name or label selector, `ns/pod:container` accepted; the query for `victorialogs` |
+| `target` | | pod name or label selector, `ns/pod:container` accepted; the query for a database |
 | `container` | | container, for kubectl or docker |
 | `kubeconfig` | | passed as `--kubeconfig` |
 | `context` | | passed as `--context` |
@@ -224,6 +226,7 @@ endpoints:
   # A Grafana datasource: the URL is the Grafana, and telescope resolves the
   # datasource proxy path against it.
   - name: prod
+    type: victorialogs
     url: https://grafana.example.com
     datasource: adm5h5433d8hsa
     token_env: GRAFANA_TOKEN
@@ -231,11 +234,11 @@ endpoints:
 
   # The database itself, with no Grafana in front of it.
   - name: local
-    url: http://127.0.0.1:9428
+    type: loki
+    url: http://127.0.0.1:3100
 
 sources:
   - name: prod api
-    collector: victorialogs
     endpoint: prod
     target: 'kubernetes.namespace:oteldb level:error'
 ```
@@ -243,11 +246,12 @@ sources:
 | field | | |
 | --- | --- | --- |
 | `name` | required | referred to by a source's `endpoint` |
+| `type` | required | `victorialogs` or `loki` |
 | `url` | required | the base the API paths hang off |
 | `datasource` | | Grafana datasource uid, appended to `url` as a proxy path |
 | `token_env` | | environment variable holding a bearer token |
 | `token_file` | | file holding one, `~` accepted |
-| `tenant` | | `AccountID:ProjectID`, for a multi-tenant database |
+| `tenant` | | `AccountID:ProjectID` for VictoriaLogs, the org id for Loki |
 | `headers` | | anything else the endpoint or its proxy needs |
 | `insecure` | `false` | skip TLS verification |
 
@@ -255,8 +259,12 @@ Every declared endpoint is offered on the start screen next to the collectors,
 so a query can be written without declaring a source for it. Queries are
 remembered per endpoint, and offered back there.
 
+A source naming an endpoint does not need a `collector`: the endpoint already
+says which API it speaks, and saying otherwise is an error rather than a silent
+mistranslation.
+
 An endpoint needs no declaration at all when it needs no credentials: choosing
-`victorialogs` asks for a URL, `ctrl+e` returns to it, and the URLs typed there
+`victorialogs` or `loki` asks for a URL, `ctrl+e` returns to it, and the URLs typed there
 are remembered like ssh hosts. A missing scheme is filled in — `https://`, or
 `http://` for a loopback address. Anything needing a token belongs in the config
 file, since the prompt writes what it is given to the history in plain text.
@@ -268,18 +276,33 @@ read marks its own sources invalid in the picker and leaves the rest working.
 The proxy comes from the environment, so an endpoint reachable only through
 `HTTPS_PROXY` or `ALL_PROXY=socks5h://…` needs nothing further.
 
-For `victorialogs` the target is the [LogsQL][logsql] query, sent as written —
-`field:value` there belongs to LogsQL, not to telescope's own filter. `tail`
-becomes the query's limit, and `follow` live-tails it, picking up where the
-history ended. VictoriaLogs holds new entries back briefly before serving them,
-so a followed line appears a few seconds after it was written.
+The target is the query, in that database's own language, **sent as written**.
+`field:value` there belongs to [LogsQL][logsql], not to telescope's own filter,
+and no compact syntax is compiled into [LogQL][logql]: label names are whatever
+the shipper wrote them as — `k8s_namespace_name` as readily as `namespace` — so
+translating them would be a guess. `tail` becomes the query's limit and `follow`
+keeps it open.
 
-The `_time` and `_msg` of each entry are rendered as the line's timestamp and
-message rather than as fields named after VictoriaLogs' envelope; everything
-else, `_stream` included, is left as it came. A query can drop what it does not
-want with `| drop _stream_id`.
+| | VictoriaLogs | Loki |
+| --- | --- | --- |
+| history | `/select/logsql/query` | `/loki/api/v1/query_range`, over the last 6h |
+| following | `/select/logsql/tail`, a live stream | the same query repeated, every 2s |
+| tenant header | `AccountID` / `ProjectID` | `X-Scope-OrgID` |
+
+VictoriaLogs holds new entries back briefly before serving them, so a followed
+line appears a few seconds after it was written. Loki's own tail endpoint is a
+websocket, which a Grafana datasource proxy will not upgrade, so following it is
+a query repeated against a moving start instead.
+
+The `_time` and `_msg` of a VictoriaLogs entry are rendered as the line's
+timestamp and message rather than as fields named after its envelope; everything
+else, `_stream` included, is left as it came, and a query can drop what it does
+not want with `| drop _stream_id`. A Loki line is the application's own output
+with nothing added, and its timestamp comes from the response rather than from
+the line.
 
 [logsql]: https://docs.victoriametrics.com/victorialogs/logsql/
+[logql]: https://grafana.com/docs/loki/latest/query/
 
 ## History
 

@@ -19,6 +19,10 @@ const maxLineSize = 8 * 1024 * 1024
 type Line struct {
 	Data   []byte
 	Stderr bool
+	// At is when the line was written, for a source that reports it out of
+	// band. Zero when the line is all there is, which is the usual case: a
+	// timestamp inside the line is the parser's business, not the source's.
+	At time.Time
 }
 
 // Stream is a running collector command.

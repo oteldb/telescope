@@ -15,6 +15,7 @@ func TestLoadEndpoints(t *testing.T) {
 	path := write(t, `
 endpoints:
   - name: prod
+    type: victorialogs
     url: https://grafana.example.com
     datasource: abc123
     token_env: TELESCOPE_TEST_TOKEN
@@ -52,6 +53,7 @@ func TestLoadEndpointTokenFile(t *testing.T) {
 	path := write(t, `
 endpoints:
   - name: prod
+    type: victorialogs
     url: https://logs.example.com
     token_file: `+tokenPath+`
 sources:
@@ -73,6 +75,7 @@ func TestLoadEndpointMissingToken(t *testing.T) {
 	path := write(t, `
 endpoints:
   - name: prod
+    type: victorialogs
     url: https://logs.example.com
     token_env: TELESCOPE_TEST_UNSET_TOKEN
 sources:
@@ -119,19 +122,40 @@ sources:
 		{"declared twice", `
 endpoints:
   - name: prod
+    type: loki
     url: https://logs.example.com
   - name: prod
+    type: loki
     url: https://other.example.com
 sources: []
 `, "declared twice"},
 		{"no url", `
 endpoints:
   - name: prod
+    type: loki
 sources: []
 `, "url is required"},
+		{"no type", `
+endpoints:
+  - name: prod
+    url: https://logs.example.com
+sources: []
+`, "type must be victorialogs or loki"},
+		{"the endpoint speaks something else", `
+endpoints:
+  - name: prod
+    type: loki
+    url: https://logs.example.com
+sources:
+  - name: prod
+    collector: victorialogs
+    endpoint: prod
+    target: 'error'
+`, "speaks loki, not victorialogs"},
 		{"two tokens", `
 endpoints:
   - name: prod
+    type: victorialogs
     url: https://logs.example.com
     token_env: A
     token_file: /b
@@ -182,4 +206,25 @@ func TestRememberTypedEndpoint(t *testing.T) {
 	h.Remember(typed)
 	h.Remember(declared)
 	require.Equal(t, []string{"https://logs.example.com"}, h.Endpoints)
+}
+
+// TestSourceTakesCollectorFromEndpoint: an endpoint already says which API it
+// speaks, so a source naming one need not repeat it.
+func TestSourceTakesCollectorFromEndpoint(t *testing.T) {
+	cfg, err := loadFrom(write(t, `
+endpoints:
+  - name: prod
+    type: loki
+    url: https://logs.example.com
+sources:
+  - name: prod api
+    endpoint: prod
+    target: '{app="api"}'
+`))
+	require.NoError(t, err)
+	stream, ready, err := cfg.Sources[0].Stream()
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Equal(t, source.CollectorLoki, stream.Collector)
+	require.Equal(t, `{app="api"}`, stream.Target)
 }

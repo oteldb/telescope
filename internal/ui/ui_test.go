@@ -1170,6 +1170,20 @@ func TestTinyWindowDoesNotPanic(t *testing.T) {
 	})
 }
 
+// tabs advances the chip selection n times, so a test names the chip it wants
+// rather than a count that shifts whenever a collector is added.
+func tabs(n int) []tea.Msg {
+	out := make([]tea.Msg, n)
+	for i := range out {
+		out[i] = k("tab")
+	}
+	return out
+}
+
+// firstDeclared is how many tabs reach the first endpoint from the config file:
+// past the command collectors and the undeclared database chips.
+func firstDeclared() int { return len(collectors) + len(databases) }
+
 // withEndpoints makes New() see declared endpoints, as a config file with an
 // endpoints section would.
 func withEndpoints(t *testing.T, endpoints []config.Endpoint, sources []config.Source) {
@@ -1186,8 +1200,8 @@ func withEndpoints(t *testing.T, endpoints []config.Endpoint, sources []config.S
 // since choosing one is choosing where the logs are.
 func TestEndpointIsACollectorChip(t *testing.T) {
 	withEndpoints(t, []config.Endpoint{
-		{Name: "prod", URL: "https://logs.example.com"},
-		{Name: "staging", URL: "https://staging.example.com"},
+		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com"},
+		{Name: "staging", Type: "victorialogs", URL: "https://staging.example.com"},
 	}, nil)
 
 	// transport, then the collector chips.
@@ -1196,9 +1210,9 @@ func TestEndpointIsACollectorChip(t *testing.T) {
 	require.Contains(t, out, "prod")
 	require.Contains(t, out, "staging")
 
-	// The command collectors come first, then the undeclared endpoint, then the
-	// declared ones in order.
-	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"), k("tab"), k("tab"))
+	// The command collectors come first, then the undeclared databases, then
+	// the declared endpoints in order.
+	m = send(t, m, tabs(firstDeclared()+1)...)
 	start := m.(Model).start
 	require.Equal(t, source.CollectorVictoriaLogs, start.choice().collector)
 	require.Equal(t, "staging", start.choice().endpoint.Name)
@@ -1211,10 +1225,12 @@ func TestEndpointIsACollectorChip(t *testing.T) {
 
 // TestEndpointQueryOpens: what is typed is the query, terms and all.
 func TestEndpointQueryOpens(t *testing.T) {
-	withEndpoints(t, []config.Endpoint{{Name: "prod", URL: "https://logs.example.com"}}, nil)
+	withEndpoints(t, []config.Endpoint{
+		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com"},
+	}, nil)
 
 	m := send(t, New(), size(), k("enter"))
-	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"), k("tab"))
+	m = send(t, m, tabs(firstDeclared())...)
 	for _, r := range "level:error app:api" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
@@ -1230,20 +1246,22 @@ func TestEndpointQueryOpens(t *testing.T) {
 // to is not offered as a choice that fails later.
 func TestEndpointTokenFailureIsReported(t *testing.T) {
 	withEndpoints(t, []config.Endpoint{
-		{Name: "prod", URL: "https://logs.example.com", TokenEnv: "TELESCOPE_TEST_UNSET"},
+		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com", TokenEnv: "TELESCOPE_TEST_UNSET"},
 	}, nil)
 
 	m := send(t, New(), size())
 	out := screen(t, m)
 	require.Contains(t, out, "TELESCOPE_TEST_UNSET")
-	require.Len(t, m.(Model).start.options, len(collectors)+1,
-		"only the undeclared endpoint is offered")
+	require.Len(t, m.(Model).start.options, firstDeclared(),
+		"only the undeclared databases are offered")
 }
 
 // TestEndpointOffersRecentQueries: a query is not listable, so history is the
 // only suggestion there is — and the step must still show it.
 func TestEndpointOffersRecentQueries(t *testing.T) {
-	withEndpoints(t, []config.Endpoint{{Name: "prod", URL: "https://logs.example.com"}}, nil)
+	withEndpoints(t, []config.Endpoint{
+		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com"},
+	}, nil)
 	prev := loadHistory
 	loadHistory = func() config.History {
 		return config.History{Targets: map[string][]string{
@@ -1254,7 +1272,7 @@ func TestEndpointOffersRecentQueries(t *testing.T) {
 	t.Cleanup(func() { loadHistory = prev })
 
 	m := send(t, New(), size(), k("enter"))
-	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"), k("tab"))
+	m = send(t, m, tabs(firstDeclared())...)
 	out := screen(t, m)
 	require.Contains(t, out, "level:error")
 	require.NotContains(t, out, "app:elsewhere", "a query belongs to the endpoint it was written for")
@@ -1264,8 +1282,8 @@ func TestEndpointOffersRecentQueries(t *testing.T) {
 // URL, the way an ssh host is, and no secret is involved.
 func TestTypedEndpoint(t *testing.T) {
 	m := send(t, New(), size(), k("enter"))
-	// past the four command collectors, onto the undeclared endpoint.
-	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"))
+	// past the command collectors, onto the first undeclared database.
+	m = send(t, m, tabs(len(collectors))...)
 	require.Equal(t, detailEndpoint, m.(Model).start.detail,
 		"an endpoint with nowhere to connect asks for that first")
 	require.Contains(t, screen(t, m), "endpoint")
@@ -1310,6 +1328,6 @@ func TestTypedEndpointIsRemembered(t *testing.T) {
 	t.Cleanup(func() { loadHistory = prev })
 
 	m := send(t, New(), size(), k("enter"))
-	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"))
+	m = send(t, m, tabs(len(collectors))...)
 	require.Contains(t, screen(t, m), "https://logs.example.com")
 }

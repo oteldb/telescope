@@ -26,6 +26,10 @@ type Endpoint struct {
 	// Name is what the user called the endpoint, used in titles.
 	Name string
 	URL  string
+	// Collector is the API the endpoint speaks. A Loki and a VictoriaLogs
+	// endpoint are not interchangeable: the paths, the query language and the
+	// tenancy header all differ.
+	Collector Collector
 	// Token is sent as a bearer token, which is what a Grafana service account
 	// issues.
 	Token string

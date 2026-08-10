@@ -187,9 +187,14 @@ func (s Source) Stream() (cfg source.Config, ready bool, err error) {
 	default:
 		return source.Config{}, false, errors.Errorf("unknown transport %q", s.Transport)
 	}
+	// An endpoint says which API it speaks, so a source naming one does not
+	// have to repeat it.
+	if s.Collector == "" && s.Endpoint != "" {
+		cfg.Collector = s.Resolved.Collector
+	}
 	switch cfg.Collector {
 	case source.CollectorJournal, source.CollectorKubectl, source.CollectorDocker,
-		source.CollectorCommand, source.CollectorVictoriaLogs:
+		source.CollectorCommand, source.CollectorVictoriaLogs, source.CollectorLoki:
 	default:
 		return source.Config{}, false, errors.Errorf("unknown collector %q", s.Collector)
 	}
@@ -199,6 +204,10 @@ func (s Source) Stream() (cfg source.Config, ready bool, err error) {
 		}
 		if s.resolveErr != nil {
 			return cfg, false, s.resolveErr
+		}
+		if k := s.Resolved.Collector; k != "" && k != cfg.Collector {
+			return source.Config{}, false, errors.Errorf(
+				"endpoint %q speaks %s, not %s", s.Endpoint, k, cfg.Collector)
 		}
 	}
 	if cfg.Transport == source.TransportSSH && strings.TrimSpace(cfg.Host) == "" && !cfg.Collector.IsRemoteAPI() {
@@ -243,7 +252,7 @@ func Target(cfg source.Config) string {
 		return target
 	case source.CollectorDocker:
 		return cfg.Container
-	case source.CollectorVictoriaLogs:
+	case source.CollectorVictoriaLogs, source.CollectorLoki:
 		return cfg.Target
 	default:
 		return cfg.Args

@@ -69,6 +69,12 @@ var (
 		source.CollectorDocker,
 		source.CollectorCommand,
 	}
+	// databases read over HTTP rather than by running a command. Each is
+	// offered with nothing declared, for an endpoint typed at the prompt.
+	databases = []source.Collector{
+		source.CollectorVictoriaLogs,
+		source.CollectorLoki,
+	}
 )
 
 // choice is one chip of the collector step. A collector that reads from a log
@@ -96,13 +102,15 @@ func (c choice) label() string {
 // A collector that reads from a database is offered even with nothing declared:
 // its endpoint is then typed at the prompt, the way an ssh host is.
 func optionsFor(endpoints []source.Endpoint) []choice {
-	out := make([]choice, 0, len(collectors)+len(endpoints)+1)
+	out := make([]choice, 0, len(collectors)+len(databases)+len(endpoints))
 	for _, c := range collectors {
 		out = append(out, choice{collector: c})
 	}
-	out = append(out, choice{collector: source.CollectorVictoriaLogs})
+	for _, c := range databases {
+		out = append(out, choice{collector: c})
+	}
 	for _, e := range endpoints {
-		out = append(out, choice{collector: source.CollectorVictoriaLogs, endpoint: e})
+		out = append(out, choice{collector: e.Collector, endpoint: e})
 	}
 	return out
 }
@@ -321,7 +329,7 @@ func missingLabel(c source.Collector) string {
 		return "pick a container"
 	case source.CollectorCommand:
 		return "type a command"
-	case source.CollectorVictoriaLogs:
+	case source.CollectorVictoriaLogs, source.CollectorLoki:
 		return "type a query"
 	default:
 		return "pick a unit"
@@ -672,6 +680,8 @@ func (m *startModel) syncPlaceholder() {
 		m.target.Placeholder = "any command writing logs to stdout"
 	case source.CollectorVictoriaLogs:
 		m.target.Placeholder = "LogsQL, e.g. level:error _time:5m"
+	case source.CollectorLoki:
+		m.target.Placeholder = `LogQL, e.g. {app="api"} |= "error"`
 	}
 }
 
@@ -700,7 +710,7 @@ func (m startModel) config() source.Config {
 		cfg.Container = target
 	case source.CollectorCommand:
 		cfg.Args = target
-	case source.CollectorVictoriaLogs:
+	case source.CollectorVictoriaLogs, source.CollectorLoki:
 		cfg.Target = target
 	}
 	return cfg
@@ -1049,8 +1059,12 @@ func (m startModel) breadcrumb() string {
 		switch {
 		case m.choice().collector.IsRemoteAPI():
 			// The transport is nothing to a database read over HTTP; where it
-			// is reached is the endpoint itself.
-			parts = append(parts, m.endpoint().Label())
+			// is reached is the endpoint itself, once there is one.
+			where := m.endpoint().Label()
+			if where == "" {
+				where = string(m.choice().collector)
+			}
+			parts = append(parts, where)
 		case transports[m.transport] == source.TransportSSH:
 			parts = append(parts, "ssh://"+strings.TrimSpace(m.host.Value()))
 		default:
@@ -1363,6 +1377,12 @@ func (m startModel) hints() string {
 				"kubernetes.namespace:oteldb        a field of the log itself",
 				`_msg:"connection refused"`,
 				"level:error | drop _stream_id      LogsQL, sent as written",
+			}
+		case source.CollectorLoki:
+			lines = []string{
+				`{app="api"}                        a stream selector is required`,
+				`{namespace="oteldb"} |= "error"`,
+				`{app="api"} | json | duration > 1s LogQL, sent as written`,
 			}
 		}
 	case stepQuery:
