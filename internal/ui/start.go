@@ -44,8 +44,10 @@ var (
 // maxCompletions is how many suggestions are listed under the prompt, and
 // detailColumn caps how far the detail column is pushed right.
 const (
-	maxCompletions = 6
-	detailColumn   = 28
+	// detailColumn caps how far the detail column is pushed right, and
+	// maxContentWidth keeps the centered screen readable on a wide terminal.
+	detailColumn    = 28
+	maxContentWidth = 120
 )
 
 // connectMsg asks the app to open a stream.
@@ -412,16 +414,22 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 			}
 			return m.advance()
 		case "esc":
-			if m.editKube {
+			// Unwind one layer at a time, and quit once there is nothing left
+			// to back out of.
+			switch {
+			case m.sel >= 0:
+				m.sel = -1
+			case m.editKube:
 				m.editKube = false
 				m.focus()
 				return m, m.fetch()
-			}
-			if m.step > stepTransport {
+			case m.step > stepTransport:
 				m.step--
 				m.err = nil
 				m.focus()
 				return m, m.fetch()
+			default:
+				return m, func() tea.Msg { return quitMsg{} }
 			}
 			return m, nil
 		}
@@ -527,14 +535,29 @@ func (m startModel) View() string {
 		b.WriteString(styleHint.Render(m.help()))
 	}
 	b.WriteString("\n\n")
-	if c := m.completions(); c != "" {
-		b.WriteString(c)
-	} else {
-		b.WriteString(m.hints())
+
+	// The suggestion list takes whatever height is left, so a tall terminal
+	// shows more of it instead of a fixed handful.
+	head := b.String()
+	body := m.completions(max(m.h-lipgloss.Height(head)-1, 3))
+	if body == "" {
+		body = m.hints()
 	}
 
-	content := lipgloss.NewStyle().Align(lipgloss.Center).Render(b.String())
+	// A fixed content width is what keeps the screen still: centering on the
+	// widest line would shift every row as the command preview grows with each
+	// keystroke.
+	content := lipgloss.NewStyle().
+		Width(m.contentWidth()).
+		Align(lipgloss.Center).
+		Render(head + body)
 	return lipgloss.Place(m.w, m.h, lipgloss.Center, lipgloss.Center, content)
+}
+
+// contentWidth is the stable width every line of the start screen is centered
+// within.
+func (m startModel) contentWidth() int {
+	return min(max(m.w-2*screenPad, promptWidth), maxContentWidth)
 }
 
 func (m startModel) breadcrumb() string {
@@ -592,7 +615,7 @@ func (m startModel) help() string {
 	if m.step == stepQuery {
 		return strings.Join([]string{
 			key("enter", "open logs"),
-			key("esc", "back"),
+			key("esc", m.escLabel()),
 			key("ctrl+f", "follow "+onOff(m.follow)),
 			key("ctrl+t", "tail "+tailLabel(m.tail)),
 		}, styleHint.Render(" · "))
@@ -608,7 +631,7 @@ func (m startModel) help() string {
 		}
 		return strings.Join(parts, styleHint.Render(" · "))
 	}
-	parts = append(parts, key("enter", "next"), key("esc", "back"))
+	parts = append(parts, key("enter", "next"), key("esc", m.escLabel()))
 	if m.step >= stepCollector {
 		parts = append(parts, key("ctrl+s", "sudo "+onOff(m.elevate)))
 	}
@@ -621,6 +644,15 @@ func (m startModel) help() string {
 	return strings.Join(parts, styleHint.Render(" · "))
 }
 
+// escLabel names what esc will do from here, so quitting is discoverable on
+// the first step rather than only through ctrl+c.
+func (m startModel) escLabel() string {
+	if m.step == stepTransport {
+		return "quit"
+	}
+	return "back"
+}
+
 func tailLabel(n int) string {
 	if n == 0 {
 		return "all"
@@ -631,7 +663,7 @@ func tailLabel(n int) string {
 // completions renders the suggestion list, or the state that replaces it while
 // there is nothing to suggest yet. An empty result means the caller should fall
 // back to the static hints.
-func (m startModel) completions() string {
+func (m startModel) completions(limit int) string {
 	block := lipgloss.NewStyle().Width(promptWidth).Align(lipgloss.Left)
 	switch {
 	case m.step == stepQuery:
@@ -641,29 +673,33 @@ func (m startModel) completions() string {
 	case m.candErr != nil:
 		msg, _, _ := strings.Cut(m.candErr.Error(), "\n")
 		return block.Render(styleErr.Render("  " + msg))
-	case len(m.filtered) == 0:
+	case len(m.filtered) == 0 || limit <= 0:
 		return ""
 	}
 
+	// Reserve a row for the overflow count when the list does not fit.
+	shown := len(m.filtered)
+	if shown > limit {
+		shown = max(limit-1, 1)
+	}
+	// Scroll the window so the highlighted suggestion is always rendered.
+	start := 0
+	if m.sel >= shown {
+		start = m.sel - shown + 1
+	}
+	window := m.filtered[start : start+shown]
+
 	// Align the detail column against the widest value actually shown.
 	valueWidth := 0
-	for i, c := range m.filtered {
-		if i == maxCompletions {
-			break
-		}
+	for _, c := range window {
 		valueWidth = max(valueWidth, lipgloss.Width(c.Value))
 	}
 	valueWidth = min(valueWidth, detailColumn)
 
-	rows := make([]string, 0, maxCompletions+1)
-	for i, c := range m.filtered {
-		if i == maxCompletions {
-			rows = append(rows, block.Render(styleHint.Render(
-				"  … "+strconv.Itoa(len(m.filtered)-maxCompletions)+" more")))
-			break
-		}
+	rows := make([]string, 0, shown+1)
+	for i, c := range window {
 		marker, value := "  ", c.Value
-		if i == m.sel {
+		if start+i == m.sel {
 			marker, value = styleSelected.Render("▎ "), styleSelected.Render(c.Value)
 		}
 		row := marker + value
@@ -674,6 +710,9 @@ func (m startModel) completions() string {
 		// Truncate rather than let the block wrap: a long image name would
 		// otherwise push the rest of the list down.
 		rows = append(rows, block.Render(ansi.Truncate(row, promptWidth, styleDim.Render("…"))))
+	}
+	if rest := len(m.filtered) - start - shown; rest > 0 {
+		rows = append(rows, block.Render(styleHint.Render("  … "+strconv.Itoa(rest)+" more")))
 	}
 	return strings.Join(rows, "\n")
 }

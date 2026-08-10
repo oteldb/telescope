@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -390,6 +391,110 @@ func TestKubeConfigChangeRefetchesPods(t *testing.T) {
 		KubeConfig: "/tmp/kube.yaml",
 	}.Key()
 	require.Positive(t, (*calls)[withConfig], "pods are listed again for the new config")
+}
+
+// leftEdge is the column the prompt box starts at, per rendered line.
+func leftEdge(out string) []int {
+	var cols []int
+	for line := range strings.SplitSeq(out, "\n") {
+		if i := strings.IndexAny(line, "╭│╰"); i >= 0 {
+			cols = append(cols, i)
+		}
+	}
+	return cols
+}
+
+// TestPromptDoesNotShiftWhileTyping guards the jitter caused by centering on
+// the widest line: the command preview grows with every keystroke, which used
+// to move the prompt box under the cursor.
+func TestPromptDoesNotShiftWhileTyping(t *testing.T) {
+	m := send(t, New(), size(), k("enter"), k("tab")) // kubectl
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlK})
+
+	want := leftEdge(screen(t, m))
+	require.NotEmpty(t, want, "the prompt box is rendered")
+
+	for _, r := range "/root/.kube/ops.kubeconfig" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		require.Equal(t, want, leftEdge(screen(t, m)),
+			"prompt moved after typing %q", string(r))
+	}
+}
+
+func TestCompletionListGrowsWithTheWindow(t *testing.T) {
+	values := make([]string, 40)
+	for i := range values {
+		values[i] = "ns/pod-" + strconv.Itoa(i)
+	}
+
+	count := func(h int, m tea.Model) int {
+		m = send(t, m, tea.WindowSizeMsg{Width: 100, Height: h})
+		n := 0
+		for line := range strings.SplitSeq(screen(t, m), "\n") {
+			if strings.Contains(line, "ns/pod-") {
+				n++
+			}
+		}
+		return n
+	}
+
+	m := send(t, New(), size(), k("enter"))
+	m = send(t, m, candidates(m, values...))
+
+	short, tall := count(24, m), count(60, m)
+	require.Positive(t, short)
+	require.Greater(t, tall, short, "a taller window shows more suggestions")
+	require.LessOrEqual(t, tall, len(values))
+}
+
+// TestCompletionWindowFollowsSelection: moving past the visible rows used to
+// highlight a suggestion that was never drawn.
+func TestCompletionWindowFollowsSelection(t *testing.T) {
+	values := make([]string, 40)
+	for i := range values {
+		values[i] = "ns/pod-" + strconv.Itoa(i)
+	}
+	m := send(t, New(), size(), tea.WindowSizeMsg{Width: 100, Height: 24}, k("enter"))
+	m = send(t, m, candidates(m, values...))
+
+	for range 20 {
+		m = send(t, m, k("down"))
+	}
+	sel := m.(Model).start.sel
+	require.Equal(t, 19, sel)
+	require.Contains(t, screen(t, m), values[sel], "the highlighted row is on screen")
+}
+
+// TestEscUnwindsThenQuits: esc peels off one layer at a time and only quits
+// once there is nothing left to back out of.
+func TestEscQuitsFromTheFirstStep(t *testing.T) {
+	quits := func(m tea.Model) bool {
+		_, cmd := m.Update(k("esc"))
+		if cmd == nil {
+			return false
+		}
+		_, ok := cmd().(quitMsg)
+		return ok
+	}
+
+	m := send(t, New(), size())
+	require.Contains(t, screen(t, m), "esc quit", "quitting is discoverable")
+	require.True(t, quits(m), "esc on the first step quits")
+
+	// Deeper in, esc walks back instead.
+	m = send(t, m, k("enter"))
+	require.False(t, quits(m))
+	require.Contains(t, screen(t, m), "esc back")
+
+	// A highlighted suggestion is dropped first.
+	m = send(t, m, candidates(m, "kubelet"))
+	m = send(t, m, k("down"))
+	require.Equal(t, 0, m.(Model).start.sel)
+	require.False(t, quits(m))
+
+	m = send(t, m, k("esc"))
+	require.Equal(t, -1, m.(Model).start.sel, "esc cleared the highlight")
+	require.Equal(t, stepCollector, m.(Model).start.step, "and did not also step back")
 }
 
 func TestStartRejectsEmptySSHHost(t *testing.T) {
