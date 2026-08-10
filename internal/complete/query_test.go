@@ -106,3 +106,33 @@ func TestQueryTextIsWhatGetsSubmitted(t *testing.T) {
 	require.Equal(t, "oteldb/api", QueryText("  oteldb/api  "))
 	require.Empty(t, QueryText("ns:oteldb"))
 }
+
+// TestTarget: a namespace typed as a filter is still the namespace to read
+// from, so "ns:oteldb deploy/api" must not run against "default".
+func TestTarget(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		collector source.Collector
+		query     string
+		want      string
+	}{
+		{"no terms", source.CollectorKubectl, "oteldb/api", "oteldb/api"},
+		{"namespace", source.CollectorKubectl, "ns:oteldb deploy/api", "oteldb/deploy/api"},
+		{"namespace of a pod", source.CollectorKubectl, "ns:oteldb api-79c", "oteldb/api-79c"},
+		{"text wins", source.CollectorKubectl, "ns:kube-system oteldb/api-79c", "oteldb/api-79c"},
+		{"kind", source.CollectorKubectl, "ns:oteldb kind:deploy api", "oteldb/deploy/api"},
+		{"kind already spelled out", source.CollectorKubectl, "kind:deploy sts/api", "sts/api"},
+		{"container", source.CollectorKubectl, "ns:oteldb c:ingest oteldb-0", "oteldb/oteldb-0:ingest"},
+		{"negated terms name nothing", source.CollectorKubectl, "-ns:kube-system api", "api"},
+		{"bare terms name nothing", source.CollectorKubectl, "ns: api", "api"},
+		{"nothing typed", source.CollectorKubectl, "ns:oteldb", ""},
+		{"user scope", source.CollectorJournal, "scope:user syncthing", "user/syncthing"},
+		{"scope already spelled out", source.CollectorJournal, "scope:user user/syncthing", "user/syncthing"},
+		{"system scope is the default", source.CollectorJournal, "scope:system sshd", "sshd"},
+		{"docker has nothing to fold in", source.CollectorDocker, "image:app api", "api"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, Target(tt.query, tt.collector))
+		})
+	}
+}

@@ -106,7 +106,7 @@ in another case, which sorts above a scattered match.
 
 A query may also carry `field:value` terms, in the shape GitHub and
 Sourcegraph use. They narrow the list before anything is matched; the rest of
-the query still matches fuzzily, and the terms are not part of the target.
+the query still matches fuzzily.
 
 ```
 ns:oteldb api            pods and workloads named api, in namespaces matching oteldb
@@ -126,6 +126,11 @@ A term matches its field as a case-insensitive substring. A bare `field:` keeps
 the candidates that have that field at all. Only these names are terms, so a
 value that merely contains a colon, such as `oteldb/api-79c:migrate`, is still
 searched for literally.
+
+The terms are never sent as part of the target, but the ones that name a single
+thing — `ns`, `kind`, `container`, `scope` — do fill in what the target leaves
+unsaid, so pressing enter on `ns:oteldb kind:deploy api` reads `deploy/api` from
+`oteldb` rather than from `default`. Whatever the target spells out itself wins.
 
 Everything but the ssh hosts is listed **through the chosen transport**, with
 the same privileges, kubeconfig and context the logs will use, so picking a

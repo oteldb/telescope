@@ -398,13 +398,13 @@ func TestCompletionFilterTerms(t *testing.T) {
 	require.Contains(t, out, "oteldb/deployment/api")
 	require.NotContains(t, out, "oteldb/api-79c")
 
-	// The terms are a filter, not part of the target: enter without picking a
-	// suggestion must not send them to kubectl.
-	for _, r := range " oteldb/api-79c" {
+	// Enter without picking a suggestion must not send "ns:oteldb" to kubectl,
+	// but must still read from the namespace and kind the terms named.
+	for _, r := range " api" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 	m = send(t, m, k("enter"), k("enter"))
-	require.Equal(t, "kubectl logs -n oteldb api-79c --tail 1000 -f", m.(Model).logs.cfg.Command())
+	require.Equal(t, "kubectl logs -n oteldb deploy/api --tail 1000 -f", m.(Model).logs.cfg.Command())
 }
 
 // TestUnknownFilterFieldIsSearchedFor: a colon in a value is the container

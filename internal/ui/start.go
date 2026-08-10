@@ -576,8 +576,9 @@ func (m startModel) config() source.Config {
 	cfg.KubeConfig = strings.TrimSpace(m.kubeconfig.Value())
 	cfg.KubeContext = strings.TrimSpace(m.kubecontext.Value())
 
-	// The filter terms narrowed the list; what is left is the target itself.
-	target := complete.QueryText(m.target.Value())
+	// The filter terms narrowed the list; what is left, plus whatever the terms
+	// named, is the target itself.
+	target := complete.Target(m.target.Value(), cfg.Collector)
 	switch cfg.Collector {
 	case source.CollectorJournal:
 		cfg.Unit, cfg.UserUnit = source.ParseJournalTarget(target)

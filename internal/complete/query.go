@@ -76,6 +76,69 @@ func QueryText(query string) string {
 	return strings.TrimSpace(text)
 }
 
+// Target reads a query as a target, folding the terms that name one thing back
+// into the text they narrowed: "ns:oteldb deploy/api" is a deployment in that
+// namespace, not one in "default".
+//
+// A term only fills in what the text leaves unsaid, and a term whose value is a
+// prefix of the real namespace fills in that prefix, so the text always wins
+// where the two disagree.
+func Target(query string, c source.Collector) string {
+	terms, text := ParseQuery(query)
+	text = strings.TrimSpace(text)
+	if text == "" || len(terms) == 0 {
+		return text
+	}
+	switch c {
+	case source.CollectorKubectl:
+		return kubeTarget(terms, text)
+	case source.CollectorJournal:
+		return journalTarget(terms, text)
+	default:
+		return text
+	}
+}
+
+func kubeTarget(terms []Term, text string) string {
+	ns, target, container := source.ParseKubeTarget(text)
+	if ns == "" {
+		ns = termValue(terms, fieldNamespace)
+	}
+	if container == "" {
+		container = termValue(terms, fieldContainer)
+	}
+	if kind := termValue(terms, fieldKind); kind != "" && !strings.Contains(target, "/") {
+		target = kind + "/" + target
+	}
+	if ns != "" {
+		target = ns + "/" + target
+	}
+	if container != "" {
+		target += ":" + container
+	}
+	return target
+}
+
+func journalTarget(terms []Term, text string) string {
+	if unit, user := source.ParseJournalTarget(text); !user &&
+		strings.EqualFold(termValue(terms, fieldScope), "user") {
+		return "user/" + unit
+	}
+	return text
+}
+
+// termValue is the value of the last term naming field. Negated and bare terms
+// are skipped: neither names a thing to fill in.
+func termValue(terms []Term, field string) string {
+	var v string
+	for _, t := range terms {
+		if t.Field == field && !t.Negate && t.Value != "" {
+			v = t.Value
+		}
+	}
+	return v
+}
+
 func parseTerm(tok string) (Term, bool) {
 	var t Term
 	if rest, ok := strings.CutPrefix(tok, "-"); ok {
