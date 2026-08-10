@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -1330,4 +1331,65 @@ func TestTypedEndpointIsRemembered(t *testing.T) {
 	m := send(t, New(), size(), k("enter"))
 	m = send(t, m, tabs(len(collectors))...)
 	require.Contains(t, screen(t, m), "https://logs.example.com")
+}
+
+// typeIn sends s one rune at a time, the way it is typed.
+func typeIn(t *testing.T, m tea.Model, s string) tea.Model {
+	t.Helper()
+	for _, r := range s {
+		m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	return m
+}
+
+// TestTimeRangePicker: ctrl+g opens the window the source is read over, offers
+// the ones worth reaching for, and shows what the chosen one resolves to.
+func TestTimeRangePicker(t *testing.T) {
+	m := send(t, New(), size(), k("enter"), k("tab"), k("tab")) // docker
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlG})
+	require.Equal(t, detailRange, m.(Model).start.detail)
+
+	out := screen(t, m)
+	require.Contains(t, out, "time range")
+	require.Contains(t, out, "yesterday", "the presets are offered")
+
+	// Picking one shows the window it means, not only the words for it.
+	m = typeIn(t, m, "6h..1h")
+	require.Contains(t, screen(t, m), " → ")
+
+	m = send(t, m, k("enter"))
+	require.Equal(t, detailNone, m.(Model).start.detail)
+	require.Contains(t, screen(t, m), "--since", "the preview already shows the bounds")
+
+	m = typeIn(t, m, "clickhouse")
+	m = send(t, m, k("enter"), k("enter"))
+
+	cfg := m.(Model).logs.cfg
+	require.Equal(t, "6h..1h", cfg.Range.Spec)
+	require.Equal(t, 5*time.Hour, cfg.Range.Until.Sub(cfg.Range.Since))
+	require.NotContains(t, cfg.Command(), " -f", "a window that has closed is not followed")
+}
+
+// TestTimeRangeRejectsNonsense: a window that does not read as one is reported
+// where it was typed, rather than quietly reading everything.
+func TestTimeRangeRejectsNonsense(t *testing.T) {
+	m := send(t, New(), size(), k("enter"), k("tab"), k("tab")) // docker
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlG})
+	m = typeIn(t, m, "yesteryear")
+	m = send(t, m, k("enter"))
+
+	require.Equal(t, detailRange, m.(Model).start.detail, "the prompt stays open")
+	require.Contains(t, screen(t, m), "cannot read")
+}
+
+// TestTimeRangeIsNotOfferedForCommand: a free-form command is whatever was
+// typed, so its bounds belong in it.
+func TestTimeRangeIsNotOfferedForCommand(t *testing.T) {
+	m := send(t, New(), size(), k("enter"))
+	m = send(t, m, tabs(len(collectors)-1)...)
+	require.Equal(t, source.CollectorCommand, m.(Model).start.choice().collector)
+	require.NotContains(t, screen(t, m), "ctrl+g")
+
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlG})
+	require.Equal(t, detailNone, m.(Model).start.detail)
 }

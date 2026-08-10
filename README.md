@@ -52,6 +52,31 @@ so `deploy/api` and `oteldb/deploy/api` both mean what they look like. Naming a
 workload rather than a pod survives a restart, at the cost of `kubectl` picking
 one of its pods.
 
+### Time range
+
+A line count is not a time range. `ctrl+g` bounds the window instead, on the
+prompt and at the query step, and shows what the window resolves to:
+
+| written | means |
+| --- | --- |
+| `1h`, `30m`, `7d` | a window ending now |
+| `6h..1h` | one that has already closed |
+| `today`, `yesterday` | since local midnight, and the day before |
+| `10:00..12:00` | clock times today |
+| `2026-01-02 10:00..12:00` | a date and time, or RFC 3339 |
+| `all` | no bounds — the tail alone |
+
+The spec is kept as written and resolved when the source opens, so `1h` means
+the last hour on every run rather than the hour that had passed when it was
+typed. A range with an end is a window that has already happened, so nothing is
+followed however the toggle is set.
+
+Each collector spells it in its own terms: `journalctl --since/--until`,
+`docker logs --since/--until`, `kubectl logs --since-time`, and `start`/`end`
+on a database query. `kubectl` has no end bound, so asking for one is an error
+rather than a wider window than was asked for, and a free-form `command` is
+whatever was typed — bound it in the command itself.
+
 ## Keys
 
 ### Start screen
@@ -70,6 +95,7 @@ one of its pods.
 | `ctrl+k` | edit the kubeconfig path (kubectl) |
 | `ctrl+x` | edit the context (kubectl) |
 | `ctrl+e` | edit the endpoint URL (victorialogs, loki) |
+| `ctrl+g` | edit the time range |
 | `ctrl+f` | toggle follow |
 | `ctrl+t` | cycle tail: 100, 1000, 10000, all |
 | `ctrl+c` | quit |
@@ -209,6 +235,7 @@ marks those with what they will ask for.
 | `context` | | passed as `--context` |
 | `args` | | command line, for `collector: command` |
 | `sudo` | `false` | run the collector under `sudo -n` |
+| `range` | | the window read: `1h`, `today`, `6h..1h`; see [Time range](#time-range) |
 | `tail` | `1000` | lines of history, `0` for all |
 | `follow` | `true` | keep streaming |
 | `query` | | pre-fills the filter |
@@ -280,12 +307,13 @@ The target is the query, in that database's own language, **sent as written**.
 `field:value` there belongs to [LogsQL][logsql], not to telescope's own filter,
 and no compact syntax is compiled into [LogQL][logql]: label names are whatever
 the shipper wrote them as — `k8s_namespace_name` as readily as `namespace` — so
-translating them would be a guess. `tail` becomes the query's limit and `follow`
-keeps it open.
+translating them would be a guess. `tail` becomes the query's limit, the time
+range its bounds, and `follow` keeps it open.
 
 | | VictoriaLogs | Loki |
 | --- | --- | --- |
-| history | `/select/logsql/query` | `/loki/api/v1/query_range`, over the last 6h |
+| history | `/select/logsql/query` | `/loki/api/v1/query_range` |
+| window | `start` / `end` | `start` / `end`, in unix nanoseconds; the last 6h with no range |
 | following | `/select/logsql/tail`, a live stream | the same query repeated, every 2s |
 | tenant header | `AccountID` / `ProjectID` | `X-Scope-OrgID` |
 

@@ -5,7 +5,12 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// journalStamp is the timestamp journalctl reads, in the local time it is
+// written in.
+const journalStamp = "2006-01-02 15:04:05"
 
 // Transport is how the collector command is executed.
 type Transport string
@@ -84,9 +89,17 @@ type Config struct {
 	// cannot read.
 	Elevate bool
 
+	// Range bounds the window read. The zero value reads up to now, which is
+	// what a plain tail does.
+	Range Range
+
 	Tail   int
 	Follow bool
 }
+
+// following reports whether the stream stays open. A range with an end is a
+// window that has already happened: there is nothing left to arrive in it.
+func (c Config) following() bool { return c.Follow && !c.Range.Closed() }
 
 // Validate reports whether the config has everything needed to build a command.
 func (c Config) Validate() error {
@@ -122,6 +135,17 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("unknown collector %q", c.Collector)
 	}
+	if !c.Range.IsZero() {
+		switch c.Collector {
+		case CollectorCommand:
+			return fmt.Errorf("a command has no time range: bound it in the command itself")
+		case CollectorKubectl:
+			if c.Range.Closed() {
+				// kubectl logs takes --since-time and nothing that ends it.
+				return fmt.Errorf("kubectl has no end bound: use an open range, such as 1h")
+			}
+		}
+	}
 	return nil
 }
 
@@ -143,10 +167,18 @@ func (c Config) Command() string {
 		if u := strings.TrimSpace(c.Unit); u != "" {
 			args = append(args, "-u", Quote(u))
 		}
+		// journalctl reads a local timestamp, which is what the range resolves
+		// to, and needs it quoted for the space in the middle.
+		if t := c.Range.Since; !t.IsZero() {
+			args = append(args, "--since", Quote(t.Format(journalStamp)))
+		}
+		if t := c.Range.Until; !t.IsZero() {
+			args = append(args, "--until", Quote(t.Format(journalStamp)))
+		}
 		if c.Tail > 0 {
 			args = append(args, "-n", strconv.Itoa(c.Tail))
 		}
-		if c.Follow {
+		if c.following() {
 			args = append(args, "-f")
 		}
 		return c.elevated(args)
@@ -174,19 +206,28 @@ func (c Config) Command() string {
 		if ct := strings.TrimSpace(c.Container); ct != "" {
 			args = append(args, "-c", Quote(ct))
 		}
+		if t := c.Range.Since; !t.IsZero() {
+			args = append(args, "--since-time="+t.Format(time.RFC3339))
+		}
 		if c.Tail > 0 {
 			args = append(args, "--tail", strconv.Itoa(c.Tail))
 		}
-		if c.Follow {
+		if c.following() {
 			args = append(args, "-f")
 		}
 		return c.elevated(args)
 	case CollectorDocker:
 		args := []string{"docker", "logs"}
+		if t := c.Range.Since; !t.IsZero() {
+			args = append(args, "--since", t.Format(time.RFC3339))
+		}
+		if t := c.Range.Until; !t.IsZero() {
+			args = append(args, "--until", t.Format(time.RFC3339))
+		}
 		if c.Tail > 0 {
 			args = append(args, "--tail", strconv.Itoa(c.Tail))
 		}
-		if c.Follow {
+		if c.following() {
 			args = append(args, "-f")
 		}
 		if ct := strings.TrimSpace(c.Container); ct != "" {
@@ -235,7 +276,7 @@ func (c Config) Argv() []string {
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
 	}
-	if c.Follow {
+	if c.following() {
 		// Force a pty so sshd hangs up the remote command when we disconnect;
 		// without one a follower like "journalctl -f" is orphaned on the host.
 		// The cost is CRLF line endings and stderr folded into stdout.
@@ -251,8 +292,13 @@ func (c Config) Title() string {
 	where := "local"
 	if c.Collector.IsRemoteAPI() {
 		// The endpoint stands in for the host, and carries a token that must not
-		// reach the screen.
-		return string(c.Collector) + "://" + c.Endpoint.Label() + " · " + c.Command()
+		// reach the screen. The range is not in the query either, since it is
+		// sent beside it rather than in it.
+		title := string(c.Collector) + "://" + c.Endpoint.Label() + " · " + c.Command()
+		if !c.Range.IsZero() {
+			title += " · " + c.Range.Label()
+		}
+		return title
 	}
 	if c.Transport == TransportSSH {
 		where = "ssh://" + strings.TrimSpace(c.Host)

@@ -46,7 +46,7 @@ func (c Config) streamLoki(ctx context.Context, out func(Line) bool) error {
 	if err != nil {
 		return err
 	}
-	if !c.Follow {
+	if !c.following() {
 		return nil
 	}
 	return c.lokiFollow(ctx, client, last, out)
@@ -59,12 +59,25 @@ func (c Config) lokiBackfill(ctx context.Context, client *http.Client, out func(
 	if c.Tail <= 0 {
 		return time.Time{}, nil
 	}
-	entries, err := c.lokiRequest(ctx, client, url.Values{
+	params := url.Values{
 		"query":     {c.lokiQuery()},
 		"limit":     {strconv.Itoa(c.Tail)},
 		"direction": {"backward"},
-		"since":     {lokiSince.String()},
-	})
+	}
+	// Without a range Loki still needs one, and its own default is an hour;
+	// lokiSince stands in until the user picks a window.
+	switch {
+	case c.Range.IsZero():
+		params.Set("since", lokiSince.String())
+	default:
+		if t := c.Range.Since; !t.IsZero() {
+			params.Set("start", lokiNanos(t))
+		}
+		if t := c.Range.Until; !t.IsZero() {
+			params.Set("end", lokiNanos(t))
+		}
+	}
+	entries, err := c.lokiRequest(ctx, client, params)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -86,6 +99,10 @@ func (c Config) lokiBackfill(ctx context.Context, client *http.Client, out func(
 // is what Loki's own inclusive start bound needs to not repeat it.
 func (c Config) lokiFollow(ctx context.Context, client *http.Client, last time.Time, out func(Line) bool) error {
 	if last.IsZero() {
+		// Nothing was backfilled, so the window's own start is where to pick up.
+		last = c.Range.Since
+	}
+	if last.IsZero() {
 		last = time.Now().Add(-time.Second)
 	}
 	ticker := time.NewTicker(lokiPoll)
@@ -100,8 +117,10 @@ func (c Config) lokiFollow(ctx context.Context, client *http.Client, last time.T
 			"query":     {c.lokiQuery()},
 			"limit":     {strconv.Itoa(lokiFollowLimit)},
 			"direction": {"forward"},
-			"start":     {strconv.FormatInt(last.UnixNano()+1, 10)},
-			"end":       {strconv.FormatInt(time.Now().UnixNano(), 10)},
+			// Inclusive on both ends, so the poll starts just past the newest
+			// line already shown.
+			"start": {lokiNanos(last.Add(time.Nanosecond))},
+			"end":   {lokiNanos(time.Now())},
 		})
 		if err != nil {
 			if ctx.Err() != nil {
@@ -119,6 +138,9 @@ func (c Config) lokiFollow(ctx context.Context, client *http.Client, last time.T
 		}
 	}
 }
+
+// lokiNanos writes an instant the way Loki reads a bound.
+func lokiNanos(t time.Time) string { return strconv.FormatInt(t.UnixNano(), 10) }
 
 // lokiEntry is one log line of a query result.
 type lokiEntry struct {

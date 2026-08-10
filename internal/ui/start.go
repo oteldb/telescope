@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,6 +38,7 @@ const (
 	detailKubeConfig
 	detailKubeContext
 	detailEndpoint
+	detailRange
 )
 
 // label names the detail for the chip above the prompt.
@@ -46,6 +48,8 @@ func (d detail) label() string {
 		return "context"
 	case detailEndpoint:
 		return "endpoint"
+	case detailRange:
+		return "time range"
 	default:
 		return "kubeconfig"
 	}
@@ -154,6 +158,7 @@ type startModel struct {
 	query       textinput.Model
 	kubeconfig  textinput.Model
 	endpointURL textinput.Model
+	rangeSpec   textinput.Model
 
 	kubecontext textinput.Model
 	// detail swaps the prompt bar over to a detail of the source while the
@@ -216,6 +221,7 @@ func newStart() startModel {
 		query:       mk("grep term or regexp, empty for everything"),
 		kubeconfig:  mk("path to kubeconfig, e.g. /etc/rancher/k3s/k3s.yaml"),
 		endpointURL: mk("https://logs.example.com or https://grafana/api/datasources/proxy/uid/<uid>"),
+		rangeSpec:   mk("1h, 6h..1h, today, 2026-01-02 10:00..12:00 — empty for no bounds"),
 		kubecontext: mk("context inside that kubeconfig"),
 		tail:        1000,
 		follow:      true,
@@ -311,6 +317,64 @@ func normalizeURL(s string) string {
 	return "https://" + s
 }
 
+// timeRange resolves what the range prompt holds, against the clock now: a
+// relative window means the last hour whenever it is opened, not the hour that
+// had passed when it was typed.
+//
+// A spec that does not parse yet reads as no range at all, since it is shown
+// while it is still being typed. What it will mean once finished is reported
+// by [startModel.rangeErr].
+func (m startModel) timeRange() source.Range {
+	r, err := source.ParseRange(m.rangeSpec.Value(), time.Now())
+	if err != nil {
+		return source.Range{}
+	}
+	return r
+}
+
+// rangeErr is why the range prompt does not read as a window yet.
+func (m startModel) rangeErr() error {
+	_, err := source.ParseRange(m.rangeSpec.Value(), time.Now())
+	return err
+}
+
+// rangeSupported reports whether the collector can be given a window. A
+// free-form command is whatever was typed, so its bounds belong in it.
+func rangeSupported(c source.Collector) bool { return c != source.CollectorCommand }
+
+// rangePresets are the windows offered when the range prompt opens. They are
+// suggestions, not the whole language: anything [source.ParseRange] reads can
+// be typed over them.
+var rangePresets = []complete.Candidate{
+	{Value: "15m", Detail: "the last quarter hour"},
+	{Value: "1h", Detail: "the last hour"},
+	{Value: "6h", Detail: "the last six hours"},
+	{Value: "24h", Detail: "the last day"},
+	{Value: "7d", Detail: "the last week"},
+	{Value: "today", Detail: "since local midnight"},
+	{Value: "yesterday", Detail: "the whole of the day before"},
+	{Value: "6h..1h", Detail: "a window that has already closed"},
+	{Value: "all", Detail: "no bounds — the tail alone"},
+}
+
+// rangeWindow renders the instants a range resolved to, which is what tells
+// "6h..1h" apart from the hours it actually covers. An open end reads as now,
+// since that is where the reading stops until it follows past it.
+func rangeWindow(r source.Range) string {
+	if r.IsZero() {
+		return ""
+	}
+	const stamp = "2006-01-02 15:04"
+	from, to := "…", "now"
+	if !r.Since.IsZero() {
+		from = r.Since.Format(stamp)
+	}
+	if r.Closed() {
+		to = r.Until.Format(stamp)
+	}
+	return from + " → " + to
+}
+
 // toggleDetail switches the prompt to a detail, or back out of it when that
 // detail is already being edited.
 func toggleDetail(cur, want detail) detail {
@@ -366,6 +430,7 @@ func (m startModel) prefill(cfg source.Config, query string) (startModel, tea.Cm
 	m.kubeconfig.SetValue(cfg.KubeConfig)
 	m.kubecontext.SetValue(cfg.KubeContext)
 	m.target.SetValue(config.Target(cfg))
+	m.rangeSpec.SetValue(cfg.Range.Spec)
 	m.query.SetValue(query)
 	m.elevate = cfg.Elevate
 	m.tail, m.follow = cfg.Tail, cfg.Follow
@@ -391,6 +456,10 @@ func (m startModel) request() (complete.Request, bool) {
 		}
 		return complete.Request{Field: complete.FieldHost}, true
 	case stepCollector:
+		if m.detail == detailRange {
+			// A window is written, not listed; the presets stand in for it.
+			return complete.Request{}, false
+		}
 		if m.choice().collector.IsRemoteAPI() {
 			// A query is written, not picked from a listing. What was written
 			// before is still offered, from history.
@@ -432,8 +501,12 @@ func (m *startModel) fetch() tea.Cmd {
 	req, ok := m.request()
 	if !ok {
 		// Nothing to list, which is not the same as nothing to show: a step
-		// with no listing still offers what was used here before.
+		// with no listing still offers what was used here before, and the
+		// range offers the windows worth reaching for.
 		m.candKey, m.loading = "", false
+		if m.detail == detailRange {
+			m.candidates = rangePresets
+		}
 		m.refilter()
 		return m.preload()
 	}
@@ -561,6 +634,8 @@ func (m startModel) filterSaved(query string) ([]complete.Candidate, []int) {
 // recent returns the remembered values for the current step, newest first.
 func (m startModel) recent() []string {
 	switch {
+	case m.detail == detailRange:
+		return nil
 	case m.step == stepTransport:
 		if transports[m.transport] != source.TransportSSH {
 			return nil
@@ -628,6 +703,10 @@ func (m *startModel) accept() {
 // input returns the text input backing the current step.
 func (m *startModel) input() *textinput.Model {
 	switch {
+	// The range applies to the whole source rather than to one step, so it is
+	// reachable from every step that has one.
+	case m.detail == detailRange:
+		return &m.rangeSpec
 	case m.step == stepSaved:
 		return &m.savedFilter
 	case m.step == stepTransport:
@@ -662,6 +741,7 @@ func (m *startModel) focus() {
 	m.query.Blur()
 	m.kubeconfig.Blur()
 	m.endpointURL.Blur()
+	m.rangeSpec.Blur()
 	m.kubecontext.Blur()
 	if m.active() {
 		m.input().Focus()
@@ -695,6 +775,9 @@ func (m startModel) config() source.Config {
 		Follow:    m.follow,
 	}
 	cfg.Elevate = m.elevate
+	if rangeSupported(cfg.Collector) {
+		cfg.Range = m.timeRange()
+	}
 	cfg.KubeConfig = strings.TrimSpace(m.kubeconfig.Value())
 	cfg.KubeContext = strings.TrimSpace(m.kubecontext.Value())
 
@@ -814,6 +897,13 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 				m.focus()
 				return m, m.fetch()
 			}
+		case "ctrl+g":
+			if m.step >= stepCollector && rangeSupported(m.choice().collector) {
+				m.detail = toggleDetail(m.detail, detailRange)
+				m.err = nil
+				m.focus()
+				return m, m.fetch()
+			}
 		case "ctrl+f":
 			m.follow = !m.follow
 			return m, nil
@@ -832,6 +922,14 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 				return m, nil
 			}
 			if m.detail != detailNone {
+				// A window that does not read as one is worth saying so before
+				// the prompt closes over it.
+				if m.detail == detailRange {
+					if err := m.rangeErr(); err != nil {
+						m.err = err
+						return m, nil
+					}
+				}
 				m.detail = detailNone
 				m.focus()
 				return m, m.fetch()
@@ -905,6 +1003,14 @@ func (m *startModel) cycle(d int) tea.Cmd {
 }
 
 func (m startModel) advance() (startModel, tea.Cmd) {
+	// A window left half-written would otherwise read as no window at all,
+	// which is the one thing it certainly does not mean.
+	if err := m.rangeErr(); err != nil && rangeSupported(m.choice().collector) {
+		m.err = err
+		m.detail = detailRange
+		m.focus()
+		return m, m.fetch()
+	}
 	if m.step < stepQuery {
 		if m.step == stepTransport && transports[m.transport] == source.TransportSSH &&
 			strings.TrimSpace(m.host.Value()) == "" {
@@ -946,7 +1052,15 @@ func (m startModel) head() string {
 	}
 
 	if m.detail != detailNone {
-		b.WriteString(styleChipActive.Render(m.detail.label()))
+		chip := styleChipActive.Render(m.detail.label())
+		// The window a spec resolves to is the whole point of typing one, and
+		// "6h..1h" says nothing about which hours those are.
+		if m.detail == detailRange && m.rangeErr() == nil {
+			if w := rangeWindow(m.timeRange()); w != "" {
+				chip += styleHint.Render("  " + w)
+			}
+		}
+		b.WriteString(chip)
 		b.WriteString("\n\n")
 	}
 	box := styleBox
@@ -1045,7 +1159,10 @@ func (m startModel) valueColumn(window []complete.Candidate) int {
 // resizeInputs keeps the text inputs matched to the prompt bar.
 func (m *startModel) resizeInputs() {
 	w := max(m.promptWidth()-6, 10)
-	for _, in := range []*textinput.Model{&m.savedFilter, &m.host, &m.target, &m.query, &m.kubeconfig, &m.kubecontext} {
+	for _, in := range []*textinput.Model{
+		&m.savedFilter, &m.host, &m.target, &m.query,
+		&m.kubeconfig, &m.kubecontext, &m.endpointURL, &m.rangeSpec,
+	} {
 		in.Width = w
 	}
 }
@@ -1124,13 +1241,17 @@ func (m startModel) help() string {
 			key("esc", "quit"),
 		}, styleHint.Render(" · "))
 	}
-	if m.step == stepQuery {
-		return strings.Join([]string{
+	if m.step == stepQuery && m.detail == detailNone {
+		parts := []string{
 			key("enter", "open logs"),
 			key("esc", m.escLabel()),
-			key("ctrl+f", "follow "+onOff(m.follow)),
+			key("ctrl+f", "follow "+m.followLabel()),
 			key("ctrl+t", "tail "+tailLabel(m.tail)),
-		}, styleHint.Render(" · "))
+		}
+		if rangeSupported(m.choice().collector) {
+			parts = append(parts, key("ctrl+g", "range "+m.timeRange().Label()))
+		}
+		return strings.Join(parts, styleHint.Render(" · "))
 	}
 	parts := []string{key("tab", "switch")}
 	if len(m.filtered) > 0 {
@@ -1144,6 +1265,9 @@ func (m startModel) help() string {
 		return strings.Join(parts, styleHint.Render(" · "))
 	}
 	parts = append(parts, key("enter", "next"), key("esc", m.escLabel()))
+	if m.step >= stepCollector && rangeSupported(m.choice().collector) {
+		parts = append(parts, key("ctrl+g", "range "+m.timeRange().Label()))
+	}
 	if m.step >= stepCollector && !m.choice().collector.IsRemoteAPI() {
 		parts = append(parts, key("ctrl+s", "sudo "+onOff(m.elevate)))
 	}
@@ -1183,7 +1307,7 @@ func (m startModel) completions(limit int) string {
 	indent := strings.Repeat(" ", m.listIndent())
 	block := lipgloss.NewStyle().Width(m.contentWidth()).Align(lipgloss.Left)
 	switch {
-	case m.step == stepQuery:
+	case m.step == stepQuery && m.detail == detailNone:
 		return ""
 	case m.loading:
 		return block.Render(indent + styleHint.Render("  looking for sources…"))
@@ -1336,6 +1460,17 @@ func (m startModel) emptyLabel() string {
 
 // hints shows step-appropriate examples, in the spirit of a search landing page.
 func (m startModel) hints() string {
+	if m.detail == detailRange {
+		// Reached once what was typed matches no preset, which is exactly when
+		// the forms it can take are worth spelling out.
+		return m.hintBlock([]string{
+			"1h · 30m · 7d              a window ending now",
+			"6h..1h                     one that has already closed",
+			"today · yesterday",
+			"10:00..12:00               clock times today",
+			"2026-01-02 10:00..12:00    or a date, or RFC 3339",
+		})
+	}
 	if m.detail != detailNone {
 		// The examples below are about targets, not about the detail being
 		// edited, so they would only mislead here.
@@ -1388,13 +1523,27 @@ func (m startModel) hints() string {
 	case stepQuery:
 		lines = []string{"error", "trace_id=abc", "level=(warn|error)", "(empty)  no filter"}
 	}
-	// Pad every line to the same width so the surrounding centering moves the
-	// block as a whole instead of centering each line on its own.
+	return m.hintBlock(lines)
+}
+
+// hintBlock pads every line to the same width so the surrounding centering
+// moves the block as a whole instead of centering each line on its own.
+func (m startModel) hintBlock(lines []string) string {
 	block := lipgloss.NewStyle().Width(m.promptWidth()).Align(lipgloss.Left)
 	for i, l := range lines {
 		lines[i] = block.Render(styleHint.Render("  " + l))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// followLabel reports whether the view will keep reading. A range with an end
+// is a window that has already happened, so nothing will arrive in it however
+// the toggle is set.
+func (m startModel) followLabel() string {
+	if m.follow && m.timeRange().Closed() {
+		return styleDim.Render("off") + styleHint.Render(" (range ends)")
+	}
+	return onOff(m.follow)
 }
 
 func onOff(v bool) string {

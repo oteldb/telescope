@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -94,6 +95,29 @@ sources:
 	require.Equal(t, "node1", got.Host)
 }
 
+// TestLoadRange: a declared window is kept as written and resolved when the
+// source is opened, so "24h" means the last day on every run.
+func TestLoadRange(t *testing.T) {
+	cfg, err := loadFrom(write(t, `
+sources:
+  - name: yesterday's api
+    collector: docker
+    container: api
+    range: yesterday
+    follow: true
+`))
+	require.NoError(t, err)
+
+	got, ready, err := cfg.Sources[0].Stream()
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Equal(t, "yesterday", got.Range.Spec)
+	require.True(t, got.Range.Closed())
+	require.Equal(t, 24*time.Hour, got.Range.Until.Sub(got.Range.Since))
+	require.Contains(t, got.Command(), "--until")
+	require.NotContains(t, got.Command(), " -f", "a window that has closed is not followed")
+}
+
 func TestLoadMissingFileIsEmpty(t *testing.T) {
 	cfg, err := loadFrom(filepath.Join(t.TempDir(), "absent.yaml"))
 	require.NoError(t, err)
@@ -111,6 +135,11 @@ func TestLoadRejectsBadSources(t *testing.T) {
 		{"unknown transport", "sources:\n  - name: x\n    transport: telnet\n    collector: docker\n    container: a\n", "unknown transport"},
 		{"ssh without host", "sources:\n  - name: x\n    transport: ssh\n    collector: journalctl\n", "requires a host"},
 		{"malformed yaml", "sources: [oops\n", "parse"},
+		{
+			"unreadable range",
+			"sources:\n  - name: x\n    collector: docker\n    container: a\n    range: yesteryear\n",
+			"cannot read",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := loadFrom(write(t, tt.content))

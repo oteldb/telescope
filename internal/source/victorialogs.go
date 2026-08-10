@@ -40,7 +40,7 @@ func (c Config) streamVictoriaLogs(ctx context.Context, out func(Line) bool) err
 	if err != nil {
 		return err
 	}
-	if !c.Follow {
+	if !c.following() {
 		return nil
 	}
 	return c.vlogsTail(ctx, client, last, out)
@@ -58,6 +58,14 @@ func (c Config) vlogsBackfill(ctx context.Context, client *http.Client, out func
 	params := url.Values{
 		"query": {c.vlogsQuery()},
 		"limit": {strconv.Itoa(c.Tail)},
+	}
+	// A range narrows the query itself, so the limit applies within the window
+	// rather than to the whole database.
+	if t := c.Range.Since; !t.IsZero() {
+		params.Set("start", t.Format(time.RFC3339Nano))
+	}
+	if t := c.Range.Until; !t.IsZero() {
+		params.Set("end", t.Format(time.RFC3339Nano))
 	}
 	var lines [][]byte
 	if err := c.vlogsRequest(ctx, client, vlogsQueryPath, params, func(entry []byte) bool {

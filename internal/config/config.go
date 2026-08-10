@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-faster/errors"
 	"github.com/go-faster/yaml"
@@ -51,6 +52,11 @@ type Source struct {
 
 	// Sudo runs the collector under sudo -n.
 	Sudo bool `yaml:"sudo,omitempty"`
+
+	// Range bounds the window read, as typed at the prompt: "1h", "today",
+	// "6h..1h". It is resolved when the source is opened, so a relative one
+	// means the same thing every run.
+	Range string `yaml:"range,omitempty"`
 
 	// Tail and Follow are pointers so that "tail: 0" and "follow: false" are
 	// distinguishable from being unset.
@@ -180,6 +186,9 @@ func (s Source) Stream() (cfg source.Config, ready bool, err error) {
 	}
 	if s.Follow != nil {
 		cfg.Follow = *s.Follow
+	}
+	if cfg.Range, err = source.ParseRange(s.Range, time.Now()); err != nil {
+		return source.Config{}, false, err
 	}
 
 	switch cfg.Transport {
