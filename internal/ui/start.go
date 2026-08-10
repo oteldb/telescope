@@ -1,0 +1,580 @@
+package ui
+
+import (
+	"context"
+	"strconv"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/oteldb/telescope/internal/complete"
+	"github.com/oteldb/telescope/internal/source"
+)
+
+// logo is the banner shown on the start screen.
+const logo = "" +
+	"╺┳╸┏━╸╻  ┏━╸┏━┓┏━╸┏━┓┏━┓┏━╸\n" +
+	" ┃ ┣╸ ┃  ┣╸ ┗━┓┃  ┃ ┃┣━┛┣╸ \n" +
+	" ╹ ┗━╸┗━╸┗━╸┗━┛┗━╸┗━┛╹  ┗━╸"
+
+// promptWidth is the target width of the centered prompt bar.
+const promptWidth = 64
+
+type startStep int
+
+const (
+	stepTransport startStep = iota
+	stepCollector
+	stepQuery
+)
+
+var (
+	transports = []source.Transport{source.TransportLocal, source.TransportSSH}
+	collectors = []source.Collector{
+		source.CollectorJournal,
+		source.CollectorKubectl,
+		source.CollectorDocker,
+		source.CollectorCommand,
+	}
+)
+
+// maxCompletions is how many suggestions are listed under the prompt, and
+// detailColumn caps how far the detail column is pushed right.
+const (
+	maxCompletions = 6
+	detailColumn   = 28
+)
+
+// connectMsg asks the app to open a stream.
+type connectMsg struct {
+	cfg   source.Config
+	query string
+}
+
+// candidatesMsg carries a completion result. Key identifies the request, so a
+// reply that arrives after the user moved on is discarded.
+type candidatesMsg struct {
+	key   string
+	items []complete.Candidate
+	err   error
+}
+
+type startModel struct {
+	w, h int
+
+	step      startStep
+	transport int
+	collector int
+
+	host   textinput.Model
+	target textinput.Model
+	query  textinput.Model
+
+	tail   int
+	follow bool
+	err    error
+
+	// Completion state for the current step.
+	candKey    string
+	candidates []complete.Candidate
+	filtered   []complete.Candidate
+	// sel is the highlighted suggestion, or -1 when the input has focus.
+	sel     int
+	loading bool
+	candErr error
+}
+
+func newStart() startModel {
+	mk := func(placeholder string) textinput.Model {
+		ti := textinput.New()
+		ti.Placeholder = placeholder
+		ti.Prompt = "❯ "
+		ti.PromptStyle = lipgloss.NewStyle().Foreground(colorAccent)
+		ti.Width = promptWidth - 6
+		return ti
+	}
+	m := startModel{
+		host:   mk("user@host"),
+		target: mk(""),
+		query:  mk("grep term or regexp, empty for everything"),
+		tail:   1000,
+		follow: true,
+		sel:    -1,
+	}
+	m.syncPlaceholder()
+	m.focus()
+	return m
+}
+
+// request describes what the current step can complete.
+func (m startModel) request() (complete.Request, bool) {
+	switch m.step {
+	case stepTransport:
+		if transports[m.transport] != source.TransportSSH {
+			return complete.Request{}, false
+		}
+		return complete.Request{Field: complete.FieldHost}, true
+	case stepCollector:
+		return complete.Request{
+			Field:     complete.FieldTarget,
+			Transport: transports[m.transport],
+			Host:      strings.TrimSpace(m.host.Value()),
+			Collector: collectors[m.collector],
+		}, true
+	default:
+		return complete.Request{}, false
+	}
+}
+
+// fetch discards the current suggestions and asks for the ones the step needs.
+func (m *startModel) fetch() tea.Cmd {
+	m.candidates, m.filtered, m.candErr, m.sel = nil, nil, nil, -1
+
+	req, ok := m.request()
+	if !ok {
+		m.candKey, m.loading = "", false
+		return nil
+	}
+	m.candKey, m.loading = req.Key(), true
+	return func() tea.Msg {
+		items, err := fetcher(context.Background(), req)
+		return candidatesMsg{key: req.Key(), items: items, err: err}
+	}
+}
+
+// fetcher resolves completions. It is a variable so tests can avoid running
+// real listing commands.
+var fetcher = complete.Fetch
+
+// refilter narrows the suggestions to what has been typed.
+func (m *startModel) refilter() {
+	m.filtered = complete.Rank(m.candidates, m.input().Value())
+	if m.sel >= len(m.filtered) {
+		m.sel = len(m.filtered) - 1
+	}
+}
+
+// accept inserts the highlighted suggestion.
+func (m *startModel) accept() {
+	if m.sel < 0 || m.sel >= len(m.filtered) {
+		return
+	}
+	in := m.input()
+	in.SetValue(m.filtered[m.sel].Value)
+	in.CursorEnd()
+	m.sel = -1
+	m.refilter()
+}
+
+// input returns the text input backing the current step.
+func (m *startModel) input() *textinput.Model {
+	switch m.step {
+	case stepTransport:
+		return &m.host
+	case stepCollector:
+		return &m.target
+	default:
+		return &m.query
+	}
+}
+
+// active reports whether the current step accepts text.
+func (m startModel) active() bool {
+	return m.step != stepTransport || transports[m.transport] == source.TransportSSH
+}
+
+func (m *startModel) focus() {
+	m.host.Blur()
+	m.target.Blur()
+	m.query.Blur()
+	if m.active() {
+		m.input().Focus()
+	}
+}
+
+func (m *startModel) syncPlaceholder() {
+	switch collectors[m.collector] {
+	case source.CollectorJournal:
+		m.target.Placeholder = "[user/]unit, e.g. kubelet — empty for the whole journal"
+	case source.CollectorKubectl:
+		m.target.Placeholder = "[namespace/]pod[:container] or [ns/]app=name"
+	case source.CollectorDocker:
+		m.target.Placeholder = "container name or id"
+	case source.CollectorCommand:
+		m.target.Placeholder = "any command writing logs to stdout"
+	}
+}
+
+func (m startModel) config() source.Config {
+	cfg := source.Config{
+		Transport: transports[m.transport],
+		Host:      strings.TrimSpace(m.host.Value()),
+		Collector: collectors[m.collector],
+		Tail:      m.tail,
+		Follow:    m.follow,
+	}
+	target := strings.TrimSpace(m.target.Value())
+	switch cfg.Collector {
+	case source.CollectorJournal:
+		cfg.Unit, cfg.UserUnit = source.ParseJournalTarget(target)
+	case source.CollectorKubectl:
+		cfg.Namespace, cfg.Target, cfg.Container = source.ParseKubeTarget(target)
+	case source.CollectorDocker:
+		cfg.Container = target
+	case source.CollectorCommand:
+		cfg.Args = target
+	}
+	return cfg
+}
+
+func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.w, m.h = msg.Width, msg.Height
+		return m, nil
+	case candidatesMsg:
+		if msg.key != m.candKey {
+			return m, nil
+		}
+		m.loading = false
+		m.candidates, m.candErr = msg.items, msg.err
+		m.refilter()
+		return m, nil
+
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "down", "ctrl+n":
+			if len(m.filtered) > 0 {
+				m.sel = min(m.sel+1, len(m.filtered)-1)
+				return m, nil
+			}
+		case "up", "ctrl+p":
+			if m.sel >= 0 {
+				m.sel--
+				return m, nil
+			}
+		case "tab":
+			if m.sel >= 0 {
+				m.accept()
+				return m, nil
+			}
+			if m.choices() > 0 {
+				return m, m.cycle(1)
+			}
+		case "right":
+			if n := m.choices(); n > 0 && !m.active() {
+				return m, m.cycle(1)
+			}
+		case "shift+tab", "left":
+			if n := m.choices(); n > 0 && (msg.String() == "shift+tab" || !m.active()) {
+				return m, m.cycle(-1)
+			}
+		case "ctrl+f":
+			m.follow = !m.follow
+			return m, nil
+		case "ctrl+t":
+			m.tail = nextTail(m.tail)
+			return m, nil
+		case "enter":
+			if m.sel >= 0 {
+				m.accept()
+				return m, nil
+			}
+			return m.advance()
+		case "esc":
+			if m.step > stepTransport {
+				m.step--
+				m.err = nil
+				m.focus()
+				return m, m.fetch()
+			}
+			return m, nil
+		}
+	}
+	if !m.active() {
+		return m, nil
+	}
+	before := m.input().Value()
+	var cmd tea.Cmd
+	*m.input(), cmd = m.input().Update(msg)
+	if m.input().Value() != before {
+		m.sel = -1
+		m.refilter()
+	}
+	return m, cmd
+}
+
+// choices returns how many chips the current step offers.
+func (m startModel) choices() int {
+	switch m.step {
+	case stepTransport:
+		return len(transports)
+	case stepCollector:
+		return len(collectors)
+	default:
+		return 0
+	}
+}
+
+// cycle moves the chip selection and refreshes the suggestions it invalidates.
+func (m *startModel) cycle(d int) tea.Cmd {
+	n := m.choices()
+	switch m.step {
+	case stepTransport:
+		m.transport = (m.transport + d + n) % n
+	case stepCollector:
+		m.collector = (m.collector + d + n) % n
+		m.syncPlaceholder()
+	}
+	m.err = nil
+	m.focus()
+	return m.fetch()
+}
+
+func (m startModel) advance() (startModel, tea.Cmd) {
+	if m.step < stepQuery {
+		if m.step == stepTransport && transports[m.transport] == source.TransportSSH &&
+			strings.TrimSpace(m.host.Value()) == "" {
+			m.err = errEmptyHost
+			return m, nil
+		}
+		m.step++
+		m.err = nil
+		m.focus()
+		return m, m.fetch()
+	}
+	cfg := m.config()
+	if err := cfg.Validate(); err != nil {
+		m.err = err
+		m.step = stepCollector
+		m.focus()
+		return m, nil
+	}
+	query := strings.TrimSpace(m.query.Value())
+	return m, func() tea.Msg { return connectMsg{cfg: cfg, query: query} }
+}
+
+func (m startModel) View() string {
+	var b strings.Builder
+	b.WriteString(styleLogo.Render(logo))
+	b.WriteString("\n")
+	b.WriteString(styleHint.Render("telemetry viewer · logs"))
+	b.WriteString("\n\n")
+
+	if crumb := m.breadcrumb(); crumb != "" {
+		b.WriteString(crumb)
+		b.WriteString("\n\n")
+	}
+	if chips := m.chips(); chips != "" {
+		b.WriteString(chips)
+		b.WriteString("\n\n")
+	}
+
+	box := styleBox
+	if m.active() {
+		box = styleBoxFocus
+	}
+	bar := m.input().View()
+	if !m.active() {
+		bar = styleDim.Render("  local machine")
+	}
+	b.WriteString(box.Width(promptWidth).Render(bar))
+	b.WriteString("\n\n")
+
+	if m.err != nil {
+		b.WriteString(styleErr.Render("✗ " + m.err.Error()))
+	} else {
+		b.WriteString(styleHint.Render(m.help()))
+	}
+	b.WriteString("\n\n")
+	if c := m.completions(); c != "" {
+		b.WriteString(c)
+	} else {
+		b.WriteString(m.hints())
+	}
+
+	content := lipgloss.NewStyle().Align(lipgloss.Center).Render(b.String())
+	return lipgloss.Place(m.w, m.h, lipgloss.Center, lipgloss.Center, content)
+}
+
+func (m startModel) breadcrumb() string {
+	var parts []string
+	if m.step > stepTransport {
+		if transports[m.transport] == source.TransportSSH {
+			parts = append(parts, "ssh://"+strings.TrimSpace(m.host.Value()))
+		} else {
+			parts = append(parts, "local")
+		}
+	}
+	if m.step > stepCollector {
+		parts = append(parts, m.config().Command())
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return styleDim.Render(strings.Join(parts, "  ▸  "))
+}
+
+func (m startModel) chips() string {
+	var (
+		items []string
+		sel   int
+	)
+	switch m.step {
+	case stepTransport:
+		for _, t := range transports {
+			items = append(items, string(t))
+		}
+		sel = m.transport
+	case stepCollector:
+		for _, c := range collectors {
+			items = append(items, string(c))
+		}
+		sel = m.collector
+	default:
+		return ""
+	}
+	out := make([]string, len(items))
+	for i, it := range items {
+		if i == sel {
+			out[i] = styleChipActive.Render(it)
+		} else {
+			out[i] = styleChip.Render(it)
+		}
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Center, out...)
+}
+
+func (m startModel) help() string {
+	if m.step == stepQuery {
+		return strings.Join([]string{
+			key("enter", "open logs"),
+			key("esc", "back"),
+			key("ctrl+f", "follow "+onOff(m.follow)),
+			key("ctrl+t", "tail "+tailLabel(m.tail)),
+		}, styleHint.Render(" · "))
+	}
+	parts := []string{key("tab", "switch")}
+	if len(m.filtered) > 0 {
+		parts = []string{key("↑↓", "suggestions"), key("tab", "complete")}
+	}
+	return strings.Join(append(parts,
+		key("enter", "next"),
+		key("esc", "back"),
+	), styleHint.Render(" · "))
+}
+
+func tailLabel(n int) string {
+	if n == 0 {
+		return "all"
+	}
+	return strconv.Itoa(n)
+}
+
+// completions renders the suggestion list, or the state that replaces it while
+// there is nothing to suggest yet. An empty result means the caller should fall
+// back to the static hints.
+func (m startModel) completions() string {
+	block := lipgloss.NewStyle().Width(promptWidth).Align(lipgloss.Left)
+	switch {
+	case m.step == stepQuery:
+		return ""
+	case m.loading:
+		return block.Render(styleHint.Render("  looking for sources…"))
+	case m.candErr != nil:
+		msg, _, _ := strings.Cut(m.candErr.Error(), "\n")
+		return block.Render(styleErr.Render("  " + msg))
+	case len(m.filtered) == 0:
+		return ""
+	}
+
+	// Align the detail column against the widest value actually shown.
+	valueWidth := 0
+	for i, c := range m.filtered {
+		if i == maxCompletions {
+			break
+		}
+		valueWidth = max(valueWidth, lipgloss.Width(c.Value))
+	}
+	valueWidth = min(valueWidth, detailColumn)
+
+	rows := make([]string, 0, maxCompletions+1)
+	for i, c := range m.filtered {
+		if i == maxCompletions {
+			rows = append(rows, block.Render(styleHint.Render(
+				"  … "+strconv.Itoa(len(m.filtered)-maxCompletions)+" more")))
+			break
+		}
+		marker, value := "  ", c.Value
+		if i == m.sel {
+			marker, value = styleSelected.Render("▎ "), styleSelected.Render(c.Value)
+		}
+		row := marker + value
+		if c.Detail != "" {
+			pad := max(valueWidth-lipgloss.Width(c.Value), 0)
+			row += strings.Repeat(" ", pad) + styleDim.Render("  "+c.Detail)
+		}
+		// Truncate rather than let the block wrap: a long image name would
+		// otherwise push the rest of the list down.
+		rows = append(rows, block.Render(ansi.Truncate(row, promptWidth, styleDim.Render("…"))))
+	}
+	return strings.Join(rows, "\n")
+}
+
+// hints shows step-appropriate examples, in the spirit of a search landing page.
+func (m startModel) hints() string {
+	var lines []string
+	switch m.step {
+	case stepTransport:
+		lines = []string{
+			"local    read from this machine",
+			"ssh      proxy every command through a node",
+		}
+	case stepCollector:
+		switch collectors[m.collector] {
+		case source.CollectorJournal:
+			lines = []string{
+				"kubelet",
+				"user/syncthing   a unit of the user manager",
+				"(empty)          everything in the journal",
+			}
+		case source.CollectorKubectl:
+			lines = []string{"oteldb/oteldb-0", "oteldb/app=oteldb", "oteldb/oteldb-0:clickhouse"}
+		case source.CollectorDocker:
+			lines = []string{"clickhouse", "3f1a0c2b9d44"}
+		case source.CollectorCommand:
+			lines = []string{"tail -F /var/log/app.log", "dmesg -w"}
+		}
+	case stepQuery:
+		lines = []string{"error", "trace_id=abc", "level=(warn|error)", "(empty)  no filter"}
+	}
+	// Pad every line to the same width so the surrounding centering moves the
+	// block as a whole instead of centering each line on its own.
+	block := lipgloss.NewStyle().Width(promptWidth).Align(lipgloss.Left)
+	for i, l := range lines {
+		lines[i] = block.Render(styleHint.Render("  " + l))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func onOff(v bool) string {
+	if v {
+		return styleOK.Render("on")
+	}
+	return styleDim.Render("off")
+}
+
+// tailSteps are the values cycled by ctrl+n.
+var tailSteps = []int{100, 1000, 10000, 0}
+
+func nextTail(cur int) int {
+	for i, v := range tailSteps {
+		if v == cur {
+			return tailSteps[(i+1)%len(tailSteps)]
+		}
+	}
+	return tailSteps[0]
+}
