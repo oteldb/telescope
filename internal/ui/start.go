@@ -22,8 +22,7 @@ const logo = "" +
 	" ┃ ┣╸ ┃  ┣╸ ┗━┓┃  ┃ ┃┣━┛┣╸ \n" +
 	" ╹ ┗━╸┗━╸┗━╸┗━┛┗━╸┗━┛╹  ┗━╸"
 
-// The prompt bar, and the suggestion list under it, grow with the terminal
-// between these bounds.
+// The prompt bar grows with the terminal between these bounds.
 const (
 	minPromptWidth = 64
 	maxPromptWidth = 100
@@ -66,14 +65,16 @@ var (
 	}
 )
 
-// maxCompletions is how many suggestions are listed under the prompt, and
-// detailColumn caps how far the detail column is pushed right.
 const (
 	// maxContentWidth keeps the centered screen readable on a wide terminal,
 	// and minDetailWidth is the room always left for a state word next to a
 	// value, wide enough for the longest one worth reading.
-	maxContentWidth = 120
+	maxContentWidth = 160
 	minDetailWidth  = 20
+	// maxTopPad keeps the block near the top of a tall terminal. Centering it
+	// vertically leaves the suggestions floating in the middle with a dozen
+	// empty rows above them, and moves the logo whenever the list grows.
+	maxTopPad = 2
 )
 
 // connectMsg asks the app to open a stream.
@@ -819,10 +820,19 @@ func (m startModel) head() string {
 	return b.String()
 }
 
+// topPad is how many rows are left above the logo. It is derived from the head
+// alone, never from the list, so the screen does not move as suggestions come
+// and go.
+func (m startModel) topPad() int {
+	return min(max((m.h-lipgloss.Height(m.head()))/2, 0), maxTopPad)
+}
+
 // listHeight is how many suggestion rows fit under the head. Paging keys use
 // the same number the view renders.
 func (m startModel) listHeight() int {
-	return max(m.h-lipgloss.Height(m.head())-1, 3)
+	// The head ends in a blank line that the list is joined onto, so it costs
+	// one row less than it measures.
+	return max(m.h-m.topPad()-lipgloss.Height(m.head())+1, 3)
 }
 
 func (m startModel) View() string {
@@ -839,7 +849,8 @@ func (m startModel) View() string {
 		Width(m.contentWidth()).
 		Align(lipgloss.Center).
 		Render(head + body)
-	return lipgloss.Place(m.w, m.h, lipgloss.Center, lipgloss.Center, content)
+	content = strings.Repeat("\n", m.topPad()) + content
+	return lipgloss.Place(m.w, m.h, lipgloss.Center, lipgloss.Top, content)
 }
 
 // contentWidth is the stable width every line of the start screen is centered
@@ -848,12 +859,27 @@ func (m startModel) contentWidth() int {
 	return min(max(m.w-2*screenPad, minPromptWidth), maxContentWidth)
 }
 
-// promptWidth is the width shared by the prompt bar and the suggestion list,
-// so the two stay aligned as the terminal grows. It leaves room for the box
+// promptWidth is the width of the prompt bar. It leaves room for the box
 // border: a bar as wide as the content block would overflow it, and the screen
-// would start shifting again as lines grow.
+// would start shifting again as lines grow. It is capped well below the content
+// block because a bar spanning a wide terminal is hard to read, while the list
+// under it is not.
 func (m startModel) promptWidth() int {
 	return min(m.contentWidth()-2, maxPromptWidth)
+}
+
+// listIndent puts the suggestion rows under the left edge of the prompt bar,
+// which is narrower than the block the list may use.
+func (m startModel) listIndent() int {
+	return max((m.contentWidth()-m.promptWidth())/2, 0)
+}
+
+// listWidth is how wide a suggestion row may be. The list is allowed to outgrow
+// the prompt bar to the right: a pod name with a container is long, and
+// truncating it while the terminal has columns to spare hides exactly what
+// tells two rows apart.
+func (m startModel) listWidth() int {
+	return m.contentWidth() - m.listIndent()
 }
 
 // valueColumn is how wide the value column is: the widest value on screen, so
@@ -864,7 +890,7 @@ func (m startModel) valueColumn(window []complete.Candidate) int {
 	for _, c := range window {
 		widest = max(widest, lipgloss.Width(c.Value))
 	}
-	return min(widest, max(m.promptWidth()-minDetailWidth, 10))
+	return min(widest, max(m.listWidth()-minDetailWidth, 10))
 }
 
 // resizeInputs keeps the text inputs matched to the prompt bar.
@@ -992,23 +1018,24 @@ func tailLabel(n int) string {
 // there is nothing to suggest yet. An empty result means the caller should fall
 // back to the static hints.
 func (m startModel) completions(limit int) string {
-	width := m.promptWidth()
-	block := lipgloss.NewStyle().Width(width).Align(lipgloss.Left)
+	width := m.listWidth()
+	indent := strings.Repeat(" ", m.listIndent())
+	block := lipgloss.NewStyle().Width(m.contentWidth()).Align(lipgloss.Left)
 	switch {
 	case m.step == stepQuery:
 		return ""
 	case m.loading:
-		return block.Render(styleHint.Render("  looking for sources…"))
+		return block.Render(indent + styleHint.Render("  looking for sources…"))
 	case m.candErr != nil:
 		msg, _, _ := strings.Cut(m.candErr.Error(), "\n")
-		return block.Render(styleErr.Render("  " + msg))
+		return block.Render(indent + styleErr.Render("  "+msg))
 	case limit <= 0:
 		return ""
 	case len(m.filtered) == 0:
 		// Saying nothing was found beats falling through to unrelated hints:
 		// a kubeconfig with no contexts is a real answer, not a missing one.
 		if msg := m.emptyLabel(); msg != "" {
-			return block.Render(styleHint.Render("  " + msg))
+			return block.Render(indent + styleHint.Render("  "+msg))
 		}
 		return ""
 	}
@@ -1048,10 +1075,10 @@ func (m startModel) completions(limit int) string {
 		}
 		// Truncate rather than let the block wrap: a long image name would
 		// otherwise push the rest of the list down.
-		rows = append(rows, block.Render(ansi.Truncate(row, width, styleDim.Render("…"))))
+		rows = append(rows, block.Render(indent+ansi.Truncate(row, width, styleDim.Render("…"))))
 	}
 	if rest := len(m.filtered) - start - shown; rest > 0 {
-		rows = append(rows, block.Render(styleHint.Render("  … "+strconv.Itoa(rest)+" more")))
+		rows = append(rows, block.Render(indent+styleHint.Render("  … "+strconv.Itoa(rest)+" more")))
 	}
 	return strings.Join(rows, "\n")
 }

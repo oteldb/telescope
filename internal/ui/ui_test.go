@@ -896,6 +896,67 @@ func TestPromptFitsTheContentBlock(t *testing.T) {
 	}
 }
 
+// TestStartScreenStartsNearTheTop: centering the block vertically left the
+// suggestions floating in the middle of a tall terminal, with a dozen unused
+// rows above them.
+func TestStartScreenStartsNearTheTop(t *testing.T) {
+	values := make([]string, 8)
+	for i := range values {
+		values[i] = "ns/pod-" + strconv.Itoa(i)
+	}
+	m := send(t, New(), size(), k("enter"))
+	m = send(t, m, candidates(m, values...))
+	m = send(t, m, tea.WindowSizeMsg{Width: 120, Height: 60})
+
+	lines := strings.Split(screen(t, m), "\n")
+	require.Len(t, lines, 60, "the screen fills the window exactly")
+	blank := 0
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			break
+		}
+		blank++
+	}
+	require.LessOrEqual(t, blank, maxTopPad)
+}
+
+// TestSuggestionsOutgrowThePromptBar: a wide terminal has room for a pod name
+// with a container, which used to be truncated to the width of the bar.
+func TestSuggestionsOutgrowThePromptBar(t *testing.T) {
+	const long = "storage/oteldb-clickhouse-57784dbf84-htwbk:clickhouse-server"
+
+	m := send(t, New(), size(), k("enter"))
+	m = send(t, m, candidates(m, long))
+	m = send(t, m, tea.WindowSizeMsg{Width: 280, Height: 40})
+
+	start := m.(Model).start
+	require.LessOrEqual(t, start.promptWidth(), maxPromptWidth, "the bar itself stays readable")
+	require.Greater(t, start.listWidth(), start.promptWidth())
+
+	var row, bar string
+	for line := range strings.SplitSeq(screen(t, m), "\n") {
+		switch {
+		case strings.Contains(line, long):
+			row = line
+		case strings.Contains(line, "❯"):
+			bar = line
+		}
+	}
+	require.NotEmpty(t, row, "the whole value is rendered, not truncated")
+	// The rows hang under the left edge of the bar rather than being centered
+	// on their own, so the list still reads as belonging to the input.
+	require.NotEmpty(t, bar)
+	// The bar's leading spaces stop at the box border, so its text starts three
+	// columns further right: the border and the "❯ " prompt. A row's leading
+	// spaces already include its two-column marker.
+	require.Equal(t, indentOf(bar)+3, indentOf(row),
+		"suggestions are aligned with the prompt text")
+}
+
+func indentOf(line string) int {
+	return len(line) - len(strings.TrimLeft(line, " "))
+}
+
 func TestCompletionListGrowsWithTheWindow(t *testing.T) {
 	values := make([]string, 40)
 	for i := range values {
