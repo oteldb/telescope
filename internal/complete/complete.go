@@ -17,6 +17,9 @@ const Timeout = 5 * time.Second
 // Candidate is one suggestion.
 type Candidate struct {
 	Value string
+	// State is the lifecycle word a collector reports for this candidate, kept
+	// apart from Detail so the view can color it. Empty when there is none.
+	State string
 	// Detail is shown dimmed next to the value, never inserted.
 	Detail string
 }

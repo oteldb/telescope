@@ -196,7 +196,7 @@ func parseUnit(line string) (Candidate, bool) {
 	}
 	c := Candidate{Value: strings.TrimSuffix(f[0], ".service")}
 	if len(f) >= 4 {
-		c.Detail = f[3]
+		c.State = f[3]
 	}
 	return c, true
 }
@@ -209,7 +209,7 @@ func parseUserUnit(line string) (Candidate, bool) {
 		return c, false
 	}
 	c.Value = source.UserUnitPrefix + c.Value
-	c.Detail = strings.TrimSuffix("user · "+c.Detail, " · ")
+	c.Detail = "user"
 	return c, true
 }
 
@@ -221,7 +221,7 @@ func parsePod(line string) (Candidate, bool) {
 	}
 	c := Candidate{Value: f[0] + "/" + f[1]}
 	if len(f) >= 3 {
-		c.Detail = f[2]
+		c.State = f[2]
 	}
 	return c, true
 }
@@ -234,7 +234,7 @@ func parseContainer(line string) (Candidate, bool) {
 	}
 	c := Candidate{Value: strings.TrimSpace(f[0])}
 	if len(f) >= 3 {
-		c.Detail = strings.TrimSpace(f[2]) + " · " + strings.TrimSpace(f[1])
+		c.State, c.Detail = strings.TrimSpace(f[2]), strings.TrimSpace(f[1])
 	}
 	return c, true
 }

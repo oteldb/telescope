@@ -716,7 +716,8 @@ func (m startModel) completions(limit int) string {
 	}
 	window := m.filtered[start : start+shown]
 
-	// Align the detail column against the widest value actually shown.
+	// Align the state and detail columns against the widest value actually
+	// shown.
 	valueWidth := 0
 	for _, c := range window {
 		valueWidth = max(valueWidth, lipgloss.Width(c.Value))
@@ -730,9 +731,9 @@ func (m startModel) completions(limit int) string {
 			marker, value = styleSelected.Render("▎ "), styleSelected.Render(c.Value)
 		}
 		row := marker + value
-		if c.Detail != "" {
+		if c.State != "" || c.Detail != "" {
 			pad := max(valueWidth-lipgloss.Width(c.Value), 0)
-			row += strings.Repeat(" ", pad) + styleDim.Render("  "+c.Detail)
+			row += strings.Repeat(" ", pad) + "  " + renderDetail(c)
 		}
 		// Truncate rather than let the block wrap: a long image name would
 		// otherwise push the rest of the list down.
@@ -742,6 +743,19 @@ func (m startModel) completions(limit int) string {
 		rows = append(rows, block.Render(styleHint.Render("  … "+strconv.Itoa(rest)+" more")))
 	}
 	return strings.Join(rows, "\n")
+}
+
+// renderDetail joins a candidate's state and detail, coloring the state by
+// what it means.
+func renderDetail(c complete.Candidate) string {
+	switch {
+	case c.State == "":
+		return styleDim.Render(c.Detail)
+	case c.Detail == "":
+		return renderState(c.State)
+	default:
+		return renderState(c.State) + styleDim.Render(" · "+c.Detail)
+	}
 }
 
 // hints shows step-appropriate examples, in the spirit of a search landing page.

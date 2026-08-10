@@ -51,7 +51,7 @@ func TestParsers(t *testing.T) {
 	t.Run("unit", func(t *testing.T) {
 		c, ok := parseUnit("nginx.service loaded active running A web server")
 		require.True(t, ok)
-		require.Equal(t, Candidate{Value: "nginx", Detail: "running"}, c)
+		require.Equal(t, Candidate{Value: "nginx", State: "running"}, c)
 
 		_, ok = parseUnit("sys-devices.device loaded active plugged")
 		require.False(t, ok, "only services are offered")
@@ -62,7 +62,7 @@ func TestParsers(t *testing.T) {
 	t.Run("pod", func(t *testing.T) {
 		c, ok := parsePod("oteldb   oteldb-0   Running")
 		require.True(t, ok)
-		require.Equal(t, Candidate{Value: "oteldb/oteldb-0", Detail: "Running"}, c)
+		require.Equal(t, Candidate{Value: "oteldb/oteldb-0", State: "Running"}, c)
 
 		_, ok = parsePod("lonely")
 		require.False(t, ok)
@@ -70,7 +70,7 @@ func TestParsers(t *testing.T) {
 	t.Run("container", func(t *testing.T) {
 		c, ok := parseContainer("app\tapp:latest\trunning")
 		require.True(t, ok)
-		require.Equal(t, Candidate{Value: "app", Detail: "running · app:latest"}, c)
+		require.Equal(t, Candidate{Value: "app", State: "running", Detail: "app:latest"}, c)
 
 		_, ok = parseContainer("\t \t")
 		require.False(t, ok)
@@ -132,8 +132,8 @@ func TestListMergesSources(t *testing.T) {
 	got, err := list(t.Context(), Request{Collector: source.CollectorJournal})
 	require.NoError(t, err)
 	require.Equal(t, []Candidate{
-		{Value: "sshd", Detail: "running"},
-		{Value: "user/syncthing", Detail: "user · running"},
+		{Value: "sshd", State: "running"},
+		{Value: "user/syncthing", State: "running", Detail: "user"},
 	}, got)
 }
 
@@ -249,9 +249,9 @@ func TestKubeConfigProbe(t *testing.T) {
 func TestParseUserUnit(t *testing.T) {
 	c, ok := parseUserUnit("syncthing.service loaded active running Sync")
 	require.True(t, ok)
-	require.Equal(t, Candidate{Value: "user/syncthing", Detail: "user · running"}, c)
+	require.Equal(t, Candidate{Value: "user/syncthing", State: "running", Detail: "user"}, c)
 
-	// A line without a state column must not leave a dangling separator.
+	// A line without a state column still says where the unit lives.
 	c, ok = parseUserUnit("syncthing.service loaded")
 	require.True(t, ok)
 	require.Equal(t, Candidate{Value: "user/syncthing", Detail: "user"}, c)

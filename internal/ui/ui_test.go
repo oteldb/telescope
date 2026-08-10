@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/go-faster/errors"
 	"github.com/stretchr/testify/require"
@@ -419,6 +420,50 @@ func TestPromptDoesNotShiftWhileTyping(t *testing.T) {
 		require.Equal(t, want, leftEdge(screen(t, m)),
 			"prompt moved after typing %q", string(r))
 	}
+}
+
+// TestStateColors checks that lifecycle words are colored by meaning, and that
+// the resting states stay dim so a mostly-stopped list is not a wall of red.
+func TestStateColors(t *testing.T) {
+	green := lipgloss.NewStyle().Foreground(colorOK).Render("x")
+	red := lipgloss.NewStyle().Foreground(colorErr).Render("x")
+	amber := lipgloss.NewStyle().Foreground(colorWarn).Render("x")
+	dim := styleDim.Render("x")
+
+	color := func(s string) string {
+		return strings.Replace(renderState(s), s, "x", 1)
+	}
+	for _, tt := range []struct {
+		state string
+		want  string
+	}{
+		{"running", green},
+		{"active", green},
+		{"Running", green},
+		{"failed", red},
+		{"CrashLoopBackOff", red},
+		{"pending", amber},
+		{"Pending", amber},
+		// systemd calls an ordinary stopped unit dead; coloring it red would
+		// make most of the journal list look broken.
+		{"dead", dim},
+		{"exited", dim},
+		{"whatever", dim},
+	} {
+		t.Run(tt.state, func(t *testing.T) {
+			require.Equal(t, tt.want, color(tt.state))
+		})
+	}
+	require.Empty(t, renderState(""))
+}
+
+func TestRenderDetail(t *testing.T) {
+	require.Equal(t, styleDim.Render("default"),
+		renderDetail(complete.Candidate{Detail: "default"}))
+	require.Equal(t, renderState("running"),
+		renderDetail(complete.Candidate{State: "running"}))
+	require.Equal(t, renderState("running")+styleDim.Render(" · app:latest"),
+		renderDetail(complete.Candidate{State: "running", Detail: "app:latest"}))
 }
 
 // TestRowsWidenWithTheTerminal checks that a long value keeps its detail
