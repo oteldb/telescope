@@ -33,12 +33,6 @@ type Endpoint struct {
 	// a file, or a command such as a keyring lookup.
 	Token Token `yaml:"token,omitempty"`
 
-	// TokenEnv and TokenFile are the spellings token replaced. They are read
-	// only to say so: a key that is silently ignored looks like an endpoint
-	// with no credentials at all.
-	TokenEnv  string `yaml:"token_env,omitempty"`
-	TokenFile string `yaml:"token_file,omitempty"`
-
 	// Tenant selects one tenant of a multi-tenant database, "AccountID:ProjectID"
 	// for VictoriaLogs.
 	Tenant string            `yaml:"tenant,omitempty"`
@@ -88,12 +82,6 @@ func (e Endpoint) Validate() error {
 	}
 	if !source.Collector(e.Type).IsRemoteAPI() {
 		return errors.Errorf("type must be victorialogs or loki, not %q", e.Type)
-	}
-	if e.TokenEnv != "" {
-		return errors.Errorf("token_env is now token: {env: %s}", e.TokenEnv)
-	}
-	if e.TokenFile != "" {
-		return errors.Errorf("token_file is now token: {file: %s}", e.TokenFile)
 	}
 	return e.Token.Validate()
 }

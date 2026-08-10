@@ -165,14 +165,6 @@ endpoints:
       file: /b
 sources: []
 `, "token names env and file"},
-		{"the spelling token replaced", `
-endpoints:
-  - name: prod
-    type: victorialogs
-    url: https://logs.example.com
-    token_env: GRAFANA_TOKEN
-sources: []
-`, "token_env is now token: {env: GRAFANA_TOKEN}"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := loadFrom(write(t, tt.content))
