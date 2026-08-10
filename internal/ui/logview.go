@@ -37,7 +37,7 @@ type logModel struct {
 
 func newLogs(cfg source.Config, store *logs.Store, query string) logModel {
 	ti := textinput.New()
-	ti.Prompt = "/"
+	ti.Prompt = "❯ "
 	ti.PromptStyle = lipgloss.NewStyle().Foreground(colorAccent)
 	ti.Placeholder = "grep term or regexp"
 	ti.SetValue(query)
@@ -57,12 +57,15 @@ func (m *logModel) resize(w, h int) { m.w, m.h = w, h }
 // bodyHeight is the number of log lines that fit in the framed view.
 func (m logModel) bodyHeight() int {
 	// 4 lines of top bar (2 borders, 2 rows), 2 lines of log frame border,
-	// 1 footer line.
-	if h := m.h - 7; h > 0 {
+	// 1 filter bar, 1 help line.
+	if h := m.h - 8; h > 0 {
 		return h
 	}
 	return 1
 }
+
+// width is the usable width once the screen padding is taken out.
+func (m logModel) width() int { return max(m.w-2*screenPad, 20) }
 
 func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 	km, ok := msg.(tea.KeyMsg)
@@ -163,7 +166,7 @@ func (m logModel) View() string {
 		top = m.cursor - height + 1
 	}
 
-	inner := max(m.w-4, 10)
+	inner := max(m.width()-2, 10)
 	body := make([]string, 0, height)
 	for i := top; i < len(entries) && i < top+height; i++ {
 		body = append(body, renderLine(entries[i], i == m.cursor, m.hoff, inner))
@@ -172,11 +175,33 @@ func (m logModel) View() string {
 		body = append(body, "")
 	}
 
-	return strings.Join([]string{
+	return padScreen(strings.Join([]string{
 		m.topBar(entries),
-		styleBox.Width(m.w - 2).Render(strings.Join(body, "\n")),
+		styleBox.Width(m.width()).Render(strings.Join(body, "\n")),
+		m.filterBar(),
 		m.footer(entries),
-	}, "\n")
+	}, "\n"))
+}
+
+// filterBar shows where the stream comes from and what it reads as colored
+// chips, followed by the grep filter.
+func (m logModel) filterBar() string {
+	where := "local"
+	if m.cfg.Transport == source.TransportSSH {
+		where = strings.TrimSpace(m.cfg.Host)
+	}
+	chips := styleChipWhere.Render(where) + styleChipActive.Render(string(m.cfg.Collector))
+
+	var input string
+	switch {
+	case m.searching:
+		input = m.search.View()
+	case m.view.Filter().Query != "":
+		input = styleFilter.Render(m.view.Filter().Query)
+	default:
+		input = styleHint.Render("/ to filter")
+	}
+	return ansi.Truncate(chips+"  "+input, m.width(), "…")
 }
 
 // renderLine renders one entry, ANSI colors intact, honoring the horizontal
@@ -215,10 +240,10 @@ func (m logModel) topBar(entries []*logs.Entry) string {
 	stats = append(stats, "follow "+onOff(m.follow))
 	stats = append(stats, m.statusText())
 
+	inner := max(m.width()-2, 1)
 	line := styleDim.Render(strings.Join(stats, " · "))
-	return styleBox.Width(m.w - 2).Render(
-		ansi.Truncate(title, max(m.w-4, 1), "…") + "\n" +
-			ansi.Truncate(line, max(m.w-4, 1), "…"),
+	return styleBox.Width(m.width()).Render(
+		ansi.Truncate(title, inner, "…") + "\n" + ansi.Truncate(line, inner, "…"),
 	)
 }
 
@@ -235,7 +260,10 @@ func (m logModel) statusText() string {
 
 func (m logModel) footer(entries []*logs.Entry) string {
 	if m.searching {
-		return m.search.View()
+		return ansi.Truncate(strings.Join([]string{
+			key("enter", "apply"),
+			key("esc", "cancel"),
+		}, styleHint.Render(" · ")), m.width(), "")
 	}
 	help := strings.Join([]string{
 		key("↑↓", "move"),
@@ -250,7 +278,7 @@ func (m logModel) footer(entries []*logs.Entry) string {
 	if len(entries) == 0 && m.store.Len() > 0 {
 		help = styleHint.Render("no lines match · ") + help
 	}
-	return ansi.Truncate(help, max(m.w-1, 1), "")
+	return ansi.Truncate(help, m.width(), "")
 }
 
 // timeRange summarizes the time span covered by the visible entries.

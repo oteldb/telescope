@@ -2,10 +2,20 @@ package ui
 
 import "github.com/charmbracelet/lipgloss"
 
+// screenPad is the horizontal breathing room kept around every view.
+const screenPad = 2
+
+// padScreen indents a rendered view away from the terminal edges.
+func padScreen(s string) string {
+	return lipgloss.NewStyle().PaddingLeft(screenPad).Render(s)
+}
+
 // Palette.
 var (
 	colorAccent = lipgloss.AdaptiveColor{Light: "#8250df", Dark: "#a78bfa"}
 	colorMuted  = lipgloss.AdaptiveColor{Light: "#6e7781", Dark: "#6b7280"}
+	colorText   = lipgloss.AdaptiveColor{Light: "#1f2328", Dark: "#e5e7eb"}
+	colorWhere  = lipgloss.AdaptiveColor{Light: "#0969da", Dark: "#38bdf8"}
 	colorErr    = lipgloss.AdaptiveColor{Light: "#cf222e", Dark: "#f87171"}
 	colorOK     = lipgloss.AdaptiveColor{Light: "#1a7f37", Dark: "#4ade80"}
 	colorBorder = lipgloss.AdaptiveColor{Light: "#d0d7de", Dark: "#3f3f46"}
@@ -35,6 +45,15 @@ var (
 			Foreground(lipgloss.Color("#ffffff")).
 			Background(colorAccent).
 			Bold(true)
+
+	// styleChipWhere labels where a stream comes from, next to what it reads.
+	styleChipWhere = lipgloss.NewStyle().
+			Padding(0, 1).
+			Foreground(lipgloss.Color("#ffffff")).
+			Background(colorWhere).
+			Bold(true)
+
+	styleFilter = lipgloss.NewStyle().Foreground(colorText)
 
 	styleTitle    = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	styleSelected = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)

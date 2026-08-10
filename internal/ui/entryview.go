@@ -59,8 +59,8 @@ func (m entryModel) View() string {
 	if m.entry == nil {
 		return ""
 	}
-	inner := max(m.w-4, 20)
-	lines := m.lines(inner)
+	width := max(m.w-2*screenPad, 20)
+	lines := m.lines(max(width-2, 18))
 
 	height := m.bodyHeight()
 	off := min(m.off, max(len(lines)-height, 0))
@@ -75,8 +75,8 @@ func (m entryModel) View() string {
 		key("q", "quit"),
 	}, styleHint.Render(" · "))
 
-	return styleBoxFocus.Width(m.w-2).Render(strings.Join(window, "\n")) + "\n" +
-		ansi.Truncate(help, max(m.w-1, 1), "")
+	return padScreen(styleBoxFocus.Width(width).Render(strings.Join(window, "\n")) + "\n" +
+		ansi.Truncate(help, width, ""))
 }
 
 // lines renders the entry as a scrollable document.

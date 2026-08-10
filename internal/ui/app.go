@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/go-faster/errors"
 
+	"github.com/oteldb/telescope/internal/complete"
 	"github.com/oteldb/telescope/internal/logs"
 	"github.com/oteldb/telescope/internal/source"
 )
@@ -46,9 +47,17 @@ func New() Model {
 
 // Init implements [tea.Model].
 //
-// No completion is requested here: the first step opens on the local transport,
-// which has no host to complete. Every later step fetches on entry.
-func (m Model) Init() tea.Cmd { return textinputBlink }
+// The ssh host list is preloaded even though the first step opens on the local
+// transport, so switching to ssh never waits. The request is built inline
+// rather than through the start model because Init cannot record bookkeeping
+// on its value receiver; the reply is cached by key when it lands.
+func (m Model) Init() tea.Cmd {
+	req := complete.Request{Field: complete.FieldHost}
+	return tea.Batch(textinputBlink, func() tea.Msg {
+		items, err := fetcher(context.Background(), req)
+		return candidatesMsg{key: req.Key(), items: items, err: err}
+	})
+}
 
 // Update implements [tea.Model].
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

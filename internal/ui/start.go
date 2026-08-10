@@ -85,6 +85,18 @@ type startModel struct {
 	sel     int
 	loading bool
 	candErr error
+
+	// cache holds every completion result seen so far, keyed by request, so
+	// stepping back and forth never waits on a listing twice.
+	cache map[string]cacheEntry
+	// inflight tracks requests already asked for, including preloads.
+	inflight map[string]bool
+}
+
+// cacheEntry is one completed lookup, successful or not.
+type cacheEntry struct {
+	items []complete.Candidate
+	err   error
 }
 
 func newStart() startModel {
@@ -97,12 +109,14 @@ func newStart() startModel {
 		return ti
 	}
 	m := startModel{
-		host:   mk("user@host"),
-		target: mk(""),
-		query:  mk("grep term or regexp, empty for everything"),
-		tail:   1000,
-		follow: true,
-		sel:    -1,
+		host:     mk("user@host"),
+		target:   mk(""),
+		query:    mk("grep term or regexp, empty for everything"),
+		tail:     1000,
+		follow:   true,
+		sel:      -1,
+		cache:    map[string]cacheEntry{},
+		inflight: map[string]bool{},
 	}
 	m.syncPlaceholder()
 	m.focus()
@@ -129,20 +143,84 @@ func (m startModel) request() (complete.Request, bool) {
 	}
 }
 
-// fetch discards the current suggestions and asks for the ones the step needs.
+// fetch shows the suggestions for the current step, from cache when possible,
+// and preloads the ones the next keystroke is likely to need.
 func (m *startModel) fetch() tea.Cmd {
 	m.candidates, m.filtered, m.candErr, m.sel = nil, nil, nil, -1
 
 	req, ok := m.request()
 	if !ok {
 		m.candKey, m.loading = "", false
+		return m.preload()
+	}
+	m.candKey = req.Key()
+
+	if e, cached := m.cache[m.candKey]; cached {
+		m.loading = false
+		m.candidates, m.candErr = e.items, e.err
+		m.refilter()
+		return m.preload()
+	}
+	m.loading = true
+	return tea.Batch(m.requestCmd(req), m.preload())
+}
+
+// requestCmd asks for one result set, unless it is already on its way.
+func (m *startModel) requestCmd(req complete.Request) tea.Cmd {
+	key := req.Key()
+	if m.inflight[key] {
 		return nil
 	}
-	m.candKey, m.loading = req.Key(), true
+	m.inflight[key] = true
 	return func() tea.Msg {
 		items, err := fetcher(context.Background(), req)
-		return candidatesMsg{key: req.Key(), items: items, err: err}
+		return candidatesMsg{key: key, items: items, err: err}
 	}
+}
+
+// preload warms the result sets the user has not asked for yet: the ssh hosts
+// while the transport is still being chosen, and every collector once the
+// transport is known. Listings are slow enough that switching chips would
+// otherwise stall on each one in turn.
+func (m *startModel) preload() tea.Cmd {
+	var cmds []tea.Cmd
+	queue := func(req complete.Request) {
+		if _, cached := m.cache[req.Key()]; cached {
+			return
+		}
+		if cmd := m.requestCmd(req); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
+	switch m.step {
+	case stepTransport:
+		// Reading ssh_config is cheap; do it even while local is selected.
+		queue(complete.Request{Field: complete.FieldHost})
+	case stepCollector:
+		for _, c := range collectors {
+			queue(complete.Request{
+				Field:     complete.FieldTarget,
+				Transport: transports[m.transport],
+				Host:      strings.TrimSpace(m.host.Value()),
+				Collector: c,
+			})
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+// refresh drops the cached result for the current step and asks again.
+func (m *startModel) refresh() tea.Cmd {
+	req, ok := m.request()
+	if !ok {
+		return nil
+	}
+	delete(m.cache, req.Key())
+	delete(m.inflight, req.Key())
+	m.candidates, m.filtered, m.candErr, m.sel = nil, nil, nil, -1
+	m.loading = true
+	return m.requestCmd(req)
 }
 
 // fetcher resolves completions. It is a variable so tests can avoid running
@@ -236,6 +314,9 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 		m.w, m.h = msg.Width, msg.Height
 		return m, nil
 	case candidatesMsg:
+		// Every reply is cached, including preloads for steps not yet visited.
+		m.cache[msg.key] = cacheEntry{items: msg.items, err: msg.err}
+		delete(m.inflight, msg.key)
 		if msg.key != m.candKey {
 			return m, nil
 		}
@@ -272,6 +353,8 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 			if n := m.choices(); n > 0 && (msg.String() == "shift+tab" || !m.active()) {
 				return m, m.cycle(-1)
 			}
+		case "ctrl+r":
+			return m, m.refresh()
 		case "ctrl+f":
 			m.follow = !m.follow
 			return m, nil
@@ -461,10 +544,11 @@ func (m startModel) help() string {
 	if len(m.filtered) > 0 {
 		parts = []string{key("↑↓", "suggestions"), key("tab", "complete")}
 	}
-	return strings.Join(append(parts,
-		key("enter", "next"),
-		key("esc", "back"),
-	), styleHint.Render(" · "))
+	parts = append(parts, key("enter", "next"), key("esc", "back"))
+	if _, ok := m.request(); ok {
+		parts = append(parts, key("ctrl+r", "refresh"))
+	}
+	return strings.Join(parts, styleHint.Render(" · "))
 }
 
 func tailLabel(n int) string {

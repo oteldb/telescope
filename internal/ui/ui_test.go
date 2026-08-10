@@ -182,6 +182,109 @@ func TestHostCompletionOnlyForSSH(t *testing.T) {
 	require.Equal(t, "host", m.(Model).start.candKey)
 }
 
+// countingFetcher records how many times each request key was looked up.
+func countingFetcher(t *testing.T, items ...string) *map[string]int {
+	t.Helper()
+	calls := map[string]int{}
+	prev := fetcher
+	fetcher = func(_ context.Context, r complete.Request) ([]complete.Candidate, error) {
+		calls[r.Key()]++
+		out := make([]complete.Candidate, 0, len(items))
+		for _, v := range items {
+			out = append(out, complete.Candidate{Value: v})
+		}
+		return out, nil
+	}
+	t.Cleanup(func() { fetcher = prev })
+	return &calls
+}
+
+// run executes the commands a model returns, so preloads actually happen.
+func runCmds(m tea.Model, cmd tea.Cmd) tea.Model {
+	if cmd == nil {
+		return m
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		for _, c := range msg {
+			m = runCmds(m, c)
+		}
+	case candidatesMsg:
+		m, _ = m.Update(msg)
+	}
+	return m
+}
+
+func TestCompletionPreloadsAndCaches(t *testing.T) {
+	calls := countingFetcher(t, "alpha")
+
+	m, cmd := New().Update(size())
+	m, cmd = m.Update(k("enter")) // into the collector step
+	m = runCmds(m, cmd)
+
+	// Every collector was warmed, not just the selected one.
+	require.Positive(t, (*calls)["local||journalctl"])
+	require.Positive(t, (*calls)["local||docker"])
+	require.Positive(t, (*calls)["local||kubectl"])
+
+	// Walking the chips and stepping back and forth must hit the cache. Going
+	// back to the transport step additionally warms the host list.
+	for range 3 {
+		m, cmd = m.Update(k("tab"))
+		m = runCmds(m, cmd)
+	}
+	m, cmd = m.Update(k("esc"))
+	m = runCmds(m, cmd)
+	m, cmd = m.Update(k("enter"))
+	m = runCmds(m, cmd)
+
+	require.ElementsMatch(t,
+		[]string{"host", "local||journalctl", "local||kubectl", "local||docker", "local||command"},
+		keysOf(*calls))
+	for key, n := range *calls {
+		require.Equal(t, 1, n, "%s was looked up more than once", key)
+	}
+	require.Contains(t, screen(t, m), "alpha", "cached suggestions render immediately")
+}
+
+func TestCompletionRefreshDropsCache(t *testing.T) {
+	calls := countingFetcher(t, "alpha")
+
+	m, cmd := New().Update(size())
+	m, cmd = m.Update(k("enter"))
+	m = runCmds(m, cmd)
+	require.Equal(t, 1, (*calls)["local||journalctl"])
+
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	m = runCmds(m, cmd)
+	require.Equal(t, 2, (*calls)["local||journalctl"], "refresh re-runs the listing")
+}
+
+func TestHostsPreloadedAtInit(t *testing.T) {
+	calls := countingFetcher(t, "node1")
+
+	m := New()
+	m2 := runCmds(m, m.Init())
+	m2, cmd := m2.Update(size())
+	m2 = runCmds(m2, cmd)
+
+	require.Equal(t, 1, (*calls)["host"])
+
+	// Switching to ssh shows them without another lookup.
+	m2, cmd = m2.Update(k("tab"))
+	m2 = runCmds(m2, cmd)
+	require.Equal(t, 1, (*calls)["host"])
+	require.Contains(t, screen(t, m2), "node1")
+}
+
+func keysOf(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 // TestUserUnitReachesCommand checks that the user/ prefix survives the whole
 // way from a suggestion to the journalctl invocation.
 func TestUserUnitReachesCommand(t *testing.T) {
