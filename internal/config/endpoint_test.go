@@ -232,3 +232,30 @@ sources:
 	require.Equal(t, source.CollectorLoki, stream.Collector)
 	require.Equal(t, `{app="api"}`, stream.Target)
 }
+
+// TestEndpointProxy: a corporate endpoint may need a proxy of its own, and a
+// mistyped one is a mistake in the file rather than a silent direct connection.
+func TestEndpointProxy(t *testing.T) {
+	cfg, err := loadFrom(write(t, `
+endpoints:
+  - name: corp
+    type: victorialogs
+    url: https://logs.corp.example.com
+    proxy: socks5h://127.0.0.1:1080
+sources: []
+`))
+	require.NoError(t, err)
+	endpoints, err := cfg.Resolved()
+	require.NoError(t, err)
+	require.Equal(t, "socks5h://127.0.0.1:1080", endpoints[0].Proxy)
+
+	_, err = loadFrom(write(t, `
+endpoints:
+  - name: corp
+    type: victorialogs
+    url: https://logs.corp.example.com
+    proxy: "://nonsense"
+sources: []
+`))
+	require.ErrorContains(t, err, "cannot use proxy")
+}
