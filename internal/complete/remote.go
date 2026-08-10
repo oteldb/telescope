@@ -2,6 +2,7 @@ package complete
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/go-faster/errors"
@@ -12,12 +13,49 @@ import (
 // maxCandidates caps a listing so a large cluster cannot flood the prompt.
 const maxCandidates = 5000
 
+// guard makes cmd fail fast, with an explanation instead of a bare exit code,
+// when check does not succeed. It runs on the host the listing targets, so a
+// tool missing on a remote node costs one round trip and nothing more.
+//
+// Guards catch what is knowable cheaply: a tool that is not installed, a
+// kubeconfig with no context. They cannot catch an unreachable cluster, which
+// has a perfectly valid context and only reveals itself by hanging; that case
+// is bounded by [Timeout] instead.
+func guard(check, msg, cmd string) string {
+	return fmt.Sprintf("%s >/dev/null 2>&1 || { echo %q >&2; exit 1; }; %s", check, msg, cmd)
+}
+
 // listSource is one command producing candidates.
 type listSource struct {
-	// cmd is run through the request's transport.
-	cmd string
+	// build returns the command to run through the request's transport. It
+	// takes the request because privileges and the kubeconfig change it.
+	build func(r Request) string
 	// parse turns one output line into a candidate.
 	parse func(line string) (Candidate, bool)
+}
+
+// static is a listing command that does not depend on the request.
+func static(cmd string) func(Request) string {
+	return func(Request) string { return cmd }
+}
+
+// sudo prefixes a command when the request asks for elevation. The tool is
+// named directly so a sudoers rule for it applies; see [source.Config.Command].
+func sudo(r Request, cmd string) string {
+	if r.Elevate {
+		return "sudo -n " + cmd
+	}
+	return cmd
+}
+
+// kubectl is the kubectl invocation a request implies, honoring elevation and
+// the chosen kubeconfig.
+func kubectl(r Request) string {
+	cmd := sudo(r, "kubectl")
+	if k := strings.TrimSpace(r.KubeConfig); k != "" {
+		cmd += " --kubeconfig=" + source.Quote(k)
+	}
+	return cmd
 }
 
 // lister enumerates the targets of one collector. Several sources are merged
@@ -39,25 +77,51 @@ const userBus = `XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" `
 // offer no completion.
 var listers = map[source.Collector]lister{
 	source.CollectorJournal: {sources: []listSource{
-		{cmd: "systemctl" + unitFields, parse: parseUnit},
-		{cmd: userBus + "systemctl --user" + unitFields, parse: parseUserUnit},
+		{
+			build: func(r Request) string {
+				return guard(haveSystemctl, noSystemctl, sudo(r, "systemctl")+unitFields)
+			},
+			parse: parseUnit,
+		},
+		{
+			// The user manager is never elevated: sudo would reach root's
+			// session, not the one whose logs are being read.
+			build: static(guard(haveSystemctl, noSystemctl, userBus+"systemctl --user"+unitFields)),
+			parse: parseUserUnit,
+		},
 	}},
 	source.CollectorKubectl: {sources: []listSource{{
-		cmd: "kubectl get pods --all-namespaces --no-headers " +
-			"-o custom-columns=:.metadata.namespace,:.metadata.name,:.status.phase",
+		build: func(r Request) string {
+			k := kubectl(r)
+			return guard("command -v kubectl", "kubectl is not installed",
+				guard(k+" config current-context", "no kubernetes context is configured",
+					k+" get pods --all-namespaces --no-headers "+
+						"-o custom-columns=:.metadata.namespace,:.metadata.name,:.status.phase"))
+		},
 		parse: parsePod,
 	}}},
 	source.CollectorDocker: {sources: []listSource{{
-		cmd:   `docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.State}}'`,
+		build: func(r Request) string {
+			return guard("command -v docker", "docker is not installed",
+				sudo(r, "docker")+` ps -a --format '{{.Names}}\t{{.Image}}\t{{.State}}'`)
+		},
 		parse: parseContainer,
 	}}},
 }
+
+const (
+	haveSystemctl = "command -v systemctl"
+	noSystemctl   = "systemctl is not installed"
+)
 
 // list merges every source of the collector's lister. An error is only
 // reported when nothing at all could be listed: a host without a user session
 // still completes its system units.
 func list(ctx context.Context, r Request) ([]Candidate, error) {
 	l, ok := listers[r.Collector]
+	if r.Field == FieldKubeConfig {
+		l, ok = kubeConfigLister, true
+	}
 	if !ok {
 		return nil, nil
 	}
@@ -88,7 +152,7 @@ func run(ctx context.Context, r Request, src listSource, limit int) ([]Candidate
 		Transport: r.Transport,
 		Host:      r.Host,
 		Collector: source.CollectorCommand,
-		Args:      src.cmd,
+		Args:      src.build(r),
 	})
 	if err != nil {
 		return nil, err

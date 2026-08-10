@@ -3,6 +3,7 @@ package complete
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -29,6 +30,8 @@ const (
 	FieldHost Field = iota
 	// FieldTarget completes the collector's target: a unit, a pod or a container.
 	FieldTarget
+	// FieldKubeConfig completes kubeconfig paths found on the host.
+	FieldKubeConfig
 )
 
 // Request describes what to complete and where to look for it.
@@ -37,6 +40,11 @@ type Request struct {
 	Transport source.Transport
 	Host      string
 	Collector source.Collector
+
+	// Elevate and KubeConfig mirror the stream config, so a listing runs with
+	// the same privileges and against the same cluster as the logs will.
+	Elevate    bool
+	KubeConfig string
 }
 
 // Key identifies the result set, so it can be cached and stale replies dropped.
@@ -44,7 +52,8 @@ func (r Request) Key() string {
 	if r.Field == FieldHost {
 		return "host"
 	}
-	return string(r.Transport) + "|" + r.Host + "|" + string(r.Collector)
+	return fmt.Sprintf("%d|%s|%s|%s|%t|%s",
+		r.Field, r.Transport, r.Host, r.Collector, r.Elevate, r.KubeConfig)
 }
 
 // Fetch collects the candidates for r. Hosts are read locally; everything else

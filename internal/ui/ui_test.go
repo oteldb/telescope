@@ -45,6 +45,9 @@ func send(t *testing.T, m tea.Model, msgs ...tea.Msg) tea.Model {
 			m, _ = m.Update(out)
 		case backMsg:
 			m, _ = m.Update(out)
+		case connectMsg:
+			// Safe to apply: the stream command it returns is never run.
+			m, _ = m.Update(out)
 		}
 	}
 	return m
@@ -223,9 +226,9 @@ func TestCompletionPreloadsAndCaches(t *testing.T) {
 	m = runCmds(m, cmd)
 
 	// Every collector was warmed, not just the selected one.
-	require.Positive(t, (*calls)["local||journalctl"])
-	require.Positive(t, (*calls)["local||docker"])
-	require.Positive(t, (*calls)["local||kubectl"])
+	require.Positive(t, (*calls)[targetKey(source.CollectorJournal)])
+	require.Positive(t, (*calls)[targetKey(source.CollectorDocker)])
+	require.Positive(t, (*calls)[targetKey(source.CollectorKubectl)])
 
 	// Walking the chips and stepping back and forth must hit the cache. Going
 	// back to the transport step additionally warms the host list.
@@ -238,9 +241,13 @@ func TestCompletionPreloadsAndCaches(t *testing.T) {
 	m, cmd = m.Update(k("enter"))
 	m = runCmds(m, cmd)
 
-	require.ElementsMatch(t,
-		[]string{"host", "local||journalctl", "local||kubectl", "local||docker", "local||command"},
-		keysOf(*calls))
+	require.ElementsMatch(t, []string{
+		"host",
+		targetKey(source.CollectorJournal),
+		targetKey(source.CollectorKubectl),
+		targetKey(source.CollectorDocker),
+		targetKey(source.CollectorCommand),
+	}, keysOf(*calls))
 	for key, n := range *calls {
 		require.Equal(t, 1, n, "%s was looked up more than once", key)
 	}
@@ -253,11 +260,11 @@ func TestCompletionRefreshDropsCache(t *testing.T) {
 	m, cmd := New().Update(size())
 	m, cmd = m.Update(k("enter"))
 	m = runCmds(m, cmd)
-	require.Equal(t, 1, (*calls)["local||journalctl"])
+	require.Equal(t, 1, (*calls)[targetKey(source.CollectorJournal)])
 
 	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
 	m = runCmds(m, cmd)
-	require.Equal(t, 2, (*calls)["local||journalctl"], "refresh re-runs the listing")
+	require.Equal(t, 2, (*calls)[targetKey(source.CollectorJournal)], "refresh re-runs the listing")
 }
 
 func TestHostsPreloadedAtInit(t *testing.T) {
@@ -275,6 +282,15 @@ func TestHostsPreloadedAtInit(t *testing.T) {
 	m2 = runCmds(m2, cmd)
 	require.Equal(t, 1, (*calls)["host"])
 	require.Contains(t, screen(t, m2), "node1")
+}
+
+// targetKey is the completion cache key for a local collector listing.
+func targetKey(c source.Collector) string {
+	return complete.Request{
+		Field:     complete.FieldTarget,
+		Transport: source.TransportLocal,
+		Collector: c,
+	}.Key()
 }
 
 func keysOf(m map[string]int) []string {
@@ -296,6 +312,84 @@ func TestUserUnitReachesCommand(t *testing.T) {
 
 	m = send(t, m, k("enter"))
 	require.Contains(t, screen(t, m), "journalctl --user --no-pager -o cat -u syncthing")
+}
+
+// TestElevatedKubectlOverSSH walks the flow a root-only kubeconfig on a remote
+// node needs: ssh host, kubectl, sudo on, a typed config path, then a pod.
+func TestElevatedKubectlOverSSH(t *testing.T) {
+	m := send(t, New(), size(), k("tab")) // ssh
+	for _, r := range "node1" {
+		m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m = send(t, m, k("enter"), k("tab")) // collector step, kubectl
+
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlS})
+	require.True(t, m.(Model).start.elevate)
+
+	// ctrl+k swaps the bar over to the kubeconfig path.
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlK})
+	require.True(t, m.(Model).start.editKube)
+	require.Contains(t, screen(t, m), "kubeconfig")
+	for _, r := range "/etc/rancher/k3s/k3s.yaml" {
+		m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	// enter returns to the target rather than advancing the step.
+	m = send(t, m, k("enter"))
+	require.False(t, m.(Model).start.editKube)
+	require.Equal(t, stepCollector, m.(Model).start.step)
+
+	// The preview already shows what will run.
+	require.Contains(t, screen(t, m),
+		"sudo -n kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml")
+
+	for _, r := range "oteldb/oteldb-0" {
+		m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m = send(t, m, k("enter"), k("enter"))
+
+	cfg := m.(Model).logs.cfg
+	require.True(t, cfg.Elevate)
+	require.Equal(t, "/etc/rancher/k3s/k3s.yaml", cfg.KubeConfig)
+	require.Equal(t, "oteldb", cfg.Namespace)
+	require.Equal(t, "oteldb-0", cfg.Target)
+	require.Equal(t, []string{
+		"ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-tt", "node1",
+		"sudo -n kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml logs " +
+			"-n oteldb oteldb-0 --tail 1000 -f",
+	}, cfg.Argv())
+}
+
+// TestKubeConfigChangeRefetchesPods guards the ordering trap: pods listed
+// against the wrong cluster must not be reused once a config is chosen.
+func TestKubeConfigChangeRefetchesPods(t *testing.T) {
+	calls := countingFetcher(t, "ns/pod")
+
+	m, cmd := New().Update(size())
+	m, cmd = m.Update(k("enter"))
+	m = runCmds(m, cmd)
+	m, cmd = m.Update(k("tab")) // kubectl
+	m = runCmds(m, cmd)
+
+	before := (*calls)[targetKey(source.CollectorKubectl)]
+	require.Positive(t, before)
+
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	m = runCmds(m, cmd)
+	// Typing returns only a cursor blink; running it would sleep for real.
+	for _, r := range "/tmp/kube.yaml" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m, cmd = m.Update(k("enter"))
+	m = runCmds(m, cmd)
+
+	withConfig := complete.Request{
+		Field:      complete.FieldTarget,
+		Transport:  source.TransportLocal,
+		Collector:  source.CollectorKubectl,
+		KubeConfig: "/tmp/kube.yaml",
+	}.Key()
+	require.Positive(t, (*calls)[withConfig], "pods are listed again for the new config")
 }
 
 func TestStartRejectsEmptySSHHost(t *testing.T) {

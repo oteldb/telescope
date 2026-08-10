@@ -53,6 +53,49 @@ func TestConfigCommand(t *testing.T) {
 			want: "tail -F /var/log/app.log",
 		},
 		{
+			name: "kubectl with an explicit kubeconfig",
+			cfg: Config{
+				Collector: CollectorKubectl, Target: "oteldb-0", Namespace: "oteldb",
+				KubeConfig: "/etc/rancher/k3s/k3s.yaml", Follow: true,
+			},
+			want: "kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml logs -n oteldb oteldb-0 -f",
+		},
+		{
+			// sudo must name kubectl itself: a sudoers rule for the binary does
+			// not permit "sudo env" or "sudo sh -c".
+			name: "kubectl elevated",
+			cfg: Config{
+				Collector: CollectorKubectl, Target: "oteldb-0",
+				KubeConfig: "/etc/rancher/k3s/k3s.yaml", Elevate: true, Follow: true,
+			},
+			want: "sudo -n kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml logs oteldb-0 -f",
+		},
+		{
+			name: "journal elevated",
+			cfg:  Config{Collector: CollectorJournal, Unit: "kubelet", Elevate: true},
+			want: "sudo -n journalctl --no-pager -o cat -u kubelet",
+		},
+		{
+			name: "docker elevated",
+			cfg:  Config{Collector: CollectorDocker, Container: "app", Elevate: true},
+			want: "sudo -n docker logs app",
+		},
+		{
+			// A free-form command may contain pipes, so it is the one case that
+			// still needs a shell under sudo.
+			name: "raw command elevated",
+			cfg:  Config{Collector: CollectorCommand, Args: "cat /var/log/x | grep y", Elevate: true},
+			want: `sudo -n sh -c 'cat /var/log/x | grep y'`,
+		},
+		{
+			name: "kubeconfig with a space is quoted",
+			cfg: Config{
+				Collector: CollectorKubectl, Target: "p",
+				KubeConfig: "/home/me/my configs/kube.yaml",
+			},
+			want: `kubectl --kubeconfig='/home/me/my configs/kube.yaml' logs p`,
+		},
+		{
 			name: "quotes unsafe unit",
 			cfg:  Config{Collector: CollectorJournal, Unit: "weird unit"},
 			want: "journalctl --no-pager -o cat -u 'weird unit'",

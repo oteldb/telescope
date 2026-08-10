@@ -69,9 +69,17 @@ type startModel struct {
 	transport int
 	collector int
 
-	host   textinput.Model
-	target textinput.Model
-	query  textinput.Model
+	host       textinput.Model
+	target     textinput.Model
+	query      textinput.Model
+	kubeconfig textinput.Model
+
+	// editKube swaps the prompt bar over to the kubeconfig path while the
+	// collector step is open, so the pod listing can be re-run against it
+	// before a target is typed.
+	editKube bool
+	// elevate runs the collector, and its listings, under sudo.
+	elevate bool
 
 	tail   int
 	follow bool
@@ -109,14 +117,15 @@ func newStart() startModel {
 		return ti
 	}
 	m := startModel{
-		host:     mk("user@host"),
-		target:   mk(""),
-		query:    mk("grep term or regexp, empty for everything"),
-		tail:     1000,
-		follow:   true,
-		sel:      -1,
-		cache:    map[string]cacheEntry{},
-		inflight: map[string]bool{},
+		host:       mk("user@host"),
+		target:     mk(""),
+		query:      mk("grep term or regexp, empty for everything"),
+		kubeconfig: mk("path to kubeconfig, e.g. /etc/rancher/k3s/k3s.yaml"),
+		tail:       1000,
+		follow:     true,
+		sel:        -1,
+		cache:      map[string]cacheEntry{},
+		inflight:   map[string]bool{},
 	}
 	m.syncPlaceholder()
 	m.focus()
@@ -132,12 +141,18 @@ func (m startModel) request() (complete.Request, bool) {
 		}
 		return complete.Request{Field: complete.FieldHost}, true
 	case stepCollector:
-		return complete.Request{
-			Field:     complete.FieldTarget,
-			Transport: transports[m.transport],
-			Host:      strings.TrimSpace(m.host.Value()),
-			Collector: collectors[m.collector],
-		}, true
+		req := complete.Request{
+			Field:      complete.FieldTarget,
+			Transport:  transports[m.transport],
+			Host:       strings.TrimSpace(m.host.Value()),
+			Collector:  collectors[m.collector],
+			Elevate:    m.elevate,
+			KubeConfig: strings.TrimSpace(m.kubeconfig.Value()),
+		}
+		if m.editKube {
+			req.Field, req.Collector = complete.FieldKubeConfig, source.CollectorKubectl
+		}
+		return req, true
 	default:
 		return complete.Request{}, false
 	}
@@ -200,10 +215,12 @@ func (m *startModel) preload() tea.Cmd {
 	case stepCollector:
 		for _, c := range collectors {
 			queue(complete.Request{
-				Field:     complete.FieldTarget,
-				Transport: transports[m.transport],
-				Host:      strings.TrimSpace(m.host.Value()),
-				Collector: c,
+				Field:      complete.FieldTarget,
+				Transport:  transports[m.transport],
+				Host:       strings.TrimSpace(m.host.Value()),
+				Collector:  c,
+				Elevate:    m.elevate,
+				KubeConfig: strings.TrimSpace(m.kubeconfig.Value()),
 			})
 		}
 	}
@@ -249,14 +266,21 @@ func (m *startModel) accept() {
 
 // input returns the text input backing the current step.
 func (m *startModel) input() *textinput.Model {
-	switch m.step {
-	case stepTransport:
+	switch {
+	case m.step == stepTransport:
 		return &m.host
-	case stepCollector:
+	case m.step == stepCollector && m.editKube:
+		return &m.kubeconfig
+	case m.step == stepCollector:
 		return &m.target
 	default:
 		return &m.query
 	}
+}
+
+// kubectlSelected reports whether the kubeconfig applies to the current choice.
+func (m startModel) kubectlSelected() bool {
+	return collectors[m.collector] == source.CollectorKubectl
 }
 
 // active reports whether the current step accepts text.
@@ -268,6 +292,7 @@ func (m *startModel) focus() {
 	m.host.Blur()
 	m.target.Blur()
 	m.query.Blur()
+	m.kubeconfig.Blur()
 	if m.active() {
 		m.input().Focus()
 	}
@@ -294,6 +319,9 @@ func (m startModel) config() source.Config {
 		Tail:      m.tail,
 		Follow:    m.follow,
 	}
+	cfg.Elevate = m.elevate
+	cfg.KubeConfig = strings.TrimSpace(m.kubeconfig.Value())
+
 	target := strings.TrimSpace(m.target.Value())
 	switch cfg.Collector {
 	case source.CollectorJournal:
@@ -355,6 +383,17 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 			}
 		case "ctrl+r":
 			return m, m.refresh()
+		case "ctrl+s":
+			if m.step >= stepCollector {
+				m.elevate = !m.elevate
+				return m, m.fetch()
+			}
+		case "ctrl+k":
+			if m.step == stepCollector && m.kubectlSelected() {
+				m.editKube = !m.editKube
+				m.focus()
+				return m, m.fetch()
+			}
 		case "ctrl+f":
 			m.follow = !m.follow
 			return m, nil
@@ -366,8 +405,18 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 				m.accept()
 				return m, nil
 			}
+			if m.editKube {
+				m.editKube = false
+				m.focus()
+				return m, m.fetch()
+			}
 			return m.advance()
 		case "esc":
+			if m.editKube {
+				m.editKube = false
+				m.focus()
+				return m, m.fetch()
+			}
 			if m.step > stepTransport {
 				m.step--
 				m.err = nil
@@ -425,6 +474,7 @@ func (m startModel) advance() (startModel, tea.Cmd) {
 			return m, nil
 		}
 		m.step++
+		m.editKube = false
 		m.err = nil
 		m.focus()
 		return m, m.fetch()
@@ -456,6 +506,10 @@ func (m startModel) View() string {
 		b.WriteString("\n\n")
 	}
 
+	if m.editKube {
+		b.WriteString(styleChipActive.Render("kubeconfig"))
+		b.WriteString("\n\n")
+	}
 	box := styleBox
 	if m.active() {
 		box = styleBoxFocus
@@ -492,13 +546,16 @@ func (m startModel) breadcrumb() string {
 			parts = append(parts, "local")
 		}
 	}
-	if m.step > stepCollector {
+	if m.step >= stepCollector {
 		parts = append(parts, m.config().Command())
 	}
 	if len(parts) == 0 {
 		return ""
 	}
-	return styleDim.Render(strings.Join(parts, "  ▸  "))
+	// The command preview is the only place sudo and the kubeconfig are
+	// visible, so it gets the full screen width rather than the prompt width.
+	crumb := styleDim.Render(strings.Join(parts, "  ▸  "))
+	return ansi.Truncate(crumb, max(m.w-2*screenPad, promptWidth), styleDim.Render("…"))
 }
 
 func (m startModel) chips() string {
@@ -544,7 +601,20 @@ func (m startModel) help() string {
 	if len(m.filtered) > 0 {
 		parts = []string{key("↑↓", "suggestions"), key("tab", "complete")}
 	}
+	if m.editKube {
+		parts = []string{key("enter", "use it"), key("esc", "cancel")}
+		if len(m.filtered) > 0 {
+			parts = append([]string{key("↑↓", "suggestions")}, parts...)
+		}
+		return strings.Join(parts, styleHint.Render(" · "))
+	}
 	parts = append(parts, key("enter", "next"), key("esc", "back"))
+	if m.step >= stepCollector {
+		parts = append(parts, key("ctrl+s", "sudo "+onOff(m.elevate)))
+	}
+	if m.step == stepCollector && m.kubectlSelected() {
+		parts = append(parts, key("ctrl+k", "kubeconfig"))
+	}
 	if _, ok := m.request(); ok {
 		parts = append(parts, key("ctrl+r", "refresh"))
 	}

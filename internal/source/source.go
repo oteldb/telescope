@@ -49,6 +49,12 @@ type Config struct {
 	Container string
 	// Args is the verbatim shell command for [CollectorCommand].
 	Args string
+	// KubeConfig points [CollectorKubectl] at a specific config file.
+	KubeConfig string
+
+	// Elevate runs the collector under sudo, for logs or configs a plain user
+	// cannot read.
+	Elevate bool
 
 	Tail   int
 	Follow bool
@@ -89,7 +95,7 @@ func (c Config) Command() string {
 		}
 		args = append(args, "--no-pager", "-o", "cat")
 		if u := strings.TrimSpace(c.Unit); u != "" {
-			args = append(args, "-u", quote(u))
+			args = append(args, "-u", Quote(u))
 		}
 		if c.Tail > 0 {
 			args = append(args, "-n", strconv.Itoa(c.Tail))
@@ -97,19 +103,27 @@ func (c Config) Command() string {
 		if c.Follow {
 			args = append(args, "-f")
 		}
-		return strings.Join(args, " ")
+		return c.elevated(args)
 	case CollectorKubectl:
-		args := []string{"kubectl", "logs"}
-		if ns := strings.TrimSpace(c.Namespace); ns != "" {
-			args = append(args, "-n", quote(ns))
+		args := []string{"kubectl"}
+		// --kubeconfig rather than the KUBECONFIG environment variable: a
+		// sudoers rule naming kubectl permits "sudo kubectl" but not
+		// "sudo env ..." or "sudo sh -c ...".
+		if k := strings.TrimSpace(c.KubeConfig); k != "" {
+			args = append(args, "--kubeconfig="+Quote(k))
 		}
-		if t := strings.TrimSpace(c.Target); strings.Contains(t, "=") {
-			args = append(args, "-l", quote(t))
-		} else {
-			args = append(args, quote(t))
+		args = append(args, "logs")
+		if ns := strings.TrimSpace(c.Namespace); ns != "" {
+			args = append(args, "-n", Quote(ns))
+		}
+		switch t := strings.TrimSpace(c.Target); {
+		case strings.Contains(t, "="):
+			args = append(args, "-l", Quote(t))
+		case t != "":
+			args = append(args, Quote(t))
 		}
 		if ct := strings.TrimSpace(c.Container); ct != "" {
-			args = append(args, "-c", quote(ct))
+			args = append(args, "-c", Quote(ct))
 		}
 		if c.Tail > 0 {
 			args = append(args, "--tail", strconv.Itoa(c.Tail))
@@ -117,7 +131,7 @@ func (c Config) Command() string {
 		if c.Follow {
 			args = append(args, "-f")
 		}
-		return strings.Join(args, " ")
+		return c.elevated(args)
 	case CollectorDocker:
 		args := []string{"docker", "logs"}
 		if c.Tail > 0 {
@@ -126,11 +140,28 @@ func (c Config) Command() string {
 		if c.Follow {
 			args = append(args, "-f")
 		}
-		args = append(args, quote(strings.TrimSpace(c.Container)))
-		return strings.Join(args, " ")
+		if ct := strings.TrimSpace(c.Container); ct != "" {
+			args = append(args, Quote(ct))
+		}
+		return c.elevated(args)
 	default:
-		return strings.TrimSpace(c.Args)
+		cmd := strings.TrimSpace(c.Args)
+		if c.Elevate {
+			// A free-form command may contain pipes, so it needs a shell.
+			return "sudo -n sh -c " + Quote(cmd)
+		}
+		return cmd
 	}
+}
+
+// elevated joins argv, prefixing sudo directly onto the collector so a sudoers
+// rule can name the tool itself. Wrapping it in a shell would defeat such a
+// rule, and -n keeps a password prompt from stalling the view.
+func (c Config) elevated(args []string) string {
+	if c.Elevate {
+		args = append([]string{"sudo", "-n"}, args...)
+	}
+	return strings.Join(args, " ")
 }
 
 // Argv returns the local process to spawn.
@@ -172,8 +203,8 @@ func (c Config) Title() string {
 	return where + " · " + c.Command()
 }
 
-// quote wraps s in single quotes unless it is already a bare shell-safe word.
-func quote(s string) string {
+// Quote wraps s in single quotes unless it is already a bare shell-safe word.
+func Quote(s string) string {
 	if s == "" {
 		return "''"
 	}
