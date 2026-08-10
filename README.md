@@ -255,6 +255,12 @@ Every declared endpoint is offered on the start screen next to the collectors,
 so a query can be written without declaring a source for it. Queries are
 remembered per endpoint, and offered back there.
 
+An endpoint needs no declaration at all when it needs no credentials: choosing
+`victorialogs` asks for a URL, `ctrl+e` returns to it, and the URLs typed there
+are remembered like ssh hosts. A missing scheme is filled in — `https://`, or
+`http://` for a loopback address. Anything needing a token belongs in the config
+file, since the prompt writes what it is given to the history in plain text.
+
 **The token is named, never written.** The config file stays shareable, and the
 secret keeps the permissions it already has. An endpoint whose token cannot be
 read marks its own sources invalid in the picker and leaves the rest working.

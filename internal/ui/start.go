@@ -28,21 +28,27 @@ const (
 	maxPromptWidth = 100
 )
 
-// kubeEdit names which kubectl detail the prompt bar is editing.
-type kubeEdit int
+// detail names which detail of a source the prompt bar is editing, apart from
+// the target itself.
+type detail int
 
 const (
-	kubeEditNone kubeEdit = iota
-	kubeEditConfig
-	kubeEditContext
+	detailNone detail = iota
+	detailKubeConfig
+	detailKubeContext
+	detailEndpoint
 )
 
 // label names the detail for the chip above the prompt.
-func (k kubeEdit) label() string {
-	if k == kubeEditContext {
+func (d detail) label() string {
+	switch d {
+	case detailKubeContext:
 		return "context"
+	case detailEndpoint:
+		return "endpoint"
+	default:
+		return "kubeconfig"
 	}
-	return "kubeconfig"
 }
 
 type startStep int
@@ -73,21 +79,28 @@ type choice struct {
 	endpoint  source.Endpoint
 }
 
-// label names the chip. An endpoint is named by itself: which database it
-// speaks to is already visible in the command preview.
+// label names the chip. A declared endpoint is named by itself: which database
+// it speaks to is already visible in the command preview. One with nothing
+// declared is named by its collector, since that is all it is yet.
 func (c choice) label() string {
 	if c.collector.IsRemoteAPI() {
-		return c.endpoint.Label()
+		if l := c.endpoint.Label(); l != "" {
+			return l
+		}
 	}
 	return string(c.collector)
 }
 
 // optionsFor lists the collectors offered, followed by one entry per endpoint.
+//
+// A collector that reads from a database is offered even with nothing declared:
+// its endpoint is then typed at the prompt, the way an ssh host is.
 func optionsFor(endpoints []source.Endpoint) []choice {
-	out := make([]choice, 0, len(collectors)+len(endpoints))
+	out := make([]choice, 0, len(collectors)+len(endpoints)+1)
 	for _, c := range collectors {
 		out = append(out, choice{collector: c})
 	}
+	out = append(out, choice{collector: source.CollectorVictoriaLogs})
 	for _, e := range endpoints {
 		out = append(out, choice{collector: source.CollectorVictoriaLogs, endpoint: e})
 	}
@@ -132,12 +145,13 @@ type startModel struct {
 	target      textinput.Model
 	query       textinput.Model
 	kubeconfig  textinput.Model
+	endpointURL textinput.Model
 
 	kubecontext textinput.Model
-	// kubeEdit swaps the prompt bar over to a kubectl detail while the
-	// collector step is open, so the pod listing can be re-run against it
-	// before a target is typed.
-	kubeEdit kubeEdit
+	// detail swaps the prompt bar over to a detail of the source while the
+	// collector step is open, so the pod listing can be re-run against a
+	// kubeconfig before a target is typed.
+	detail detail
 	// elevate runs the collector, and its listings, under sudo.
 	elevate bool
 
@@ -193,6 +207,7 @@ func newStart() startModel {
 		target:      mk(""),
 		query:       mk("grep term or regexp, empty for everything"),
 		kubeconfig:  mk("path to kubeconfig, e.g. /etc/rancher/k3s/k3s.yaml"),
+		endpointURL: mk("https://logs.example.com or https://grafana/api/datasources/proxy/uid/<uid>"),
 		kubecontext: mk("context inside that kubeconfig"),
 		tail:        1000,
 		follow:      true,
@@ -262,11 +277,37 @@ func (m startModel) choice() choice {
 	return m.options[m.collector]
 }
 
-// toggleKube switches the prompt to a detail, or back out of it when that
+// endpoint is the endpoint in hand: the one the chip carries, or, for the chip
+// that carries none, whatever was typed at the prompt.
+func (m startModel) endpoint() source.Endpoint {
+	e := m.choice().endpoint
+	if e.URL == "" {
+		e.URL = normalizeURL(m.endpointURL.Value())
+	}
+	return e
+}
+
+// normalizeURL fills in the scheme an address typed by hand tends to omit. A
+// loopback address is plain http: nothing serves TLS on localhost.
+func normalizeURL(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.Contains(s, "://") {
+		return s
+	}
+	host, _, _ := strings.Cut(s, "/")
+	host, _, _ = strings.Cut(host, ":")
+	switch host {
+	case "localhost", "127.0.0.1", "[::1]", "::1":
+		return "http://" + s
+	}
+	return "https://" + s
+}
+
+// toggleDetail switches the prompt to a detail, or back out of it when that
 // detail is already being edited.
-func toggleKube(cur, want kubeEdit) kubeEdit {
+func toggleDetail(cur, want detail) detail {
 	if cur == want {
-		return kubeEditNone
+		return detailNone
 	}
 	return want
 }
@@ -322,7 +363,7 @@ func (m startModel) prefill(cfg source.Config, query string) (startModel, tea.Cm
 	m.tail, m.follow = cfg.Tail, cfg.Follow
 
 	m.step = stepCollector
-	m.kubeEdit = kubeEditNone
+	m.detail = detailNone
 	m.err = nil
 	m.syncPlaceholder()
 	m.focus()
@@ -356,10 +397,10 @@ func (m startModel) request() (complete.Request, bool) {
 			KubeConfig:  strings.TrimSpace(m.kubeconfig.Value()),
 			KubeContext: strings.TrimSpace(m.kubecontext.Value()),
 		}
-		switch m.kubeEdit {
-		case kubeEditConfig:
+		switch m.detail {
+		case detailKubeConfig:
 			req.Field, req.Collector = complete.FieldKubeConfig, source.CollectorKubectl
-		case kubeEditContext:
+		case detailKubeContext:
 			req.Field, req.Collector = complete.FieldKubeContext, source.CollectorKubectl
 		}
 		return req, true
@@ -482,7 +523,7 @@ func (m *startModel) refilter() {
 // the step being completed. Only the target has fields worth naming: a host or
 // a kubeconfig path has nothing to filter by.
 func (m startModel) attr() complete.Attr {
-	if m.step != stepCollector || m.kubeEdit != kubeEditNone {
+	if m.step != stepCollector || m.detail != detailNone {
 		return nil
 	}
 	return complete.AttrFor(m.choice().collector)
@@ -517,10 +558,12 @@ func (m startModel) recent() []string {
 			return nil
 		}
 		return m.history.Hosts
-	case m.step == stepCollector && m.kubeEdit == kubeEditConfig:
+	case m.step == stepCollector && m.detail == detailKubeConfig:
 		return m.history.KubeConfigs
-	case m.step == stepCollector && m.kubeEdit == kubeEditContext:
+	case m.step == stepCollector && m.detail == detailKubeContext:
 		return nil
+	case m.step == stepCollector && m.detail == detailEndpoint:
+		return m.history.Endpoints
 	case m.step == stepCollector:
 		// Scoped to the cluster or host in the prompt: a pod remembered from
 		// another kubeconfig does not exist here.
@@ -581,10 +624,12 @@ func (m *startModel) input() *textinput.Model {
 		return &m.savedFilter
 	case m.step == stepTransport:
 		return &m.host
-	case m.step == stepCollector && m.kubeEdit == kubeEditConfig:
+	case m.step == stepCollector && m.detail == detailKubeConfig:
 		return &m.kubeconfig
-	case m.step == stepCollector && m.kubeEdit == kubeEditContext:
+	case m.step == stepCollector && m.detail == detailKubeContext:
 		return &m.kubecontext
+	case m.step == stepCollector && m.detail == detailEndpoint:
+		return &m.endpointURL
 	case m.step == stepCollector:
 		return &m.target
 	default:
@@ -608,6 +653,7 @@ func (m *startModel) focus() {
 	m.target.Blur()
 	m.query.Blur()
 	m.kubeconfig.Blur()
+	m.endpointURL.Blur()
 	m.kubecontext.Blur()
 	if m.active() {
 		m.input().Focus()
@@ -634,7 +680,7 @@ func (m startModel) config() source.Config {
 		Transport: transports[m.transport],
 		Host:      strings.TrimSpace(m.host.Value()),
 		Collector: m.choice().collector,
-		Endpoint:  m.choice().endpoint,
+		Endpoint:  m.endpoint(),
 		Tail:      m.tail,
 		Follow:    m.follow,
 	}
@@ -741,13 +787,20 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 			}
 		case "ctrl+k":
 			if m.step == stepCollector && m.kubectlSelected() {
-				m.kubeEdit = toggleKube(m.kubeEdit, kubeEditConfig)
+				m.detail = toggleDetail(m.detail, detailKubeConfig)
 				m.focus()
 				return m, m.fetch()
 			}
 		case "ctrl+x":
 			if m.step == stepCollector && m.kubectlSelected() {
-				m.kubeEdit = toggleKube(m.kubeEdit, kubeEditContext)
+				m.detail = toggleDetail(m.detail, detailKubeContext)
+				m.focus()
+				return m, m.fetch()
+			}
+		case "ctrl+e":
+			if m.step == stepCollector && m.choice().collector.IsRemoteAPI() &&
+				m.choice().endpoint.Name == "" {
+				m.detail = toggleDetail(m.detail, detailEndpoint)
 				m.focus()
 				return m, m.fetch()
 			}
@@ -768,8 +821,8 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 				m.accept()
 				return m, nil
 			}
-			if m.kubeEdit != kubeEditNone {
-				m.kubeEdit = kubeEditNone
+			if m.detail != detailNone {
+				m.detail = detailNone
 				m.focus()
 				return m, m.fetch()
 			}
@@ -780,8 +833,8 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 			switch {
 			case m.sel >= 0:
 				m.sel = -1
-			case m.kubeEdit != kubeEditNone:
-				m.kubeEdit = kubeEditNone
+			case m.detail != detailNone:
+				m.detail = detailNone
 				m.focus()
 				return m, m.fetch()
 			case m.step > stepTransport, m.step == stepTransport && len(m.saved) > 0:
@@ -829,6 +882,12 @@ func (m *startModel) cycle(d int) tea.Cmd {
 	case stepCollector:
 		m.collector = (m.collector + d + n) % n
 		m.syncPlaceholder()
+		// An endpoint with nowhere to connect asks for that before a query,
+		// the way the ssh transport asks for a host.
+		m.detail = detailNone
+		if m.endpoint().URL == "" && m.choice().collector.IsRemoteAPI() {
+			m.detail = detailEndpoint
+		}
 	}
 	m.err = nil
 	m.focus()
@@ -843,7 +902,7 @@ func (m startModel) advance() (startModel, tea.Cmd) {
 			return m, nil
 		}
 		m.step++
-		m.kubeEdit = kubeEditNone
+		m.detail = detailNone
 		m.err = nil
 		m.focus()
 		return m, m.fetch()
@@ -876,8 +935,8 @@ func (m startModel) head() string {
 		b.WriteString("\n\n")
 	}
 
-	if m.kubeEdit != kubeEditNone {
-		b.WriteString(styleChipActive.Render(m.kubeEdit.label()))
+	if m.detail != detailNone {
+		b.WriteString(styleChipActive.Render(m.detail.label()))
 		b.WriteString("\n\n")
 	}
 	box := styleBox
@@ -987,9 +1046,14 @@ func (m startModel) breadcrumb() string {
 	}
 	var parts []string
 	if m.step > stepTransport {
-		if transports[m.transport] == source.TransportSSH {
+		switch {
+		case m.choice().collector.IsRemoteAPI():
+			// The transport is nothing to a database read over HTTP; where it
+			// is reached is the endpoint itself.
+			parts = append(parts, m.endpoint().Label())
+		case transports[m.transport] == source.TransportSSH:
 			parts = append(parts, "ssh://"+strings.TrimSpace(m.host.Value()))
-		} else {
+		default:
 			parts = append(parts, "local")
 		}
 	}
@@ -1058,7 +1122,7 @@ func (m startModel) help() string {
 	if len(m.filtered) > 0 {
 		parts = []string{key("↑↓", "suggestions"), key("tab", "complete")}
 	}
-	if m.kubeEdit != kubeEditNone {
+	if m.detail != detailNone {
 		parts = []string{key("enter", "use it"), key("esc", "cancel")}
 		if len(m.filtered) > 0 {
 			parts = append([]string{key("↑↓", "suggestions")}, parts...)
@@ -1071,6 +1135,9 @@ func (m startModel) help() string {
 	}
 	if m.step == stepCollector && m.kubectlSelected() {
 		parts = append(parts, key("ctrl+k", "kubeconfig"), key("ctrl+x", "context"))
+	}
+	if m.step == stepCollector && m.choice().collector.IsRemoteAPI() && m.choice().endpoint.Name == "" {
+		parts = append(parts, key("ctrl+e", "endpoint"))
 	}
 	if _, ok := m.request(); ok {
 		parts = append(parts, key("ctrl+r", "refresh"))
@@ -1255,7 +1322,7 @@ func (m startModel) emptyLabel() string {
 
 // hints shows step-appropriate examples, in the spirit of a search landing page.
 func (m startModel) hints() string {
-	if m.kubeEdit != kubeEditNone {
+	if m.detail != detailNone {
 		// The examples below are about targets, not about the detail being
 		// edited, so they would only mislead here.
 		return ""

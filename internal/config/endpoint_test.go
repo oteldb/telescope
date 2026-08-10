@@ -166,3 +166,20 @@ func TestEndpointScope(t *testing.T) {
 	require.Empty(t, h.Recent(vlogs("staging")))
 	require.Empty(t, h.Hosts, "an endpoint is not reached over ssh")
 }
+
+// TestRememberTypedEndpoint: a URL typed at the prompt is remembered; a
+// declared one is not, since the config file already holds it under a name.
+func TestRememberTypedEndpoint(t *testing.T) {
+	typed := source.Config{
+		Collector: source.CollectorVictoriaLogs,
+		Endpoint:  source.Endpoint{URL: "https://logs.example.com"},
+		Target:    "error",
+	}
+	declared := typed
+	declared.Endpoint.Name = "prod"
+
+	var h History
+	h.Remember(typed)
+	h.Remember(declared)
+	require.Equal(t, []string{"https://logs.example.com"}, h.Endpoints)
+}

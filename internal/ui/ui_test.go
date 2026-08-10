@@ -172,7 +172,7 @@ func TestKubeContextEditor(t *testing.T) {
 	m = send(t, m, k("enter"))
 
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlX})
-	require.Equal(t, kubeEditContext, m.(Model).start.kubeEdit)
+	require.Equal(t, detailKubeContext, m.(Model).start.detail)
 	require.Contains(t, screen(t, m), "context")
 	require.Equal(t, complete.Request{
 		Field:      complete.FieldKubeContext,
@@ -186,7 +186,7 @@ func TestKubeContextEditor(t *testing.T) {
 	m = send(t, m, k("down"), k("enter"))
 	require.Equal(t, "reader", m.(Model).start.kubecontext.Value())
 	m = send(t, m, k("enter"))
-	require.Equal(t, kubeEditNone, m.(Model).start.kubeEdit, "enter returns to the target")
+	require.Equal(t, detailNone, m.(Model).start.detail, "enter returns to the target")
 
 	// Pods are now listed through that context.
 	require.Contains(t, m.(Model).start.candKey, "reader")
@@ -646,14 +646,14 @@ func TestElevatedKubectlOverSSH(t *testing.T) {
 
 	// ctrl+k swaps the bar over to the kubeconfig path.
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlK})
-	require.Equal(t, kubeEditConfig, m.(Model).start.kubeEdit)
+	require.Equal(t, detailKubeConfig, m.(Model).start.detail)
 	require.Contains(t, screen(t, m), "kubeconfig")
 	for _, r := range "/etc/rancher/k3s/k3s.yaml" {
 		m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 	// enter returns to the target rather than advancing the step.
 	m = send(t, m, k("enter"))
-	require.Equal(t, kubeEditNone, m.(Model).start.kubeEdit)
+	require.Equal(t, detailNone, m.(Model).start.detail)
 	require.Equal(t, stepCollector, m.(Model).start.step)
 
 	// The preview already shows what will run.
@@ -1196,9 +1196,9 @@ func TestEndpointIsACollectorChip(t *testing.T) {
 	require.Contains(t, out, "prod")
 	require.Contains(t, out, "staging")
 
-	// The four command collectors come first, so two tabs past the last of them
-	// lands on the second endpoint.
-	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"), k("tab"))
+	// The command collectors come first, then the undeclared endpoint, then the
+	// declared ones in order.
+	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"), k("tab"), k("tab"))
 	start := m.(Model).start
 	require.Equal(t, source.CollectorVictoriaLogs, start.choice().collector)
 	require.Equal(t, "staging", start.choice().endpoint.Name)
@@ -1214,7 +1214,7 @@ func TestEndpointQueryOpens(t *testing.T) {
 	withEndpoints(t, []config.Endpoint{{Name: "prod", URL: "https://logs.example.com"}}, nil)
 
 	m := send(t, New(), size(), k("enter"))
-	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"))
+	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"), k("tab"))
 	for _, r := range "level:error app:api" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
@@ -1236,7 +1236,8 @@ func TestEndpointTokenFailureIsReported(t *testing.T) {
 	m := send(t, New(), size())
 	out := screen(t, m)
 	require.Contains(t, out, "TELESCOPE_TEST_UNSET")
-	require.Len(t, m.(Model).start.options, len(collectors), "the endpoint is not offered")
+	require.Len(t, m.(Model).start.options, len(collectors)+1,
+		"only the undeclared endpoint is offered")
 }
 
 // TestEndpointOffersRecentQueries: a query is not listable, so history is the
@@ -1253,8 +1254,62 @@ func TestEndpointOffersRecentQueries(t *testing.T) {
 	t.Cleanup(func() { loadHistory = prev })
 
 	m := send(t, New(), size(), k("enter"))
-	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"))
+	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"), k("tab"))
 	out := screen(t, m)
 	require.Contains(t, out, "level:error")
 	require.NotContains(t, out, "app:elsewhere", "a query belongs to the endpoint it was written for")
+}
+
+// TestTypedEndpoint: a database with no declaration is reachable by typing its
+// URL, the way an ssh host is, and no secret is involved.
+func TestTypedEndpoint(t *testing.T) {
+	m := send(t, New(), size(), k("enter"))
+	// past the four command collectors, onto the undeclared endpoint.
+	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"))
+	require.Equal(t, detailEndpoint, m.(Model).start.detail,
+		"an endpoint with nowhere to connect asks for that first")
+	require.Contains(t, screen(t, m), "endpoint")
+
+	for _, r := range "127.0.0.1:9428" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m = send(t, m, k("enter"))
+	require.Equal(t, detailNone, m.(Model).start.detail, "enter returns to the query")
+
+	for _, r := range "level:error" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m = send(t, m, k("enter"), k("enter"))
+	cfg := m.(Model).logs.cfg
+	require.Equal(t, "http://127.0.0.1:9428", cfg.Endpoint.URL, "a loopback address is plain http")
+	require.Equal(t, "level:error", cfg.Target)
+	require.Empty(t, cfg.Endpoint.Token)
+}
+
+func TestNormalizeURL(t *testing.T) {
+	for _, tt := range [][2]string{
+		{"logs.example.com", "https://logs.example.com"},
+		{"logs.example.com/api/datasources/proxy/uid/x", "https://logs.example.com/api/datasources/proxy/uid/x"},
+		{"https://logs.example.com", "https://logs.example.com"},
+		{"http://logs.example.com", "http://logs.example.com"},
+		{"127.0.0.1:9428", "http://127.0.0.1:9428"},
+		{"localhost:9428/x", "http://localhost:9428/x"},
+		{"  ", ""},
+	} {
+		require.Equal(t, tt[1], normalizeURL(tt[0]))
+	}
+}
+
+// TestTypedEndpointIsRemembered: a URL typed by hand is offered back, since no
+// listing reports it.
+func TestTypedEndpointIsRemembered(t *testing.T) {
+	prev := loadHistory
+	loadHistory = func() config.History {
+		return config.History{Endpoints: []string{"https://logs.example.com"}}
+	}
+	t.Cleanup(func() { loadHistory = prev })
+
+	m := send(t, New(), size(), k("enter"))
+	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"))
+	require.Contains(t, screen(t, m), "https://logs.example.com")
 }

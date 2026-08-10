@@ -20,6 +20,8 @@ const historyLimit = 20
 type History struct {
 	Hosts       []string `yaml:"hosts,omitempty"`
 	KubeConfigs []string `yaml:"kubeconfigs,omitempty"`
+	// Endpoints are the log API URLs typed by hand, which no listing reports.
+	Endpoints []string `yaml:"endpoints,omitempty"`
 	// Targets holds the last units, pods and containers, keyed by the scope
 	// they belong to. See [Scope].
 	Targets map[string][]string `yaml:"targets,omitempty"`
@@ -78,7 +80,13 @@ func loadHistoryFrom(path string) (History, error) {
 
 // Remember records what a stream used, most recent first.
 func (h *History) Remember(cfg source.Config) {
-	if !cfg.Collector.IsRemoteAPI() {
+	if cfg.Collector.IsRemoteAPI() {
+		// Only an endpoint typed by hand: a declared one is already in the
+		// config file, and remembering it there twice would outlive its name.
+		if cfg.Endpoint.Name == "" {
+			h.Endpoints = push(h.Endpoints, cfg.Endpoint.URL)
+		}
+	} else {
 		if cfg.Transport == source.TransportSSH {
 			h.Hosts = push(h.Hosts, cfg.Host)
 		}
