@@ -1169,3 +1169,92 @@ func TestTinyWindowDoesNotPanic(t *testing.T) {
 		_ = m.View()
 	})
 }
+
+// withEndpoints makes New() see declared endpoints, as a config file with an
+// endpoints section would.
+func withEndpoints(t *testing.T, endpoints []config.Endpoint, sources []config.Source) {
+	t.Helper()
+	prev := loadConfig
+	loadConfig = func() (config.Config, error) {
+		c := config.Config{Endpoints: endpoints, Sources: sources}
+		return c, nil
+	}
+	t.Cleanup(func() { loadConfig = prev })
+}
+
+// TestEndpointIsACollectorChip: an endpoint is offered next to the collectors,
+// since choosing one is choosing where the logs are.
+func TestEndpointIsACollectorChip(t *testing.T) {
+	withEndpoints(t, []config.Endpoint{
+		{Name: "prod", URL: "https://logs.example.com"},
+		{Name: "staging", URL: "https://staging.example.com"},
+	}, nil)
+
+	// transport, then the collector chips.
+	m := send(t, New(), size(), k("enter"))
+	out := screen(t, m)
+	require.Contains(t, out, "prod")
+	require.Contains(t, out, "staging")
+
+	// The four command collectors come first, so two tabs past the last of them
+	// lands on the second endpoint.
+	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"), k("tab"))
+	start := m.(Model).start
+	require.Equal(t, source.CollectorVictoriaLogs, start.choice().collector)
+	require.Equal(t, "staging", start.choice().endpoint.Name)
+	require.Contains(t, screen(t, m), "LogsQL", "the prompt asks for a query")
+
+	// A query is written, not listed, so the endpoint is never probed.
+	_, ok := start.request()
+	require.False(t, ok)
+}
+
+// TestEndpointQueryOpens: what is typed is the query, terms and all.
+func TestEndpointQueryOpens(t *testing.T) {
+	withEndpoints(t, []config.Endpoint{{Name: "prod", URL: "https://logs.example.com"}}, nil)
+
+	m := send(t, New(), size(), k("enter"))
+	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"))
+	for _, r := range "level:error app:api" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m = send(t, m, k("enter"), k("enter"))
+
+	cfg := m.(Model).logs.cfg
+	require.Equal(t, source.CollectorVictoriaLogs, cfg.Collector)
+	require.Equal(t, "level:error app:api", cfg.Target, "LogsQL is sent as written")
+	require.Equal(t, "https://logs.example.com", cfg.Endpoint.URL)
+}
+
+// TestEndpointTokenFailureIsReported: an endpoint telescope cannot authenticate
+// to is not offered as a choice that fails later.
+func TestEndpointTokenFailureIsReported(t *testing.T) {
+	withEndpoints(t, []config.Endpoint{
+		{Name: "prod", URL: "https://logs.example.com", TokenEnv: "TELESCOPE_TEST_UNSET"},
+	}, nil)
+
+	m := send(t, New(), size())
+	out := screen(t, m)
+	require.Contains(t, out, "TELESCOPE_TEST_UNSET")
+	require.Len(t, m.(Model).start.options, len(collectors), "the endpoint is not offered")
+}
+
+// TestEndpointOffersRecentQueries: a query is not listable, so history is the
+// only suggestion there is — and the step must still show it.
+func TestEndpointOffersRecentQueries(t *testing.T) {
+	withEndpoints(t, []config.Endpoint{{Name: "prod", URL: "https://logs.example.com"}}, nil)
+	prev := loadHistory
+	loadHistory = func() config.History {
+		return config.History{Targets: map[string][]string{
+			"victorialogs|prod":  {"level:error"},
+			"victorialogs|other": {"app:elsewhere"},
+		}}
+	}
+	t.Cleanup(func() { loadHistory = prev })
+
+	m := send(t, New(), size(), k("enter"))
+	m = send(t, m, k("tab"), k("tab"), k("tab"), k("tab"))
+	out := screen(t, m)
+	require.Contains(t, out, "level:error")
+	require.NotContains(t, out, "app:elsewhere", "a query belongs to the endpoint it was written for")
+}

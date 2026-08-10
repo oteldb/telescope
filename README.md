@@ -251,6 +251,10 @@ sources:
 | `headers` | | anything else the endpoint or its proxy needs |
 | `insecure` | `false` | skip TLS verification |
 
+Every declared endpoint is offered on the start screen next to the collectors,
+so a query can be written without declaring a source for it. Queries are
+remembered per endpoint, and offered back there.
+
 **The token is named, never written.** The config file stays shareable, and the
 secret keeps the permissions it already has. An endpoint whose token cannot be
 read marks its own sources invalid in the picker and leaves the rest working.

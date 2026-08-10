@@ -65,6 +65,35 @@ var (
 	}
 )
 
+// choice is one chip of the collector step. A collector that reads from a log
+// database is offered once per declared endpoint, since the endpoint is as much
+// a part of "where the logs are" as the host is for the others.
+type choice struct {
+	collector source.Collector
+	endpoint  source.Endpoint
+}
+
+// label names the chip. An endpoint is named by itself: which database it
+// speaks to is already visible in the command preview.
+func (c choice) label() string {
+	if c.collector.IsRemoteAPI() {
+		return c.endpoint.Label()
+	}
+	return string(c.collector)
+}
+
+// optionsFor lists the collectors offered, followed by one entry per endpoint.
+func optionsFor(endpoints []source.Endpoint) []choice {
+	out := make([]choice, 0, len(collectors)+len(endpoints))
+	for _, c := range collectors {
+		out = append(out, choice{collector: c})
+	}
+	for _, e := range endpoints {
+		out = append(out, choice{collector: source.CollectorVictoriaLogs, endpoint: e})
+	}
+	return out
+}
+
 const (
 	// maxContentWidth keeps the centered screen readable on a wide terminal,
 	// and minDetailWidth is the room always left for a state word next to a
@@ -133,6 +162,9 @@ type startModel struct {
 	savedIdx []int
 	history  config.History
 
+	// options are the collector chips, one of them per declared endpoint.
+	options []choice
+
 	// cache holds every completion result seen so far, keyed by request, so
 	// stepping back and forth never waits on a listing twice.
 	cache map[string]cacheEntry
@@ -170,6 +202,11 @@ func newStart() startModel {
 	}
 	cfg, err := loadConfig()
 	m.saved, m.err = cfg.Sources, err
+	endpoints, endpointErr := cfg.Resolved()
+	if m.err == nil {
+		m.err = endpointErr
+	}
+	m.options = optionsFor(endpoints)
 	m.history = loadHistory()
 	if len(m.saved) == 0 {
 		m.step = stepTransport
@@ -215,6 +252,14 @@ func (m startModel) savedCandidates() []complete.Candidate {
 		out = append(out, complete.Candidate{Value: s.Name, Detail: detail})
 	}
 	return out
+}
+
+// choice is the collector chip in hand.
+func (m startModel) choice() choice {
+	if m.collector < 0 || m.collector >= len(m.options) {
+		return choice{collector: collectors[0]}
+	}
+	return m.options[m.collector]
 }
 
 // toggleKube switches the prompt to a detail, or back out of it when that
@@ -265,7 +310,9 @@ func (m startModel) openSaved(i int) (startModel, tea.Cmd) {
 // needs an answer.
 func (m startModel) prefill(cfg source.Config, query string) (startModel, tea.Cmd) {
 	m.transport = max(slices.Index(transports, cfg.Transport), 0)
-	m.collector = max(slices.Index(collectors, cfg.Collector), 0)
+	m.collector = max(slices.IndexFunc(m.options, func(c choice) bool {
+		return c.collector == cfg.Collector && c.endpoint.URL == cfg.Endpoint.URL
+	}), 0)
 	m.host.SetValue(cfg.Host)
 	m.kubeconfig.SetValue(cfg.KubeConfig)
 	m.kubecontext.SetValue(cfg.KubeContext)
@@ -295,11 +342,16 @@ func (m startModel) request() (complete.Request, bool) {
 		}
 		return complete.Request{Field: complete.FieldHost}, true
 	case stepCollector:
+		if m.choice().collector.IsRemoteAPI() {
+			// A query is written, not picked from a listing. What was written
+			// before is still offered, from history.
+			return complete.Request{}, false
+		}
 		req := complete.Request{
 			Field:       complete.FieldTarget,
 			Transport:   transports[m.transport],
 			Host:        strings.TrimSpace(m.host.Value()),
-			Collector:   collectors[m.collector],
+			Collector:   m.choice().collector,
 			Elevate:     m.elevate,
 			KubeConfig:  strings.TrimSpace(m.kubeconfig.Value()),
 			KubeContext: strings.TrimSpace(m.kubecontext.Value()),
@@ -330,7 +382,10 @@ func (m *startModel) fetch() tea.Cmd {
 
 	req, ok := m.request()
 	if !ok {
+		// Nothing to list, which is not the same as nothing to show: a step
+		// with no listing still offers what was used here before.
 		m.candKey, m.loading = "", false
+		m.refilter()
 		return m.preload()
 	}
 	m.candKey = req.Key()
@@ -430,7 +485,7 @@ func (m startModel) attr() complete.Attr {
 	if m.step != stepCollector || m.kubeEdit != kubeEditNone {
 		return nil
 	}
-	return complete.AttrFor(collectors[m.collector])
+	return complete.AttrFor(m.choice().collector)
 }
 
 // filterSaved narrows the declared sources and records where each survivor came
@@ -458,6 +513,9 @@ func (m startModel) filterSaved(query string) ([]complete.Candidate, []int) {
 func (m startModel) recent() []string {
 	switch {
 	case m.step == stepTransport:
+		if transports[m.transport] != source.TransportSSH {
+			return nil
+		}
 		return m.history.Hosts
 	case m.step == stepCollector && m.kubeEdit == kubeEditConfig:
 		return m.history.KubeConfigs
@@ -536,7 +594,7 @@ func (m *startModel) input() *textinput.Model {
 
 // kubectlSelected reports whether the kubeconfig applies to the current choice.
 func (m startModel) kubectlSelected() bool {
-	return collectors[m.collector] == source.CollectorKubectl
+	return m.choice().collector == source.CollectorKubectl
 }
 
 // active reports whether the current step accepts text.
@@ -557,7 +615,7 @@ func (m *startModel) focus() {
 }
 
 func (m *startModel) syncPlaceholder() {
-	switch collectors[m.collector] {
+	switch m.choice().collector {
 	case source.CollectorJournal:
 		m.target.Placeholder = "[user/]unit, e.g. kubelet — empty for the whole journal"
 	case source.CollectorKubectl:
@@ -566,6 +624,8 @@ func (m *startModel) syncPlaceholder() {
 		m.target.Placeholder = "container name or id"
 	case source.CollectorCommand:
 		m.target.Placeholder = "any command writing logs to stdout"
+	case source.CollectorVictoriaLogs:
+		m.target.Placeholder = "LogsQL, e.g. level:error _time:5m"
 	}
 }
 
@@ -573,7 +633,8 @@ func (m startModel) config() source.Config {
 	cfg := source.Config{
 		Transport: transports[m.transport],
 		Host:      strings.TrimSpace(m.host.Value()),
-		Collector: collectors[m.collector],
+		Collector: m.choice().collector,
+		Endpoint:  m.choice().endpoint,
 		Tail:      m.tail,
 		Follow:    m.follow,
 	}
@@ -593,6 +654,8 @@ func (m startModel) config() source.Config {
 		cfg.Container = target
 	case source.CollectorCommand:
 		cfg.Args = target
+	case source.CollectorVictoriaLogs:
+		cfg.Target = target
 	}
 	return cfg
 }
@@ -751,7 +814,7 @@ func (m startModel) choices() int {
 	case stepTransport:
 		return len(transports)
 	case stepCollector:
-		return len(collectors)
+		return len(m.options)
 	default:
 		return 0
 	}
@@ -956,8 +1019,8 @@ func (m startModel) chips() string {
 		}
 		sel = m.transport
 	case stepCollector:
-		for _, c := range collectors {
-			items = append(items, string(c))
+		for _, c := range m.options {
+			items = append(items, c.label())
 		}
 		sel = m.collector
 	default:
@@ -1003,7 +1066,7 @@ func (m startModel) help() string {
 		return strings.Join(parts, styleHint.Render(" · "))
 	}
 	parts = append(parts, key("enter", "next"), key("esc", m.escLabel()))
-	if m.step >= stepCollector {
+	if m.step >= stepCollector && !m.choice().collector.IsRemoteAPI() {
 		parts = append(parts, key("ctrl+s", "sudo "+onOff(m.elevate)))
 	}
 	if m.step == stepCollector && m.kubectlSelected() {
@@ -1163,7 +1226,7 @@ func (m startModel) emptyLabel() string {
 		// A query that filtered everything away is usually a field typed at a
 		// venture, so name the ones that exist.
 		if terms, _ := complete.ParseQuery(m.input().Value()); len(terms) > 0 {
-			if fields := complete.Fields(collectors[m.collector]); len(fields) > 0 {
+			if fields := complete.Fields(m.choice().collector); len(fields) > 0 {
 				return "no match — filters: " + strings.Join(fields, ": ") + ":"
 			}
 		}
@@ -1178,7 +1241,7 @@ func (m startModel) emptyLabel() string {
 		// kubectl reports nothing either way, so name both possibilities.
 		return "no contexts — is the kubeconfig path right?"
 	}
-	switch collectors[m.collector] {
+	switch m.choice().collector {
 	case source.CollectorKubectl:
 		return "no pods"
 	case source.CollectorDocker:
@@ -1208,7 +1271,7 @@ func (m startModel) hints() string {
 			"ssh      proxy every command through a node",
 		}
 	case stepCollector:
-		switch collectors[m.collector] {
+		switch m.choice().collector {
 		case source.CollectorJournal:
 			lines = []string{
 				"kubelet",
@@ -1227,6 +1290,13 @@ func (m startModel) hints() string {
 			lines = []string{"clickhouse", "3f1a0c2b9d44"}
 		case source.CollectorCommand:
 			lines = []string{"tail -F /var/log/app.log", "dmesg -w"}
+		case source.CollectorVictoriaLogs:
+			lines = []string{
+				"level:error",
+				"kubernetes.namespace:oteldb        a field of the log itself",
+				`_msg:"connection refused"`,
+				"level:error | drop _stream_id      LogsQL, sent as written",
+			}
 		}
 	case stepQuery:
 		lines = []string{"error", "trace_id=abc", "level=(warn|error)", "(empty)  no filter"}

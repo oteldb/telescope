@@ -41,6 +41,25 @@ type Endpoint struct {
 	Insecure bool `yaml:"insecure,omitempty"`
 }
 
+// Resolved returns the endpoints that can be queried, and why the others
+// cannot. An endpoint whose token is unreadable is left out rather than offered
+// as a choice that fails on use, and the reason is reported instead.
+func (c Config) Resolved() ([]source.Endpoint, error) {
+	var (
+		out  []source.Endpoint
+		errs []error
+	)
+	for _, e := range c.Endpoints {
+		resolved, err := e.Resolve()
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		out = append(out, resolved)
+	}
+	return out, errors.Join(errs...)
+}
+
 // Validate reports whether the endpoint is structurally usable. Whether its
 // token can be read is left to [Endpoint.Resolve]: a config naming an endpoint
 // the user has no token for should still open every other source.
