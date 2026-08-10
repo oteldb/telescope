@@ -375,6 +375,52 @@ func TestCompletionListsAndFilters(t *testing.T) {
 	require.NotContains(t, out, "clickhouse")
 }
 
+// TestCompletionFilterTerms covers the GitHub-style query: "ns:oteldb" narrows
+// the pods to a namespace, and only what is left of the query is a target.
+func TestCompletionFilterTerms(t *testing.T) {
+	m := send(t, New(), size(), k("enter"), k("tab")) // kubectl
+	m = send(t, m, candidates(m,
+		"oteldb/api-79c", "oteldb/deployment/api", "kube-system/coredns-7d7", "kube-system/kube-apiserver-1"))
+
+	for _, r := range "ns:oteldb " {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	out := screen(t, m)
+	require.Contains(t, out, "oteldb/api-79c")
+	require.Contains(t, out, "oteldb/deployment/api")
+	require.NotContains(t, out, "kube-apiserver", "another namespace is filtered out")
+
+	// A kind narrows it further.
+	for _, r := range "kind:deploy" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	out = screen(t, m)
+	require.Contains(t, out, "oteldb/deployment/api")
+	require.NotContains(t, out, "oteldb/api-79c")
+
+	// The terms are a filter, not part of the target: enter without picking a
+	// suggestion must not send them to kubectl.
+	for _, r := range " oteldb/api-79c" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m = send(t, m, k("enter"), k("enter"))
+	require.Equal(t, "kubectl logs -n oteldb api-79c --tail 1000 -f", m.(Model).logs.cfg.Command())
+}
+
+// TestUnknownFilterFieldIsSearchedFor: a colon in a value is the container
+// syntax, so only known fields may act as filters.
+func TestUnknownFilterFieldIsSearchedFor(t *testing.T) {
+	m := send(t, New(), size(), k("enter"), k("tab")) // kubectl
+	m = send(t, m, candidates(m, "oteldb/oteldb-ingest-0:ingest", "oteldb/api-79c"))
+
+	for _, r := range "ingest-0:ing" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	out := screen(t, m)
+	require.Contains(t, out, "oteldb/oteldb-ingest-0:ingest")
+	require.NotContains(t, out, "api-79c")
+}
+
 func TestSuggestionMatchesAreHighlighted(t *testing.T) {
 	m := send(t, New(), size(), k("enter"), k("tab"), k("tab")) // docker
 	m = send(t, m, candidates(m, "oteldb-0"))

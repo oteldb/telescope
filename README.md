@@ -104,6 +104,29 @@ fuzzy: the characters have to appear in order but need not be adjacent, so
 matched are highlighted. What you typed literally sorts above the same letters
 in another case, which sorts above a scattered match.
 
+A query may also carry `field:value` terms, in the shape GitHub and
+Sourcegraph use. They narrow the list before anything is matched; the rest of
+the query still matches fuzzily, and the terms are not part of the target.
+
+```
+ns:oteldb api            pods and workloads named api, in namespaces matching oteldb
+kind:deployment        only workloads
+-ns:kube-system        everything outside kube-system
+container:             only the rows that name a container
+scope:user error       user units, matching error
+```
+
+| collector | fields |
+| --- | --- |
+| `kubectl` | `ns` (`namespace`), `kind` (`type`), `name` (`pod`), `container` (`c`), `state` |
+| `journalctl` | `name` (`unit`), `scope`, `state` |
+| `docker` | `name`, `image`, `state` |
+
+A term matches its field as a case-insensitive substring. A bare `field:` keeps
+the candidates that have that field at all. Only these names are terms, so a
+value that merely contains a colon, such as `oteldb/api-79c:migrate`, is still
+searched for literally.
+
 Everything but the ssh hosts is listed **through the chosen transport**, with
 the same privileges, kubeconfig and context the logs will use, so picking a
 remote node lists that node's units and containers.
@@ -143,7 +166,7 @@ sources:
     host: node1
     collector: kubectl
     kubeconfig: /root/.kube/ops.kubeconfig
-    context: 1-admin@1
+    context: admin@ops
     sudo: true
 
   - name: syncthing

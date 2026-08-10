@@ -31,7 +31,7 @@ func TestRank(t *testing.T) {
 		{"spaces trimmed", "  otel  ", []string{"oteldb-0", "otel-collector", "my-oteldb"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, values(Rank(items, tt.query)))
+			require.Equal(t, tt.want, values(Rank(items, tt.query, nil)))
 		})
 	}
 }
@@ -47,13 +47,13 @@ func TestRankTiers(t *testing.T) {
 	}
 	require.Equal(t,
 		[]string{"oteldb-0", "my-oteldb", "OTELDB-cased", "o-t-e-l-d-b"},
-		values(Rank(items, "oteldb")))
+		values(Rank(items, "oteldb", nil)))
 }
 
 // TestRankReportsMatchPositions: the view marks the characters that matched,
 // which is only possible if ranking hands them back.
 func TestRankReportsMatchPositions(t *testing.T) {
-	got := Rank([]Candidate{{Value: "oteldb-0"}}, "otdb0")
+	got := Rank([]Candidate{{Value: "oteldb-0"}}, "otdb0", nil)
 	require.Len(t, got, 1)
 	matched := ""
 	for _, i := range got[0].Matched {
@@ -62,7 +62,7 @@ func TestRankReportsMatchPositions(t *testing.T) {
 	require.Equal(t, "otdb0", matched, "the offsets point at the query characters")
 
 	// An empty query matches everything and marks nothing.
-	require.Empty(t, Rank([]Candidate{{Value: "oteldb-0"}}, "")[0].Matched)
+	require.Empty(t, Rank([]Candidate{{Value: "oteldb-0"}}, "", nil)[0].Matched)
 }
 
 func TestRankFuzzy(t *testing.T) {
@@ -72,9 +72,9 @@ func TestRankFuzzy(t *testing.T) {
 		{Value: "unrelated"},
 	}
 	// Characters in order, gaps allowed.
-	require.Equal(t, []string{"oteldb/oteldb-0"}, values(Rank(items, "otdb0")))
-	require.Equal(t, []string{"kube-system/coredns-66755474f-9ztl7"}, values(Rank(items, "kscore")))
-	require.Empty(t, Rank(items, "zzz"))
+	require.Equal(t, []string{"oteldb/oteldb-0"}, values(Rank(items, "otdb0", nil)))
+	require.Equal(t, []string{"kube-system/coredns-66755474f-9ztl7"}, values(Rank(items, "kscore", nil)))
+	require.Empty(t, Rank(items, "zzz", nil))
 }
 
 func TestRequestKey(t *testing.T) {
@@ -254,10 +254,10 @@ func TestParseWorkload(t *testing.T) {
 		},
 		{
 			name: "several containers are named",
-			line: "StatefulSet oteldb storage storage,clickhouse-log 1 1 <none> <none>",
+			line: "StatefulSet oteldb storage clickhouse,clickhouse-log 1 1 <none> <none>",
 			want: []Candidate{
 				{Value: "oteldb/statefulset/storage", Detail: "statefulset · 1/1 ready"},
-				{Value: "oteldb/statefulset/storage:storage", Detail: "statefulset container"},
+				{Value: "oteldb/statefulset/storage:clickhouse", Detail: "statefulset container"},
 				{Value: "oteldb/statefulset/storage:clickhouse-log", Detail: "statefulset container"},
 			},
 		},

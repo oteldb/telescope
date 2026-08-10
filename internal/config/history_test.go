@@ -37,7 +37,7 @@ func TestHistoryRemember(t *testing.T) {
 func TestHistoryIsScoped(t *testing.T) {
 	ops := source.Config{
 		Transport: source.TransportSSH, Host: "node1", Collector: source.CollectorKubectl,
-		KubeConfig: "/root/.kube/operations.yml", Namespace: "oteldb", Target: "api-1",
+		KubeConfig: "/root/.kube/ops.yml", Namespace: "oteldb", Target: "api-1",
 	}
 	var h History
 	h.Remember(ops)

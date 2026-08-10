@@ -411,18 +411,28 @@ func (m *startModel) refilter() {
 	if m.step == stepSaved {
 		m.filtered, m.savedIdx = m.filterSaved(m.input().Value())
 	} else {
-		m.filtered = complete.Rank(withRecent(m.candidates, m.recent()), m.input().Value())
+		m.filtered = complete.Rank(withRecent(m.candidates, m.recent()), m.input().Value(), m.attr())
 	}
 	if m.sel >= len(m.filtered) {
 		m.sel = len(m.filtered) - 1
 	}
 }
 
+// attr resolves the "field:value" terms of a query against the candidates of
+// the step being completed. Only the target has fields worth naming: a host or
+// a kubeconfig path has nothing to filter by.
+func (m startModel) attr() complete.Attr {
+	if m.step != stepCollector || m.kubeEdit != kubeEditNone {
+		return nil
+	}
+	return complete.AttrFor(collectors[m.collector])
+}
+
 // filterSaved narrows the declared sources and records where each survivor came
 // from, consuming each origin once so identical names stay distinct.
 func (m startModel) filterSaved(query string) ([]complete.Candidate, []int) {
 	all := m.savedCandidates()
-	ranked := complete.Rank(all, query)
+	ranked := complete.Rank(all, query, nil)
 
 	idx := make([]int, len(ranked))
 	taken := make([]bool, len(all))
@@ -566,7 +576,8 @@ func (m startModel) config() source.Config {
 	cfg.KubeConfig = strings.TrimSpace(m.kubeconfig.Value())
 	cfg.KubeContext = strings.TrimSpace(m.kubecontext.Value())
 
-	target := strings.TrimSpace(m.target.Value())
+	// The filter terms narrowed the list; what is left is the target itself.
+	target := complete.QueryText(m.target.Value())
 	switch cfg.Collector {
 	case source.CollectorJournal:
 		cfg.Unit, cfg.UserUnit = source.ParseJournalTarget(target)
@@ -1143,6 +1154,13 @@ func (m startModel) emptyLabel() string {
 		return ""
 	}
 	if len(m.candidates) > 0 {
+		// A query that filtered everything away is usually a field typed at a
+		// venture, so name the ones that exist.
+		if terms, _ := complete.ParseQuery(m.input().Value()); len(terms) > 0 {
+			if fields := complete.Fields(collectors[m.collector]); len(fields) > 0 {
+				return "no match — filters: " + strings.Join(fields, ": ") + ":"
+			}
+		}
 		return "no match"
 	}
 	switch req.Field {
@@ -1197,6 +1215,7 @@ func (m startModel) hints() string {
 				"oteldb/deploy/api          a workload, which outlives its pods",
 				"oteldb/app=oteldb",
 				"oteldb/oteldb-0:clickhouse",
+				"ns:oteldb api              narrow by field, as on GitHub",
 			}
 		case source.CollectorDocker:
 			lines = []string{"clickhouse", "3f1a0c2b9d44"}

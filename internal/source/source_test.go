@@ -94,8 +94,8 @@ func TestConfigCommand(t *testing.T) {
 		},
 		{
 			name: "kubectl statefulset container",
-			cfg:  Config{Collector: CollectorKubectl, Namespace: "oteldb", Target: "statefulset/storage", Container: "storage"},
-			want: "kubectl logs -n oteldb statefulset/storage -c storage",
+			cfg:  Config{Collector: CollectorKubectl, Namespace: "oteldb", Target: "statefulset/oteldb", Container: "clickhouse"},
+			want: "kubectl logs -n oteldb statefulset/oteldb -c clickhouse",
 		},
 		{
 			name: "kubectl with an explicit context",
@@ -203,7 +203,7 @@ func TestParseKubeTarget(t *testing.T) {
 		{"deploy/api", "", "deploy/api", ""},
 		{"deployment.apps/api", "", "deployment.apps/api", ""},
 		{"oteldb/deploy/api", "oteldb", "deploy/api", ""},
-		{"oteldb/statefulset/storage:storage", "oteldb", "statefulset/storage", "storage"},
+		{"oteldb/statefulset/oteldb:clickhouse", "oteldb", "statefulset/oteldb", "clickhouse"},
 		{"pods/api", "", "pods/api", ""},
 		// A namespace that merely looks like one is still a namespace.
 		{"deployer/api", "deployer", "api", ""},

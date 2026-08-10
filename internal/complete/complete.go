@@ -86,16 +86,31 @@ const (
 
 // Rank filters candidates by query and orders the survivors.
 //
-// A candidate matches fuzzily: the query characters have to appear in order but
-// need not be adjacent, so "otdb0" finds "oteldb-0". Ordering is by tier first,
-// so a literal substring is never buried under a scattered match, and by the
-// matcher's score within a tier. A prefix beats a hit further along. Only the
-// value is matched, never the detail.
+// A query may carry "field:value" terms, which narrow the set before anything
+// is ranked; attr resolves them and may be nil when the candidates have no
+// fields worth naming. See [ParseQuery].
+//
+// The rest of the query matches fuzzily: its characters have to appear in order
+// but need not be adjacent, so "otdb0" finds "oteldb-0". Ordering is by tier
+// first, so a literal substring is never buried under a scattered match, and by
+// the matcher's score within a tier. A prefix beats a hit further along. Only
+// the value is matched, never the detail.
 //
 // An empty query keeps the given order, which is how recently used values stay
 // on top.
-func Rank(items []Candidate, query string) []Candidate {
-	q := strings.TrimSpace(query)
+func Rank(items []Candidate, query string, attr Attr) []Candidate {
+	terms, text := ParseQuery(query)
+	if len(terms) > 0 {
+		kept := make([]Candidate, 0, len(items))
+		for _, c := range items {
+			if keep(c, terms, attr) {
+				kept = append(kept, c)
+			}
+		}
+		items = kept
+	}
+
+	q := strings.TrimSpace(text)
 	if q == "" {
 		return items
 	}
