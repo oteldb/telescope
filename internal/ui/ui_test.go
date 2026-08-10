@@ -1471,3 +1471,35 @@ func TestTimeRangeIsNotOfferedForCommand(t *testing.T) {
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlG})
 	require.Equal(t, detailNone, m.(Model).start.detail)
 }
+
+// TestEntryViewAlignsOnItsOwnKeys: a Kubernetes attribute is forty characters
+// of prose. Folding it into a fixed narrow column rendered the key one syllable
+// per line, down the left edge, for every field an OTEL entry carries.
+func TestEntryViewAlignsOnItsOwnKeys(t *testing.T) {
+	const key = "kubernetes.pod_labels.app.kubernetes.io/instance"
+	raw := `{"level":"info","msg":"started","kubernetes.container_name":"kafkaproxy","` +
+		key + `":"kafka-proxy-producer"}`
+
+	m := logsModel(t, raw)
+	m = send(t, m, k("enter"))
+	out := screen(t, m)
+
+	require.Contains(t, out, "kafkaproxy")
+	require.Contains(t, out, "kafka-proxy-producer")
+	require.Contains(t, out, key, "the long key is whole, on a line of its own")
+
+	// The short keys still line up with each other, and nothing is broken
+	// mid-word down a ten-column gutter.
+	for line := range strings.SplitSeq(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		require.NotEqual(t, "kubernetes", trimmed, "a key was wrapped: %q", line)
+		require.NotEqual(t, ".pod_label", trimmed, "a key was wrapped: %q", line)
+	}
+	require.Contains(t, out, "kubernetes.container_name   kafkaproxy",
+		"a key that fits keeps its value beside it, in the shared column")
+	var alone bool
+	for line := range strings.SplitSeq(out, "\n") {
+		alone = alone || strings.Trim(line, "│ ") == key
+	}
+	require.True(t, alone, "and one that does not takes the line alone, its value under it")
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/oteldb/telescope/internal/logs"
@@ -87,11 +88,19 @@ func (m entryModel) lines(width int) []string {
 	e := m.entry
 	var out []string
 
+	// The header labels are fixed; the fields bring their own, and the widest
+	// of all of them is what everything lines up on.
+	labels := []string{"received", "level", "trace", "span", "body"}
+	for _, f := range e.Record.Fields {
+		labels = append(labels, f.Key)
+	}
+	indent := labelColumn(labels, width)
+
 	add := func(label, value string) {
 		if value == "" {
 			return
 		}
-		out = append(out, wrapField(label, value, width))
+		out = append(out, wrapField(label, value, indent, width))
 	}
 
 	stream := "stdout"
@@ -125,7 +134,7 @@ func (m entryModel) lines(width int) []string {
 	if len(e.Record.Fields) > 0 {
 		out = append(out, "", styleTitle.Render("fields"))
 		for _, f := range e.Record.Fields {
-			out = append(out, wrapField(f.Key, f.String(), width))
+			out = append(out, wrapField(f.Key, f.String(), indent, width))
 		}
 	}
 
@@ -136,14 +145,45 @@ func (m entryModel) lines(width int) []string {
 	return out
 }
 
+// Bounds on the label column. It follows the keys an entry actually has, but a
+// Kubernetes attribute is long enough to leave no room for its own value, so it
+// stops well short of that.
+const (
+	minLabelColumn = 10
+	maxLabelColumn = 28
+)
+
+// labelColumn is how wide the keys of an entry are rendered, from the keys
+// themselves: aligning on the widest one is what makes a list of attributes
+// readable, and a single very long key must not shrink every value beside it.
+func labelColumn(labels []string, width int) int {
+	widest := 0
+	for _, l := range labels {
+		widest = max(widest, lipgloss.Width(l))
+	}
+	// Room for the two spaces between a key and its value.
+	return min(max(widest+2, minLabelColumn), maxLabelColumn, max(width/3, minLabelColumn))
+}
+
 // wrapField renders a "label  value" row, wrapping the value under the label.
-func wrapField(label, value string, width int) string {
-	const indent = 12
-	wrapped := ansi.Wrap(value, max(width-indent, 10), "")
+//
+// A label too long for the column takes a line of its own rather than being
+// folded into a narrow ribbon beside its value: an OTEL resource attribute is
+// forty characters of prose, and reading it a syllable at a time is worse than
+// reading it whole.
+func wrapField(label, value string, indent, width int) string {
+	wrapped := ansi.Wrap(value, max(width-indent, minLabelColumn), "")
 	parts := strings.Split(wrapped, "\n")
+
 	b := &strings.Builder{}
+	pad := indent - lipgloss.Width(label)
 	b.WriteString(styleLabel.Render(label))
-	b.WriteString("  ")
+	if pad < 2 {
+		b.WriteString("\n")
+		b.WriteString(strings.Repeat(" ", indent))
+	} else {
+		b.WriteString(strings.Repeat(" ", pad))
+	}
 	b.WriteString(parts[0])
 	for _, p := range parts[1:] {
 		b.WriteString("\n")

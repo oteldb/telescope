@@ -66,7 +66,7 @@ var (
 
 	styleTitle    = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	styleSelected = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	styleLabel    = lipgloss.NewStyle().Foreground(colorMuted).Width(10)
+	styleLabel    = lipgloss.NewStyle().Foreground(colorMuted)
 )
 
 // stateStyles colors the lifecycle words collectors report. Only states that
