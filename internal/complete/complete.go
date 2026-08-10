@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sahilm/fuzzy"
+
 	"github.com/oteldb/telescope/internal/source"
 )
 
@@ -22,6 +24,9 @@ type Candidate struct {
 	State string
 	// Detail is shown dimmed next to the value, never inserted.
 	Detail string
+	// Matched holds the rune offsets in Value that the query matched, so the
+	// view can show why a candidate is in the list. Set by [Rank].
+	Matched []int
 }
 
 // Field is what is being completed.
@@ -71,39 +76,77 @@ func Fetch(ctx context.Context, r Request) ([]Candidate, error) {
 	return list(ctx, r)
 }
 
-// Rank filters candidates by query and orders prefix matches first. Matching is
-// case-insensitive and ignores the detail column.
+// Match tiers, best first. What was typed literally beats the same letters in
+// another case, which beats letters merely appearing in order.
+const (
+	tierExact = iota
+	tierFold
+	tierFuzzy
+)
+
+// Rank filters candidates by query and orders the survivors.
+//
+// A candidate matches fuzzily: the query characters have to appear in order but
+// need not be adjacent, so "otdb0" finds "oteldb-0". Ordering is by tier first,
+// so a literal substring is never buried under a scattered match, and by the
+// matcher's score within a tier. A prefix beats a hit further along. Only the
+// value is matched, never the detail.
+//
+// An empty query keeps the given order, which is how recently used values stay
+// on top.
 func Rank(items []Candidate, query string) []Candidate {
-	q := strings.ToLower(strings.TrimSpace(query))
+	q := strings.TrimSpace(query)
 	if q == "" {
 		return items
 	}
+	lower := strings.ToLower(q)
 
-	type scored struct {
+	// Every substring match is also a fuzzy match, so this is the full set,
+	// already ordered by how close each one is.
+	matches := fuzzy.FindFrom(q, candidateNames(items))
+
+	type ranked struct {
 		c    Candidate
-		rank int
-		idx  int
+		tier int
+		// atStart sorts a prefix above a hit in the middle.
+		atStart int
 	}
-	var out []scored
-	for i, c := range items {
-		v := strings.ToLower(c.Value)
+	out := make([]ranked, 0, len(matches))
+	for _, m := range matches {
+		v := items[m.Index].Value
+		folded := strings.ToLower(v)
+
+		c := items[m.Index]
+		c.Matched = m.MatchedIndexes
+
+		r := ranked{c: c, tier: tierFuzzy, atStart: 1}
 		switch {
-		case strings.HasPrefix(v, q):
-			out = append(out, scored{c, 0, i})
 		case strings.Contains(v, q):
-			out = append(out, scored{c, 1, i})
+			r.tier = tierExact
+		case strings.Contains(folded, lower):
+			r.tier = tierFold
 		}
+		if strings.HasPrefix(folded, lower) {
+			r.atStart = 0
+		}
+		out = append(out, r)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].rank != out[j].rank {
-			return out[i].rank < out[j].rank
+		if out[i].tier != out[j].tier {
+			return out[i].tier < out[j].tier
 		}
-		return out[i].idx < out[j].idx
+		return out[i].atStart < out[j].atStart
 	})
 
 	res := make([]Candidate, len(out))
-	for i, s := range out {
-		res[i] = s.c
+	for i, r := range out {
+		res[i] = r.c
 	}
 	return res
 }
+
+// candidateNames adapts candidates to the matcher.
+type candidateNames []Candidate
+
+func (c candidateNames) String(i int) string { return c[i].Value }
+func (c candidateNames) Len() int            { return len(c) }

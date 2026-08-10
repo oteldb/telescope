@@ -23,6 +23,7 @@ var (
 	colorErr    = lipgloss.AdaptiveColor{Light: "#cf222e", Dark: "#f87171"}
 	colorOK     = lipgloss.AdaptiveColor{Light: "#1a7f37", Dark: "#4ade80"}
 	colorWarn   = lipgloss.AdaptiveColor{Light: "#9a6700", Dark: "#fbbf24"}
+	colorMatch  = lipgloss.AdaptiveColor{Light: "#bf3989", Dark: "#f472b6"}
 	colorBorder = lipgloss.AdaptiveColor{Light: "#d0d7de", Dark: "#3f3f46"}
 )
 
@@ -59,6 +60,9 @@ var (
 			Bold(true)
 
 	styleFilter = lipgloss.NewStyle().Foreground(colorText)
+
+	// styleMatch marks the characters a query matched inside a suggestion.
+	styleMatch = lipgloss.NewStyle().Foreground(colorMatch).Bold(true)
 
 	styleTitle    = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	styleSelected = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)

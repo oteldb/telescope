@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/go-faster/errors"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/require"
 
 	"github.com/oteldb/telescope/internal/complete"
@@ -24,6 +25,9 @@ func TestMain(m *testing.M) {
 	fetcher = func(context.Context, complete.Request) ([]complete.Candidate, error) {
 		return nil, nil
 	}
+	// Without a terminal lipgloss renders no color, which would make every
+	// assertion about styling pass trivially.
+	lipgloss.SetColorProfile(termenv.TrueColor)
 	// Never read the developer's own config or history; withSaved supplies
 	// whatever a test needs.
 	loadConfig = func() (config.Config, error) { return config.Config{}, nil }
@@ -205,7 +209,7 @@ func TestEmptyListingExplainsItself(t *testing.T) {
 	m = send(t, m, candidates(m))
 
 	out := screen(t, m)
-	require.Contains(t, out, "no contexts in this kubeconfig")
+	require.Contains(t, out, "no contexts")
 	require.NotContains(t, out, "oteldb/oteldb-0", "target examples belong to the target step")
 
 	// A filter that matches nothing reads differently from nothing to offer.
@@ -277,8 +281,13 @@ func TestBrokenConfigIsReported(t *testing.T) {
 
 func TestHistoryFloatsRecentToTheTop(t *testing.T) {
 	withSaved(t, nil, config.History{
-		Targets: map[string][]string{"journalctl": {"kubelet"}},
-		Hosts:   []string{"node9"},
+		Targets: map[string][]string{
+			config.Scope(source.Config{
+				Transport: source.TransportLocal,
+				Collector: source.CollectorJournal,
+			}): {"kubelet"},
+		},
+		Hosts: []string{"node9"},
 	})
 
 	m := send(t, New(), size(), k("enter"))
@@ -313,7 +322,7 @@ func TestConnectingRemembersTheSource(t *testing.T) {
 
 	h := m.(Model).start.history
 	require.Equal(t, []string{"node1"}, h.Hosts)
-	require.Equal(t, []string{"app"}, h.Recent(source.CollectorDocker))
+	require.Equal(t, []string{"app"}, h.Recent(m.(Model).logs.cfg))
 }
 
 func TestStartScreen(t *testing.T) {
@@ -364,6 +373,29 @@ func TestCompletionListsAndFilters(t *testing.T) {
 	out = screen(t, m)
 	require.Contains(t, out, "oteldb")
 	require.NotContains(t, out, "clickhouse")
+}
+
+func TestSuggestionMatchesAreHighlighted(t *testing.T) {
+	m := send(t, New(), size(), k("enter"), k("tab"), k("tab")) // docker
+	m = send(t, m, candidates(m, "oteldb-0"))
+	for _, r := range "otdb" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	// Colored per rune, so the plain text is unchanged but the render is not.
+	row := ""
+	for line := range strings.SplitSeq(m.View(), "\n") {
+		if strings.Contains(ansi.Strip(line), "oteldb-0") {
+			row = line
+			break
+		}
+	}
+	require.NotEmpty(t, row)
+	require.Contains(t, ansi.Strip(row), "oteldb-0", "the text itself is untouched")
+	// "otdb" matches o,t then d,b, which are emitted as two runs.
+	require.Contains(t, row, styleMatch.Render("ot"), "the matched runs are marked")
+	require.Contains(t, row, styleMatch.Render("db"))
+	require.NotContains(t, row, styleMatch.Render("el"), "the gap between them is not")
 }
 
 func TestCompletionAccept(t *testing.T) {

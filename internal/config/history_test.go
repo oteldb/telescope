@@ -12,22 +12,56 @@ import (
 )
 
 func TestHistoryRemember(t *testing.T) {
-	var h History
-	h.Remember(source.Config{
+	pods := source.Config{
 		Transport: source.TransportSSH, Host: "node1",
 		Collector: source.CollectorKubectl, Namespace: "oteldb", Target: "oteldb-0",
 		KubeConfig: "/etc/rancher/k3s/k3s.yaml",
-	})
+	}
+	var h History
+	h.Remember(pods)
 
 	require.Equal(t, []string{"node1"}, h.Hosts)
 	require.Equal(t, []string{"/etc/rancher/k3s/k3s.yaml"}, h.KubeConfigs)
 	// The target is stored as typed, so it can be offered back verbatim.
-	require.Equal(t, []string{"oteldb/oteldb-0"}, h.Recent(source.CollectorKubectl))
+	require.Equal(t, []string{"oteldb/oteldb-0"}, h.Recent(pods))
 
 	// A local stream contributes no host.
-	h.Remember(source.Config{Collector: source.CollectorDocker, Container: "app"})
+	docker := source.Config{Collector: source.CollectorDocker, Container: "app"}
+	h.Remember(docker)
 	require.Equal(t, []string{"node1"}, h.Hosts)
-	require.Equal(t, []string{"app"}, h.Recent(source.CollectorDocker))
+	require.Equal(t, []string{"app"}, h.Recent(docker))
+}
+
+// TestHistoryIsScoped: a pod remembered against one cluster must not be
+// offered against another, where it does not exist.
+func TestHistoryIsScoped(t *testing.T) {
+	ops := source.Config{
+		Transport: source.TransportSSH, Host: "node1", Collector: source.CollectorKubectl,
+		KubeConfig: "/root/.kube/operations.yml", Namespace: "oteldb", Target: "api-1",
+	}
+	var h History
+	h.Remember(ops)
+	require.Equal(t, []string{"oteldb/api-1"}, h.Recent(ops))
+
+	other := ops
+	other.KubeConfig = "/root/.kube/staging.yml"
+	require.Empty(t, h.Recent(other), "another kubeconfig is another cluster")
+
+	byContext := ops
+	byContext.KubeContext = "admin@2"
+	require.Empty(t, h.Recent(byContext), "so is another context")
+
+	byHost := ops
+	byHost.Host = "node2"
+	require.Empty(t, h.Recent(byHost), "and another node")
+
+	// Containers are scoped by host, where the kubeconfig plays no part.
+	app := source.Config{Transport: source.TransportSSH, Host: "node1", Collector: source.CollectorDocker, Container: "app"}
+	h.Remember(app)
+	elsewhere := app
+	elsewhere.Host = "node2"
+	require.Equal(t, []string{"app"}, h.Recent(app))
+	require.Empty(t, h.Recent(elsewhere))
 }
 
 func TestHistoryTargetRoundTrip(t *testing.T) {
@@ -50,10 +84,10 @@ func TestHistoryTargetRoundTrip(t *testing.T) {
 			var h History
 			h.Remember(tt.cfg)
 			if tt.want == "" {
-				require.Empty(t, h.Recent(tt.cfg.Collector))
+				require.Empty(t, h.Recent(tt.cfg))
 				return
 			}
-			require.Equal(t, []string{tt.want}, h.Recent(tt.cfg.Collector))
+			require.Equal(t, []string{tt.want}, h.Recent(tt.cfg))
 		})
 	}
 }

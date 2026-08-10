@@ -427,7 +427,9 @@ func (m startModel) filterSaved(query string) ([]complete.Candidate, []int) {
 	taken := make([]bool, len(all))
 	for i, c := range ranked {
 		for j, a := range all {
-			if !taken[j] && a == c {
+			// Compared field by field: a candidate carries match offsets, and
+			// two sources may otherwise look identical.
+			if !taken[j] && a.Value == c.Value && a.Detail == c.Detail && a.State == c.State {
 				idx[i], taken[j] = j, true
 				break
 			}
@@ -446,7 +448,9 @@ func (m startModel) recent() []string {
 	case m.step == stepCollector && m.kubeEdit == kubeEditContext:
 		return nil
 	case m.step == stepCollector:
-		return m.history.Recent(collectors[m.collector])
+		// Scoped to the cluster or host in the prompt: a pod remembered from
+		// another kubeconfig does not exist here.
+		return m.history.Recent(m.config())
 	default:
 		return nil
 	}
@@ -1034,10 +1038,11 @@ func (m startModel) completions(limit int) string {
 		pad := strings.Repeat(" ", max(valueWidth-lipgloss.Width(label), 0))
 
 		marker := "  "
-		if start+i == m.sel {
-			marker, label = styleSelected.Render("▎ "), styleSelected.Render(label)
+		selected := start+i == m.sel
+		if selected {
+			marker = styleSelected.Render("▎ ")
 		}
-		row := marker + label + pad
+		row := marker + highlightMatch(label, c.Matched, selected) + pad
 		if c.State != "" || c.Detail != "" {
 			row += "  " + renderDetail(c)
 		}
@@ -1049,6 +1054,45 @@ func (m startModel) completions(limit int) string {
 		rows = append(rows, block.Render(styleHint.Render("  … "+strconv.Itoa(rest)+" more")))
 	}
 	return strings.Join(rows, "\n")
+}
+
+// highlightMatch colors the runes the query matched, so a fuzzy hit shows why
+// it is in the list. Offsets past the end are ignored, which is what happens
+// when a long value was truncated to fit the column.
+func highlightMatch(value string, matched []int, selected bool) string {
+	plain := lipgloss.NewStyle()
+	if selected {
+		plain = styleSelected
+	}
+	if len(matched) == 0 {
+		return plain.Render(value)
+	}
+
+	hit := make(map[int]bool, len(matched))
+	for _, i := range matched {
+		hit[i] = true
+	}
+
+	// Emitted in runs rather than per rune: a styled rune costs an escape pair,
+	// and a pod name would otherwise carry sixty of them.
+	var (
+		b     strings.Builder
+		runes = []rune(value)
+	)
+	for i := 0; i < len(runes); {
+		j := i
+		for j < len(runes) && hit[j] == hit[i] {
+			j++
+		}
+		run := string(runes[i:j])
+		if hit[i] {
+			b.WriteString(styleMatch.Render(run))
+		} else {
+			b.WriteString(plain.Render(run))
+		}
+		i = j
+	}
+	return b.String()
 }
 
 // renderDetail joins a candidate's state and detail, coloring the state by
@@ -1080,7 +1124,8 @@ func (m startModel) emptyLabel() string {
 	case complete.FieldKubeConfig:
 		return "no kubeconfig found — type a path"
 	case complete.FieldKubeContext:
-		return "no contexts in this kubeconfig"
+		// kubectl reports nothing either way, so name both possibilities.
+		return "no contexts — is the kubeconfig path right?"
 	}
 	switch collectors[m.collector] {
 	case source.CollectorKubectl:
@@ -1145,7 +1190,7 @@ func onOff(v bool) string {
 	return styleDim.Render("off")
 }
 
-// tailSteps are the values cycled by ctrl+n.
+// tailSteps are the values cycled by ctrl+t.
 var tailSteps = []int{100, 1000, 10000, 0}
 
 func nextTail(cur int) int {

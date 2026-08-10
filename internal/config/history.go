@@ -20,8 +20,20 @@ const historyLimit = 20
 type History struct {
 	Hosts       []string `yaml:"hosts,omitempty"`
 	KubeConfigs []string `yaml:"kubeconfigs,omitempty"`
-	// Targets holds the last units, pods and containers, keyed by collector.
+	// Targets holds the last units, pods and containers, keyed by the scope
+	// they belong to. See [Scope].
 	Targets map[string][]string `yaml:"targets,omitempty"`
+}
+
+// Scope identifies where a target is meaningful. A pod name says nothing about
+// another cluster and a container name nothing about another host, so offering
+// one there sends kubectl looking for something that was never present.
+func Scope(cfg source.Config) string {
+	parts := []string{string(cfg.Transport), cfg.Host, string(cfg.Collector)}
+	if cfg.Collector == source.CollectorKubectl {
+		parts = append(parts, cfg.KubeConfig, cfg.KubeContext)
+	}
+	return strings.Join(parts, "|")
 }
 
 // HistoryPath is where history is stored, honoring XDG_STATE_HOME.
@@ -70,14 +82,15 @@ func (h *History) Remember(cfg source.Config) {
 		if h.Targets == nil {
 			h.Targets = map[string][]string{}
 		}
-		key := string(cfg.Collector)
+		key := Scope(cfg)
 		h.Targets[key] = push(h.Targets[key], target)
 	}
 }
 
-// Recent returns the remembered targets for a collector, most recent first.
-func (h History) Recent(collector source.Collector) []string {
-	return h.Targets[string(collector)]
+// Recent returns the targets remembered for the same scope as cfg, most recent
+// first.
+func (h History) Recent(cfg source.Config) []string {
+	return h.Targets[Scope(cfg)]
 }
 
 // Save writes history, creating the directory if needed.

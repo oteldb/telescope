@@ -100,12 +100,14 @@ var listers = map[source.Collector]lister{
 	}},
 	source.CollectorKubectl: {sources: []listSource{{
 		build: func(r Request) string {
-			k := kubectl(r)
+			// No guard on current-context: kubectl cannot tell a missing
+			// kubeconfig from one without a context ("config current-context"
+			// reports the latter for both), while "get pods" names the real
+			// problem and fails just as fast, both being local checks.
 			return guard("command -v kubectl", "kubectl is not installed",
-				guard(k+" config current-context", "no kubernetes context is configured",
-					k+" get pods --all-namespaces --no-headers -o custom-columns="+
-						":.metadata.namespace,:.metadata.name,:.status.phase,"+
-						":.spec.containers[*].name,:.spec.initContainers[*].name"))
+				kubectl(r)+" get pods --all-namespaces --no-headers -o custom-columns="+
+					":.metadata.namespace,:.metadata.name,:.status.phase,"+
+					":.spec.containers[*].name,:.spec.initContainers[*].name")
 		},
 		parse: parsePod,
 	}}},

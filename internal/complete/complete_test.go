@@ -36,6 +36,47 @@ func TestRank(t *testing.T) {
 	}
 }
 
+// TestRankTiers: what was typed literally must not be buried under a scattered
+// match that happens to score well.
+func TestRankTiers(t *testing.T) {
+	items := []Candidate{
+		{Value: "o-t-e-l-d-b"},  // fuzzy only
+		{Value: "my-oteldb"},    // literal, not at the start
+		{Value: "OTELDB-cased"}, // same letters, other case
+		{Value: "oteldb-0"},     // literal, at the start
+	}
+	require.Equal(t,
+		[]string{"oteldb-0", "my-oteldb", "OTELDB-cased", "o-t-e-l-d-b"},
+		values(Rank(items, "oteldb")))
+}
+
+// TestRankReportsMatchPositions: the view marks the characters that matched,
+// which is only possible if ranking hands them back.
+func TestRankReportsMatchPositions(t *testing.T) {
+	got := Rank([]Candidate{{Value: "oteldb-0"}}, "otdb0")
+	require.Len(t, got, 1)
+	matched := ""
+	for _, i := range got[0].Matched {
+		matched += string([]rune(got[0].Value)[i])
+	}
+	require.Equal(t, "otdb0", matched, "the offsets point at the query characters")
+
+	// An empty query matches everything and marks nothing.
+	require.Empty(t, Rank([]Candidate{{Value: "oteldb-0"}}, "")[0].Matched)
+}
+
+func TestRankFuzzy(t *testing.T) {
+	items := []Candidate{
+		{Value: "kube-system/coredns-66755474f-9ztl7"},
+		{Value: "oteldb/oteldb-0"},
+		{Value: "unrelated"},
+	}
+	// Characters in order, gaps allowed.
+	require.Equal(t, []string{"oteldb/oteldb-0"}, values(Rank(items, "otdb0")))
+	require.Equal(t, []string{"kube-system/coredns-66755474f-9ztl7"}, values(Rank(items, "kscore")))
+	require.Empty(t, Rank(items, "zzz"))
+}
+
 func TestRequestKey(t *testing.T) {
 	host := Request{Field: FieldHost}
 	require.Equal(t, "host", host.Key())
@@ -257,9 +298,11 @@ func TestKubectlListingUsesRequest(t *testing.T) {
 	cmd := build(Request{Elevate: true, KubeConfig: "/etc/rancher/k3s/k3s.yaml"})
 
 	require.Contains(t, cmd, "sudo -n kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml get pods")
-	require.Contains(t, cmd, "sudo -n kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml config current-context")
 	// Presence of the binary is checked unprivileged.
 	require.Contains(t, cmd, "command -v kubectl")
+	// kubectl reports a missing file and a missing context differently; a
+	// guard on current-context would flatten both into one message.
+	require.NotContains(t, cmd, "config current-context")
 }
 
 // TestUserUnitsAreNeverElevated: sudo would reach root's session bus, not the
