@@ -51,6 +51,9 @@ func (m entryModel) Update(msg tea.Msg) (entryModel, tea.Cmd) {
 		m.off += m.bodyHeight()
 	case "home", "g":
 		m.off = 0
+	case "end", "G":
+		// Clamped against the rendered length in View.
+		m.off = len(m.lines(max(m.w-2*screenPad-2, 18)))
 	}
 	return m, nil
 }

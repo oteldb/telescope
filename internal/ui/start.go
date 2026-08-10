@@ -373,6 +373,26 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 				m.sel--
 				return m, nil
 			}
+		case "pgdown":
+			if len(m.filtered) > 0 {
+				m.sel = min(m.sel+m.listHeight(), len(m.filtered)-1)
+				return m, nil
+			}
+		case "pgup":
+			if m.sel >= 0 {
+				m.sel = max(m.sel-m.listHeight(), 0)
+				return m, nil
+			}
+		case "home":
+			if len(m.filtered) > 0 {
+				m.sel = 0
+				return m, nil
+			}
+		case "end":
+			if len(m.filtered) > 0 {
+				m.sel = len(m.filtered) - 1
+				return m, nil
+			}
 		case "tab":
 			if m.sel >= 0 {
 				m.accept()
@@ -504,7 +524,8 @@ func (m startModel) advance() (startModel, tea.Cmd) {
 	return m, func() tea.Msg { return connectMsg{cfg: cfg, query: query} }
 }
 
-func (m startModel) View() string {
+// head renders everything above the suggestion list.
+func (m startModel) head() string {
 	var b strings.Builder
 	b.WriteString(styleLogo.Render(logo))
 	b.WriteString("\n")
@@ -541,11 +562,18 @@ func (m startModel) View() string {
 		b.WriteString(styleHint.Render(m.help()))
 	}
 	b.WriteString("\n\n")
+	return b.String()
+}
 
-	// The suggestion list takes whatever height is left, so a tall terminal
-	// shows more of it instead of a fixed handful.
-	head := b.String()
-	body := m.completions(max(m.h-lipgloss.Height(head)-1, 3))
+// listHeight is how many suggestion rows fit under the head. Paging keys use
+// the same number the view renders.
+func (m startModel) listHeight() int {
+	return max(m.h-lipgloss.Height(m.head())-1, 3)
+}
+
+func (m startModel) View() string {
+	head := m.head()
+	body := m.completions(m.listHeight())
 	if body == "" {
 		body = m.hints()
 	}

@@ -466,6 +466,80 @@ func TestRenderDetail(t *testing.T) {
 		renderDetail(complete.Candidate{State: "running", Detail: "app:latest"}))
 }
 
+func TestSuggestionPaging(t *testing.T) {
+	values := make([]string, 60)
+	for i := range values {
+		values[i] = "ns/pod-" + strconv.Itoa(i)
+	}
+	m := send(t, New(), tea.WindowSizeMsg{Width: 100, Height: 30}, k("enter"))
+	m = send(t, m, candidates(m, values...))
+	page := m.(Model).start.listHeight()
+	require.Positive(t, page)
+
+	sel := func(m tea.Model) int { return m.(Model).start.sel }
+
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyEnd})
+	require.Equal(t, len(values)-1, sel(m), "end jumps to the last suggestion")
+	require.Contains(t, screen(t, m), values[len(values)-1])
+
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyHome})
+	require.Equal(t, 0, sel(m), "home jumps back to the first")
+
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyPgDown})
+	require.Equal(t, page, sel(m), "pgdown moves one visible page")
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyPgUp})
+	require.Equal(t, 0, sel(m))
+}
+
+func TestLogViewJumpKeys(t *testing.T) {
+	lines := make([]string, 200)
+	for i := range lines {
+		lines[i] = `{"level":"info","msg":"line-` + strconv.Itoa(i) + `"}`
+	}
+	m := logsModel(t, lines...)
+	logs := func(m tea.Model) logModel { return m.(Model).logs }
+
+	// Follow pins the cursor to the tail.
+	require.Equal(t, len(lines)-1, logs(m).cursor)
+
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyHome})
+	require.Equal(t, 0, logs(m).cursor, "home reaches the start of the whole list")
+	require.False(t, logs(m).follow, "and stops following")
+
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyEnd})
+	require.Equal(t, len(lines)-1, logs(m).cursor, "end reaches the tail")
+	require.True(t, logs(m).follow)
+
+	// H and L move within the visible window, not the whole list.
+	top := logs(m).top
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("H")})
+	require.Equal(t, top, logs(m).cursor, "H goes to the top of the view")
+	require.Greater(t, logs(m).cursor, 0, "which is not the top of the list")
+
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("L")})
+	require.Equal(t, top+logs(m).bodyHeight()-1, logs(m).cursor, "L goes to the bottom of the view")
+
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyPgUp})
+	require.Equal(t, top-1, logs(m).cursor, "pgup moves one screen back")
+}
+
+func TestEntryViewEndScrolls(t *testing.T) {
+	fields := make([]string, 0, 60)
+	for i := range 60 {
+		fields = append(fields, `"f`+strconv.Itoa(i)+`":"v"`)
+	}
+	m := logsModel(t, `{"level":"info","msg":"big",`+strings.Join(fields, ",")+`}`)
+	m = send(t, m, k("enter"))
+	require.Equal(t, 0, m.(Model).entry.off)
+
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyEnd})
+	require.Positive(t, m.(Model).entry.off, "end scrolls to the bottom of the entry")
+	require.NotPanics(t, func() { _ = screen(t, m) })
+
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyHome})
+	require.Equal(t, 0, m.(Model).entry.off)
+}
+
 // TestStatesLineUp: names of wildly different lengths must still put their
 // state in one column. Capping the value column at half the row used to let
 // long names push their state right, leaving a ragged edge.

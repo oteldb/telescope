@@ -25,6 +25,9 @@ type logModel struct {
 	view  *logs.View
 
 	cursor int
+	// top is the first entry drawn, kept as real state so the cursor can move
+	// within the window without the window moving under it.
+	top    int
 	hoff   int
 	follow bool
 
@@ -94,11 +97,12 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 		}
 	case "f":
 		m.follow = !m.follow
+		m.syncFollow()
 	case "l":
 		f := m.view.Filter()
 		f.MinLevel = f.MinLevel.Next()
 		m.view.SetFilter(f)
-		m.cursor = 0
+		m.cursor, m.top = 0, 0
 	case "up", "k":
 		m.move(-1, len(entries))
 	case "down", "j":
@@ -109,10 +113,17 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 		m.move(m.bodyHeight(), len(entries))
 	case "home", "g":
 		m.follow = false
-		m.cursor = 0
+		m.cursor, m.top = 0, 0
 	case "end", "G":
 		m.follow = true
-		m.cursor = len(entries) - 1
+		m.cursor = max(len(entries)-1, 0)
+	case "H":
+		// Top and bottom of what is on screen, as in less and vim.
+		m.follow = false
+		m.cursor = m.top
+	case "L":
+		m.cursor = m.top + m.bodyHeight() - 1
+		m.follow = m.cursor >= len(entries)-1
 	case "left":
 		m.hoff = max(0, m.hoff-hScrollStep)
 	case "right":
@@ -120,6 +131,7 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 	case "0":
 		m.hoff = 0
 	}
+	m.clamp()
 	return m, nil
 }
 
@@ -131,7 +143,7 @@ func (m logModel) updateSearch(km tea.KeyMsg) (logModel, tea.Cmd) {
 		m.view.SetFilter(f)
 		m.searching = false
 		m.search.Blur()
-		m.cursor = 0
+		m.cursor, m.top = 0, 0
 		return m, nil
 	case "esc":
 		m.searching = false
@@ -144,6 +156,19 @@ func (m logModel) updateSearch(km tea.KeyMsg) (logModel, tea.Cmd) {
 	return m, cmd
 }
 
+// syncFollow pins the cursor to the newest entry while following. It runs when
+// entries arrive rather than at render time, so keys that work from the cursor
+// see where the view actually is.
+func (m *logModel) syncFollow() {
+	if !m.follow {
+		return
+	}
+	if n := len(m.view.Entries(m.store)); n > 0 {
+		m.cursor = n - 1
+	}
+	m.clamp()
+}
+
 // move shifts the cursor, disabling follow when scrolling away from the tail.
 func (m *logModel) move(d, n int) {
 	if n == 0 {
@@ -153,18 +178,28 @@ func (m *logModel) move(d, n int) {
 	m.follow = m.cursor == n-1
 }
 
+// clamp keeps the cursor inside the list and the window around the cursor,
+// scrolling by the least amount needed.
+func (m *logModel) clamp() {
+	n := len(m.view.Entries(m.store))
+	h := m.bodyHeight()
+
+	m.cursor = min(max(m.cursor, 0), max(n-1, 0))
+	m.top = min(max(m.top, 0), max(n-h, 0))
+	if m.cursor < m.top {
+		m.top = m.cursor
+	}
+	if m.cursor >= m.top+h {
+		m.top = m.cursor - h + 1
+	}
+}
+
 func (m logModel) View() string {
 	entries := m.view.Entries(m.store)
-	if m.follow && len(entries) > 0 {
-		m.cursor = len(entries) - 1
-	}
-	m.cursor = min(max(m.cursor, 0), max(len(entries)-1, 0))
+	m.clamp()
 
 	height := m.bodyHeight()
-	top := 0
-	if m.cursor >= height {
-		top = m.cursor - height + 1
-	}
+	top := m.top
 
 	inner := max(m.width()-2, 10)
 	body := make([]string, 0, height)
@@ -272,6 +307,7 @@ func (m logModel) footer(entries []*logs.Entry) string {
 		key("f", "follow"),
 		key("l", "level"),
 		key("←→", "scroll"),
+		key("home/end", "ends"),
 		key("esc", "sources"),
 		key("q", "quit"),
 	}, styleHint.Render(" · "))
