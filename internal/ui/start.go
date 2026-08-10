@@ -20,8 +20,12 @@ const logo = "" +
 	" ┃ ┣╸ ┃  ┣╸ ┗━┓┃  ┃ ┃┣━┛┣╸ \n" +
 	" ╹ ┗━╸┗━╸┗━╸┗━┛┗━╸┗━┛╹  ┗━╸"
 
-// promptWidth is the target width of the centered prompt bar.
-const promptWidth = 64
+// The prompt bar, and the suggestion list under it, grow with the terminal
+// between these bounds.
+const (
+	minPromptWidth = 64
+	maxPromptWidth = 100
+)
 
 type startStep int
 
@@ -44,9 +48,7 @@ var (
 // maxCompletions is how many suggestions are listed under the prompt, and
 // detailColumn caps how far the detail column is pushed right.
 const (
-	// detailColumn caps how far the detail column is pushed right, and
 	// maxContentWidth keeps the centered screen readable on a wide terminal.
-	detailColumn    = 28
 	maxContentWidth = 120
 )
 
@@ -115,7 +117,7 @@ func newStart() startModel {
 		ti.Placeholder = placeholder
 		ti.Prompt = "❯ "
 		ti.PromptStyle = lipgloss.NewStyle().Foreground(colorAccent)
-		ti.Width = promptWidth - 6
+		ti.Width = minPromptWidth - 6
 		return ti
 	}
 	m := startModel{
@@ -342,6 +344,7 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
+		m.resizeInputs()
 		return m, nil
 	case candidatesMsg:
 		// Every reply is cached, including preloads for steps not yet visited.
@@ -526,7 +529,7 @@ func (m startModel) View() string {
 	if !m.active() {
 		bar = styleDim.Render("  local machine")
 	}
-	b.WriteString(box.Width(promptWidth).Render(bar))
+	b.WriteString(box.Width(m.promptWidth()).Render(bar))
 	b.WriteString("\n\n")
 
 	if m.err != nil {
@@ -557,7 +560,30 @@ func (m startModel) View() string {
 // contentWidth is the stable width every line of the start screen is centered
 // within.
 func (m startModel) contentWidth() int {
-	return min(max(m.w-2*screenPad, promptWidth), maxContentWidth)
+	return min(max(m.w-2*screenPad, minPromptWidth), maxContentWidth)
+}
+
+// promptWidth is the width shared by the prompt bar and the suggestion list,
+// so the two stay aligned as the terminal grows. It leaves room for the box
+// border: a bar as wide as the content block would overflow it, and the screen
+// would start shifting again as lines grow.
+func (m startModel) promptWidth() int {
+	return min(m.contentWidth()-2, maxPromptWidth)
+}
+
+// detailColumn is where suggestion details line up. Half the row keeps long
+// values from pushing details off the end while still leaving room to read
+// them.
+func (m startModel) detailColumn() int {
+	return m.promptWidth() / 2
+}
+
+// resizeInputs keeps the text inputs matched to the prompt bar.
+func (m *startModel) resizeInputs() {
+	w := max(m.promptWidth()-6, 10)
+	for _, in := range []*textinput.Model{&m.host, &m.target, &m.query, &m.kubeconfig} {
+		in.Width = w
+	}
 }
 
 func (m startModel) breadcrumb() string {
@@ -578,7 +604,7 @@ func (m startModel) breadcrumb() string {
 	// The command preview is the only place sudo and the kubeconfig are
 	// visible, so it gets the full screen width rather than the prompt width.
 	crumb := styleDim.Render(strings.Join(parts, "  ▸  "))
-	return ansi.Truncate(crumb, max(m.w-2*screenPad, promptWidth), styleDim.Render("…"))
+	return ansi.Truncate(crumb, m.contentWidth(), styleDim.Render("…"))
 }
 
 func (m startModel) chips() string {
@@ -664,7 +690,8 @@ func tailLabel(n int) string {
 // there is nothing to suggest yet. An empty result means the caller should fall
 // back to the static hints.
 func (m startModel) completions(limit int) string {
-	block := lipgloss.NewStyle().Width(promptWidth).Align(lipgloss.Left)
+	width := m.promptWidth()
+	block := lipgloss.NewStyle().Width(width).Align(lipgloss.Left)
 	switch {
 	case m.step == stepQuery:
 		return ""
@@ -694,7 +721,7 @@ func (m startModel) completions(limit int) string {
 	for _, c := range window {
 		valueWidth = max(valueWidth, lipgloss.Width(c.Value))
 	}
-	valueWidth = min(valueWidth, detailColumn)
+	valueWidth = min(valueWidth, m.detailColumn())
 
 	rows := make([]string, 0, shown+1)
 	for i, c := range window {
@@ -709,7 +736,7 @@ func (m startModel) completions(limit int) string {
 		}
 		// Truncate rather than let the block wrap: a long image name would
 		// otherwise push the rest of the list down.
-		rows = append(rows, block.Render(ansi.Truncate(row, promptWidth, styleDim.Render("…"))))
+		rows = append(rows, block.Render(ansi.Truncate(row, width, styleDim.Render("…"))))
 	}
 	if rest := len(m.filtered) - start - shown; rest > 0 {
 		rows = append(rows, block.Render(styleHint.Render("  … "+strconv.Itoa(rest)+" more")))
@@ -746,7 +773,7 @@ func (m startModel) hints() string {
 	}
 	// Pad every line to the same width so the surrounding centering moves the
 	// block as a whole instead of centering each line on its own.
-	block := lipgloss.NewStyle().Width(promptWidth).Align(lipgloss.Left)
+	block := lipgloss.NewStyle().Width(m.promptWidth()).Align(lipgloss.Left)
 	for i, l := range lines {
 		lines[i] = block.Render(styleHint.Render("  " + l))
 	}

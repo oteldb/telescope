@@ -421,6 +421,41 @@ func TestPromptDoesNotShiftWhileTyping(t *testing.T) {
 	}
 }
 
+// TestRowsWidenWithTheTerminal checks that a long value keeps its detail
+// column on a wide terminal instead of being truncated at a fixed width.
+func TestRowsWidenWithTheTerminal(t *testing.T) {
+	const long = "clickhouse/chi-altinity-clickhouse-operator-6974f69488-87p5x"
+
+	rowFor := func(w int) string {
+		m := send(t, New(), tea.WindowSizeMsg{Width: w, Height: 30}, k("enter"))
+		m = send(t, m, candidates(m, long))
+		for line := range strings.SplitSeq(screen(t, m), "\n") {
+			if strings.Contains(line, long) {
+				return strings.TrimRight(line, " ")
+			}
+		}
+		return ""
+	}
+
+	narrow, wide := rowFor(70), rowFor(160)
+	require.NotEmpty(t, narrow)
+	require.NotContains(t, narrow, "running", "the detail does not fit at 70 columns")
+	require.Contains(t, narrow, "…", "it is truncated instead")
+	require.Contains(t, wide, "running", "at 160 columns it fits")
+	require.Greater(t, len(wide), len(narrow))
+}
+
+// TestPromptFitsTheContentBlock guards the overflow that reintroduces jitter:
+// the bar plus its border must never exceed the block it is centered in.
+func TestPromptFitsTheContentBlock(t *testing.T) {
+	for _, w := range []int{40, 80, 100, 160, 400} {
+		m := send(t, New(), tea.WindowSizeMsg{Width: w, Height: 30})
+		start := m.(Model).start
+		require.LessOrEqual(t, start.promptWidth()+2, start.contentWidth(),
+			"prompt overflows the content block at width %d", w)
+	}
+}
+
 func TestCompletionListGrowsWithTheWindow(t *testing.T) {
 	values := make([]string, 40)
 	for i := range values {
