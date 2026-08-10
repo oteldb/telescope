@@ -41,8 +41,9 @@ type Config struct {
 	UserUnit bool
 	// Namespace is the Kubernetes namespace for [CollectorKubectl].
 	Namespace string
-	// Target is the pod name for [CollectorKubectl]. A value containing "=" is
-	// used as a label selector instead.
+	// Target is what [CollectorKubectl] reads: a pod name, a "kind/name"
+	// reference such as "deploy/api", or, when it contains "=", a label
+	// selector.
 	Target string
 	// Container narrows [CollectorKubectl] to a container and names the
 	// container for [CollectorDocker].
@@ -71,7 +72,7 @@ func (c Config) Validate() error {
 	switch c.Collector {
 	case CollectorKubectl:
 		if strings.TrimSpace(c.Target) == "" {
-			return fmt.Errorf("kubectl requires a pod name or label selector")
+			return fmt.Errorf("kubectl requires a pod, a resource such as deploy/name, or a label selector")
 		}
 	case CollectorDocker:
 		if strings.TrimSpace(c.Container) == "" {
@@ -245,15 +246,42 @@ func ParseJournalTarget(s string) (unit string, user bool) {
 	return strings.TrimSpace(rest), false
 }
 
+// kubeKinds are the resource kinds "kubectl logs" reads from besides a pod,
+// under every name kubectl accepts for them. A leading segment naming one is a
+// resource reference rather than a namespace, which is what tells "deploy/api"
+// apart from "oteldb/api".
+var kubeKinds = map[string]bool{
+	"pod": true, "po": true,
+	"deployment": true, "deploy": true,
+	"statefulset": true, "sts": true,
+	"daemonset": true, "ds": true,
+	"replicaset": true, "rs": true,
+	"replicationcontroller": true, "rc": true,
+	"job": true, "cronjob": true, "cj": true,
+	"service": true, "svc": true,
+}
+
+// IsKubeKind reports whether s names a resource kind, with or without its API
+// group and plural s, as in "deploy", "deployments" or "deployment.apps".
+func IsKubeKind(s string) bool {
+	kind, _, _ := strings.Cut(strings.ToLower(s), ".")
+	return kubeKinds[kind] || kubeKinds[strings.TrimSuffix(kind, "s")]
+}
+
 // ParseKubeTarget splits the compact kubectl target syntax
-// "[namespace/]pod-or-selector[:container]".
+// "[namespace/]pod-selector-or-kind/name[:container]".
 func ParseKubeTarget(s string) (namespace, target, container string) {
 	s = strings.TrimSpace(s)
-	if ns, rest, ok := strings.Cut(s, "/"); ok {
-		namespace, s = ns, rest
-	}
 	if rest, ct, ok := strings.Cut(s, ":"); ok {
 		s, container = rest, ct
 	}
-	return namespace, strings.TrimPrefix(s, "-l "), container
+	switch parts := strings.SplitN(s, "/", 3); {
+	case len(parts) == 3:
+		namespace, target = parts[0], parts[1]+"/"+parts[2]
+	case len(parts) == 2 && !IsKubeKind(parts[0]):
+		namespace, target = parts[0], parts[1]
+	default:
+		target = s
+	}
+	return namespace, strings.TrimPrefix(target, "-l "), container
 }

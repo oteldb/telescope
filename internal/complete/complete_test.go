@@ -228,6 +228,52 @@ func TestParsePodContainers(t *testing.T) {
 	}
 }
 
+// TestParseWorkload covers the real shapes of the listing: a deployment and a
+// statefulset report readyReplicas, a daemonset reports numberReady instead,
+// and the columns are the same for all three.
+func TestParseWorkload(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		line string
+		want []Candidate
+	}{
+		{
+			name: "deployment",
+			line: "Deployment oteldb api api 1 1 <none> <none>",
+			want: []Candidate{{Value: "oteldb/deployment/api", Detail: "deployment · 1/1 ready"}},
+		},
+		{
+			name: "daemonset counts differently",
+			line: "DaemonSet kube-system cilium cilium-agent <none> <none> 2 2",
+			want: []Candidate{{Value: "kube-system/daemonset/cilium", Detail: "daemonset · 2/2 ready"}},
+		},
+		{
+			name: "none ready is not none scheduled",
+			line: "Deployment oteldb api api <none> 3 <none> <none>",
+			want: []Candidate{{Value: "oteldb/deployment/api", Detail: "deployment · 0/3 ready"}},
+		},
+		{
+			name: "several containers are named",
+			line: "StatefulSet oteldb storage storage,clickhouse-log 1 1 <none> <none>",
+			want: []Candidate{
+				{Value: "oteldb/statefulset/storage", Detail: "statefulset · 1/1 ready"},
+				{Value: "oteldb/statefulset/storage:storage", Detail: "statefulset container"},
+				{Value: "oteldb/statefulset/storage:clickhouse-log", Detail: "statefulset container"},
+			},
+		},
+		{
+			name: "counts may be missing entirely",
+			line: "Deployment oteldb api",
+			want: []Candidate{{Value: "oteldb/deployment/api", Detail: "deployment"}},
+		},
+		{"not a kind kubectl logs reads", "ConfigMap ns name", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, parseWorkload(tt.line))
+		})
+	}
+}
+
 // TestGuardKeepsTheRealReason: a guard explains what it wanted, but must not
 // hide why the check actually failed.
 func TestGuardKeepsTheRealReason(t *testing.T) {

@@ -37,7 +37,13 @@ Targets use a compact syntax, the same in the prompt and in the config file:
 | `pod` | a pod in the default namespace |
 | `oteldb/oteldb-0` | a pod in a namespace |
 | `oteldb/oteldb-0:clickhouse` | one container of that pod |
+| `oteldb/deploy/api` | a workload: `deployment`, `statefulset`, `daemonset`, `job`, … |
 | `oteldb/app=oteldb` | a label selector (`kubectl logs -l`) |
+
+A leading segment naming a resource kind is read as a kind, not a namespace,
+so `deploy/api` and `oteldb/deploy/api` both mean what they look like. Naming a
+workload rather than a pod survives a restart, at the cost of `kubectl` picking
+one of its pods.
 
 ## Keys
 
@@ -107,6 +113,7 @@ remote node lists that node's units and containers.
 | ssh host | `~/.ssh/config`, `/etc/ssh/ssh_config` and their `Include`s, then `known_hosts` |
 | unit | `systemctl list-units`, plus `systemctl --user` tagged `user/` |
 | pod | `kubectl get pods -A`, with a row per container when a pod has several, and for every init container |
+| workload | `kubectl get deployments,statefulsets,daemonsets -A`, likewise per container |
 | container | `docker ps -a` |
 | kubeconfig | the usual paths, plus whatever you type |
 | context | `kubectl config get-contexts` of the chosen kubeconfig |

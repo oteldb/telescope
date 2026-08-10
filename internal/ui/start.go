@@ -546,7 +546,7 @@ func (m *startModel) syncPlaceholder() {
 	case source.CollectorJournal:
 		m.target.Placeholder = "[user/]unit, e.g. kubelet — empty for the whole journal"
 	case source.CollectorKubectl:
-		m.target.Placeholder = "[namespace/]pod[:container] or [ns/]app=name"
+		m.target.Placeholder = "[namespace/]pod-or-kind/name[:container] or [ns/]app=name"
 	case source.CollectorDocker:
 		m.target.Placeholder = "container name or id"
 	case source.CollectorCommand:
@@ -1192,7 +1192,12 @@ func (m startModel) hints() string {
 				"(empty)          everything in the journal",
 			}
 		case source.CollectorKubectl:
-			lines = []string{"oteldb/oteldb-0", "oteldb/app=oteldb", "oteldb/oteldb-0:clickhouse"}
+			lines = []string{
+				"oteldb/oteldb-0",
+				"oteldb/deploy/api          a workload, which outlives its pods",
+				"oteldb/app=oteldb",
+				"oteldb/oteldb-0:clickhouse",
+			}
 		case source.CollectorDocker:
 			lines = []string{"clickhouse", "3f1a0c2b9d44"}
 		case source.CollectorCommand:

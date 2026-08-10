@@ -139,7 +139,7 @@ func TestPartialSavedSourceUnwinds(t *testing.T) {
 	require.Equal(t, "node1", start.host.Value())
 	require.Equal(t, "/root/.kube/ops.kubeconfig", start.kubeconfig.Value())
 	require.True(t, start.elevate)
-	require.Contains(t, screen(t, m), "pod[:container]", "the prompt asks for what is missing")
+	require.Contains(t, screen(t, m), "pod-or-kind/name[:container]", "the prompt asks for what is missing")
 
 	// The pods are listed for that cluster, not the default one.
 	require.Equal(t, complete.Request{

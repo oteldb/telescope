@@ -14,6 +14,10 @@ import (
 // maxCandidates caps a listing so a large cluster cannot flood the prompt.
 const maxCandidates = 5000
 
+// none is what kubectl's custom-columns prints for a field an object does not
+// have, which is how an absent count is told from a zero one.
+const none = "<none>"
+
 // guard makes cmd fail fast, with an explanation instead of a bare exit code,
 // when check does not succeed. It runs on the host the listing targets, so a
 // tool missing on a remote node costs one round trip and nothing more.
@@ -98,19 +102,34 @@ var listers = map[source.Collector]lister{
 			parse: parseUserUnit,
 		},
 	}},
-	source.CollectorKubectl: {sources: []listSource{{
-		build: func(r Request) string {
-			// No guard on current-context: kubectl cannot tell a missing
-			// kubeconfig from one without a context ("config current-context"
-			// reports the latter for both), while "get pods" names the real
-			// problem and fails just as fast, both being local checks.
-			return guard("command -v kubectl", "kubectl is not installed",
-				kubectl(r)+" get pods --all-namespaces --no-headers -o custom-columns="+
-					":.metadata.namespace,:.metadata.name,:.status.phase,"+
-					":.spec.containers[*].name,:.spec.initContainers[*].name")
+	source.CollectorKubectl: {sources: []listSource{
+		{
+			build: func(r Request) string {
+				// No guard on current-context: kubectl cannot tell a missing
+				// kubeconfig from one without a context ("config current-context"
+				// reports the latter for both), while "get pods" names the real
+				// problem and fails just as fast, both being local checks.
+				return guard("command -v kubectl", "kubectl is not installed",
+					kubectl(r)+" get pods --all-namespaces --no-headers -o custom-columns="+
+						":.metadata.namespace,:.metadata.name,:.status.phase,"+
+						":.spec.containers[*].name,:.spec.initContainers[*].name")
+			},
+			parse: parsePod,
 		},
-		parse: parsePod,
-	}}},
+		{
+			// Workloads outlive the pods under them, so following one survives a
+			// restart that a pod name does not.
+			build: func(r Request) string {
+				return kubectl(r) + " get deployments,statefulsets,daemonsets" +
+					" --all-namespaces --no-headers -o custom-columns=" +
+					":.kind,:.metadata.namespace,:.metadata.name," +
+					":.spec.template.spec.containers[*].name," +
+					":.status.readyReplicas,:.status.replicas," +
+					":.status.numberReady,:.status.desiredNumberScheduled"
+			},
+			parse: parseWorkload,
+		},
+	}},
 	source.CollectorDocker: {sources: []listSource{{
 		build: func(r Request) string {
 			return guard("command -v docker", "docker is not installed",
@@ -265,10 +284,50 @@ func parsePod(line string) []Candidate {
 	return out
 }
 
+// parseWorkload reads "kind namespace name containers ready replicas
+// numberReady desiredNumberScheduled" and emits the "ns/kind/name" target that
+// kubectl logs accepts in place of a pod.
+//
+// The two pairs of replica counts are the deployment and daemonset spellings of
+// the same thing; whichever the kind fills in is the one reported.
+func parseWorkload(line string) []Candidate {
+	f := strings.Fields(line)
+	if len(f) < 3 {
+		return nil
+	}
+	kind := strings.ToLower(f[0])
+	if !source.IsKubeKind(kind) {
+		return nil
+	}
+	name := f[1] + "/" + kind + "/" + f[2]
+
+	// The desired count decides which pair the kind filled in: a deployment
+	// with nothing ready yet still reports how many it wants.
+	ready, want := get(f, 4), get(f, 5)
+	if want == none || want == "" {
+		ready, want = get(f, 6), get(f, 7)
+	}
+	detail := kind
+	if want != "" && want != none {
+		if ready == none {
+			ready = "0"
+		}
+		detail = kind + " · " + ready + "/" + want + " ready"
+	}
+
+	out := []Candidate{{Value: name, Detail: detail}}
+	if containers := splitColumn(get(f, 3)); len(containers) > 1 {
+		for _, c := range containers {
+			out = append(out, Candidate{Value: name + ":" + c, Detail: kind + " container"})
+		}
+	}
+	return out
+}
+
 // splitColumn reads a custom-columns list, which is comma separated and prints
 // <none> when the field is absent.
 func splitColumn(s string) []string {
-	if s == "" || s == "<none>" {
+	if s == "" || s == none {
 		return nil
 	}
 	return strings.Split(s, ",")

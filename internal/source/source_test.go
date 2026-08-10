@@ -88,6 +88,16 @@ func TestConfigCommand(t *testing.T) {
 			want: `sudo -n sh -c 'cat /var/log/x | grep y'`,
 		},
 		{
+			name: "kubectl deployment",
+			cfg:  Config{Collector: CollectorKubectl, Namespace: "oteldb", Target: "deployment/api", Follow: true},
+			want: "kubectl logs -n oteldb deployment/api -f",
+		},
+		{
+			name: "kubectl statefulset container",
+			cfg:  Config{Collector: CollectorKubectl, Namespace: "oteldb", Target: "statefulset/storage", Container: "storage"},
+			want: "kubectl logs -n oteldb statefulset/storage -c storage",
+		},
+		{
 			name: "kubectl with an explicit context",
 			cfg: Config{
 				Collector: CollectorKubectl, Target: "pod",
@@ -189,6 +199,14 @@ func TestParseKubeTarget(t *testing.T) {
 		{"oteldb/app=oteldb", "oteldb", "app=oteldb", ""},
 		{"oteldb/-l app=oteldb", "oteldb", "app=oteldb", ""},
 		{"  spaced  ", "", "spaced", ""},
+		// A leading kind is a resource reference, not a namespace.
+		{"deploy/api", "", "deploy/api", ""},
+		{"deployment.apps/api", "", "deployment.apps/api", ""},
+		{"oteldb/deploy/api", "oteldb", "deploy/api", ""},
+		{"oteldb/statefulset/storage:storage", "oteldb", "statefulset/storage", "storage"},
+		{"pods/api", "", "pods/api", ""},
+		// A namespace that merely looks like one is still a namespace.
+		{"deployer/api", "deployer", "api", ""},
 	} {
 		t.Run(tt.in, func(t *testing.T) {
 			ns, target, container := ParseKubeTarget(tt.in)
