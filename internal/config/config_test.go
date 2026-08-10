@@ -1,0 +1,96 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/oteldb/telescope/internal/source"
+)
+
+func write(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
+}
+
+func TestLoad(t *testing.T) {
+	path := write(t, `
+sources:
+  - name: node1 pods
+    transport: ssh
+    host: node1
+    collector: kubectl
+    target: oteldb/oteldb-0
+    kubeconfig: /root/.kube/ops.kubeconfig
+    sudo: true
+    query: error
+  - name: local docker
+    collector: docker
+    container: navidrome
+    tail: 50
+    follow: false
+`)
+	cfg, err := loadFrom(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Sources, 2)
+
+	pods, err := cfg.Sources[0].Stream()
+	require.NoError(t, err)
+	require.Equal(t, source.TransportSSH, pods.Transport)
+	require.True(t, pods.Elevate)
+	require.Equal(t, "oteldb", pods.Namespace, "the compact ns/pod form is split")
+	require.Equal(t, "oteldb-0", pods.Target)
+	require.Equal(t, 1000, pods.Tail, "tail defaults")
+	require.True(t, pods.Follow, "follow defaults")
+	require.Equal(t, "error", cfg.Sources[0].Query)
+	require.Equal(t,
+		"sudo -n kubectl --kubeconfig=/root/.kube/ops.kubeconfig "+
+			"logs -n oteldb oteldb-0 --tail 1000 -f",
+		pods.Command())
+
+	docker, err := cfg.Sources[1].Stream()
+	require.NoError(t, err)
+	require.Equal(t, source.TransportLocal, docker.Transport, "transport defaults to local")
+	require.Equal(t, 50, docker.Tail)
+	require.False(t, docker.Follow, "follow: false is not mistaken for unset")
+}
+
+func TestLoadUserUnitPrefix(t *testing.T) {
+	cfg, err := loadFrom(write(t, "sources:\n  - name: sync\n    collector: journalctl\n    unit: user/syncthing\n"))
+	require.NoError(t, err)
+
+	got, err := cfg.Sources[0].Stream()
+	require.NoError(t, err)
+	require.True(t, got.UserUnit)
+	require.Equal(t, "syncthing", got.Unit)
+}
+
+func TestLoadMissingFileIsEmpty(t *testing.T) {
+	cfg, err := loadFrom(filepath.Join(t.TempDir(), "absent.yaml"))
+	require.NoError(t, err)
+	require.Empty(t, cfg.Sources)
+}
+
+func TestLoadRejectsBadSources(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		content string
+		errText string
+	}{
+		{"no name", "sources:\n  - collector: docker\n    container: app\n", "name is required"},
+		{"unknown collector", "sources:\n  - name: x\n    collector: nope\n", "unknown collector"},
+		{"unknown transport", "sources:\n  - name: x\n    transport: telnet\n    collector: docker\n    container: a\n", "unknown transport"},
+		{"kubectl without target", "sources:\n  - name: x\n    collector: kubectl\n", "pod name"},
+		{"ssh without host", "sources:\n  - name: x\n    transport: ssh\n    collector: journalctl\n", "requires a host"},
+		{"malformed yaml", "sources: [oops\n", "parse"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadFrom(write(t, tt.content))
+			require.ErrorContains(t, err, tt.errText)
+		})
+	}
+}

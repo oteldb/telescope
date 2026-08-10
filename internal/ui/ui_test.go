@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/oteldb/telescope/internal/complete"
+	"github.com/oteldb/telescope/internal/config"
 	"github.com/oteldb/telescope/internal/source"
 )
 
@@ -77,6 +78,123 @@ func k(s string) tea.Msg {
 }
 
 func size() tea.Msg { return tea.WindowSizeMsg{Width: 100, Height: 30} }
+
+// withSaved makes New() see a declared config and a history, without touching
+// the user's files.
+func withSaved(t *testing.T, sources []config.Source, h config.History) {
+	t.Helper()
+	prevCfg, prevHist := loadConfig, loadHistory
+	loadConfig = func() (config.Config, error) { return config.Config{Sources: sources}, nil }
+	loadHistory = func() config.History { return h }
+	t.Cleanup(func() { loadConfig, loadHistory = prevCfg, prevHist })
+}
+
+func TestSavedSourcesOpenFirst(t *testing.T) {
+	withSaved(t, []config.Source{
+		{Name: "node1 pods", Transport: "ssh", Host: "node1", Collector: "kubectl", Target: "ns/pod", Sudo: true, Query: "error"},
+		{Name: "local docker", Collector: "docker", Container: "navidrome"},
+	}, config.History{})
+
+	m := send(t, New(), size())
+	out := screen(t, m)
+	require.Equal(t, stepSaved, m.(Model).start.step)
+	require.Contains(t, out, "node1 pods")
+	require.Contains(t, out, "ssh://node1 · kubectl", "each source says where it reads from")
+	require.Contains(t, out, "enter open")
+
+	// Enter on a highlighted source goes straight to its logs.
+	m = send(t, m, k("down"), k("down"), k("enter"))
+	require.Equal(t, "navidrome", m.(Model).logs.cfg.Container)
+	require.Contains(t, screen(t, m), "docker logs")
+}
+
+func TestSavedSourceCarriesQuery(t *testing.T) {
+	withSaved(t, []config.Source{
+		{Name: "errors", Collector: "docker", Container: "app", Query: "boom"},
+	}, config.History{})
+
+	m := send(t, New(), size(), k("enter"))
+	require.Equal(t, "boom", m.(Model).logs.view.Filter().Query, "the declared filter is applied")
+}
+
+func TestSavedFilteringAndFallthrough(t *testing.T) {
+	withSaved(t, []config.Source{
+		{Name: "node1 pods", Collector: "docker", Container: "a"},
+		{Name: "prod journal", Collector: "journalctl"},
+	}, config.History{})
+
+	m := send(t, New(), size())
+	for _, r := range "prod" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	out := screen(t, m)
+	require.Contains(t, out, "prod journal")
+	require.NotContains(t, out, "node1 pods")
+
+	// tab leaves the picker for the manual flow, esc comes back.
+	m = send(t, m, k("tab"))
+	require.Equal(t, stepTransport, m.(Model).start.step)
+	m = send(t, m, k("esc"))
+	require.Equal(t, stepSaved, m.(Model).start.step)
+}
+
+func TestNoSavedSourcesSkipsThePicker(t *testing.T) {
+	withSaved(t, nil, config.History{})
+	m := send(t, New(), size())
+	require.Equal(t, stepTransport, m.(Model).start.step)
+	require.Contains(t, screen(t, m), "esc quit")
+}
+
+func TestBrokenConfigIsReported(t *testing.T) {
+	prev := loadConfig
+	loadConfig = func() (config.Config, error) {
+		return config.Config{}, errors.New("parse config.yaml: bad indent")
+	}
+	t.Cleanup(func() { loadConfig = prev })
+
+	require.Contains(t, screen(t, send(t, New(), size())), "bad indent")
+}
+
+func TestHistoryFloatsRecentToTheTop(t *testing.T) {
+	withSaved(t, nil, config.History{
+		Targets: map[string][]string{"journalctl": {"kubelet"}},
+		Hosts:   []string{"node9"},
+	})
+
+	m := send(t, New(), size(), k("enter"))
+	m = send(t, m, candidates(m, "alpha", "kubelet", "zeta"))
+
+	got := m.(Model).start.filtered
+	require.Equal(t, "kubelet", got[0].Value, "the last unit used comes first")
+
+	// A remembered host the ssh config no longer lists is still offered.
+	m = send(t, New(), size(), k("esc"))
+	m = send(t, m, k("tab"))
+	m = send(t, m, candidates(m, "other"))
+	values := make([]string, 0, 2)
+	for _, c := range m.(Model).start.filtered {
+		values = append(values, c.Value)
+	}
+	require.Equal(t, []string{"node9", "other"}, values)
+}
+
+func TestConnectingRemembersTheSource(t *testing.T) {
+	withSaved(t, nil, config.History{})
+
+	m := send(t, New(), size(), k("tab"))
+	for _, r := range "node1" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m = send(t, m, k("enter"), k("tab"), k("tab")) // docker
+	for _, r := range "app" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m = send(t, m, k("enter"), k("enter"))
+
+	h := m.(Model).start.history
+	require.Equal(t, []string{"node1"}, h.Hosts)
+	require.Equal(t, []string{"app"}, h.Recent(source.CollectorDocker))
+}
 
 func TestStartScreen(t *testing.T) {
 	m := send(t, New(), size())

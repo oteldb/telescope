@@ -9,8 +9,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/go-faster/errors"
 
 	"github.com/oteldb/telescope/internal/complete"
+	"github.com/oteldb/telescope/internal/config"
 	"github.com/oteldb/telescope/internal/source"
 )
 
@@ -30,7 +32,9 @@ const (
 type startStep int
 
 const (
-	stepTransport startStep = iota
+	// stepSaved is only reached when the config file declares sources.
+	stepSaved startStep = iota
+	stepTransport
 	stepCollector
 	stepQuery
 )
@@ -76,10 +80,11 @@ type startModel struct {
 	transport int
 	collector int
 
-	host       textinput.Model
-	target     textinput.Model
-	query      textinput.Model
-	kubeconfig textinput.Model
+	savedFilter textinput.Model
+	host        textinput.Model
+	target      textinput.Model
+	query       textinput.Model
+	kubeconfig  textinput.Model
 
 	// editKube swaps the prompt bar over to the kubeconfig path while the
 	// collector step is open, so the pod listing can be re-run against it
@@ -100,6 +105,11 @@ type startModel struct {
 	sel     int
 	loading bool
 	candErr error
+
+	// saved are the sources declared in the config file, and history is what
+	// previous runs reached for.
+	saved   []config.Source
+	history config.History
 
 	// cache holds every completion result seen so far, keyed by request, so
 	// stepping back and forth never waits on a listing twice.
@@ -124,24 +134,80 @@ func newStart() startModel {
 		return ti
 	}
 	m := startModel{
-		host:       mk("user@host"),
-		target:     mk(""),
-		query:      mk("grep term or regexp, empty for everything"),
-		kubeconfig: mk("path to kubeconfig, e.g. /etc/rancher/k3s/k3s.yaml"),
-		tail:       1000,
-		follow:     true,
-		sel:        -1,
-		cache:      map[string]cacheEntry{},
-		inflight:   map[string]bool{},
+		savedFilter: mk("filter saved sources"),
+		host:        mk("user@host"),
+		target:      mk(""),
+		query:       mk("grep term or regexp, empty for everything"),
+		kubeconfig:  mk("path to kubeconfig, e.g. /etc/rancher/k3s/k3s.yaml"),
+		tail:        1000,
+		follow:      true,
+		sel:         -1,
+		cache:       map[string]cacheEntry{},
+		inflight:    map[string]bool{},
 	}
+	cfg, err := loadConfig()
+	m.saved, m.err = cfg.Sources, err
+	m.history = loadHistory()
+	if len(m.saved) == 0 {
+		m.step = stepTransport
+	} else {
+		m.candidates = m.savedCandidates()
+		m.filtered = m.candidates
+	}
+
 	m.syncPlaceholder()
 	m.focus()
 	return m
 }
 
+// loadConfig and loadHistory are variables so tests can supply their own
+// without touching the user's files.
+var (
+	loadConfig  = config.Load
+	loadHistory = config.LoadHistory
+)
+
+// savedCandidates renders the declared sources as suggestions.
+func (m startModel) savedCandidates() []complete.Candidate {
+	out := make([]complete.Candidate, 0, len(m.saved))
+	for _, s := range m.saved {
+		cfg, err := s.Stream()
+		if err != nil {
+			out = append(out, complete.Candidate{Value: s.Name, State: "invalid", Detail: err.Error()})
+			continue
+		}
+		where := "local"
+		if cfg.Transport == source.TransportSSH {
+			where = "ssh://" + cfg.Host
+		}
+		out = append(out, complete.Candidate{Value: s.Name, Detail: where + " · " + string(cfg.Collector)})
+	}
+	return out
+}
+
+// openSaved starts the stream declared under name.
+func (m startModel) openSaved(name string) (startModel, tea.Cmd) {
+	for _, s := range m.saved {
+		if s.Name != name {
+			continue
+		}
+		cfg, err := s.Stream()
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		return m, func() tea.Msg { return connectMsg{cfg: cfg, query: s.Query} }
+	}
+	m.err = errors.Errorf("no saved source named %q", name)
+	return m, nil
+}
+
 // request describes what the current step can complete.
 func (m startModel) request() (complete.Request, bool) {
 	switch m.step {
+	case stepSaved:
+		// Declared sources are already in memory; nothing to look up.
+		return complete.Request{}, false
 	case stepTransport:
 		if transports[m.transport] != source.TransportSSH {
 			return complete.Request{}, false
@@ -169,6 +235,13 @@ func (m startModel) request() (complete.Request, bool) {
 // and preloads the ones the next keystroke is likely to need.
 func (m *startModel) fetch() tea.Cmd {
 	m.candidates, m.filtered, m.candErr, m.sel = nil, nil, nil, -1
+
+	if m.step == stepSaved {
+		m.candKey, m.loading = "", false
+		m.candidates = m.savedCandidates()
+		m.refilter()
+		return nil
+	}
 
 	req, ok := m.request()
 	if !ok {
@@ -251,12 +324,59 @@ func (m *startModel) refresh() tea.Cmd {
 // real listing commands.
 var fetcher = complete.Fetch
 
-// refilter narrows the suggestions to what has been typed.
+// refilter narrows the suggestions to what has been typed, with the values
+// this machine reached for before floated to the top.
 func (m *startModel) refilter() {
-	m.filtered = complete.Rank(m.candidates, m.input().Value())
+	m.filtered = complete.Rank(withRecent(m.candidates, m.recent()), m.input().Value())
 	if m.sel >= len(m.filtered) {
 		m.sel = len(m.filtered) - 1
 	}
+}
+
+// recent returns the remembered values for the current step, newest first.
+func (m startModel) recent() []string {
+	switch {
+	case m.step == stepTransport:
+		return m.history.Hosts
+	case m.step == stepCollector && m.editKube:
+		return m.history.KubeConfigs
+	case m.step == stepCollector:
+		return m.history.Recent(collectors[m.collector])
+	default:
+		return nil
+	}
+}
+
+// withRecent moves remembered values to the front, adding any that the host no
+// longer lists: a kubeconfig typed by hand is not something a probe can find.
+func withRecent(items []complete.Candidate, recent []string) []complete.Candidate {
+	if len(recent) == 0 {
+		return items
+	}
+	known := make(map[string]complete.Candidate, len(items))
+	for _, c := range items {
+		known[c.Value] = c
+	}
+
+	out := make([]complete.Candidate, 0, len(items)+len(recent))
+	seen := make(map[string]bool, len(recent))
+	for _, v := range recent {
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		if c, ok := known[v]; ok {
+			out = append(out, c)
+			continue
+		}
+		out = append(out, complete.Candidate{Value: v, Detail: "recent"})
+	}
+	for _, c := range items {
+		if !seen[c.Value] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // accept inserts the highlighted suggestion.
@@ -274,6 +394,8 @@ func (m *startModel) accept() {
 // input returns the text input backing the current step.
 func (m *startModel) input() *textinput.Model {
 	switch {
+	case m.step == stepSaved:
+		return &m.savedFilter
 	case m.step == stepTransport:
 		return &m.host
 	case m.step == stepCollector && m.editKube:
@@ -296,6 +418,7 @@ func (m startModel) active() bool {
 }
 
 func (m *startModel) focus() {
+	m.savedFilter.Blur()
 	m.host.Blur()
 	m.target.Blur()
 	m.query.Blur()
@@ -394,6 +517,12 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 				return m, nil
 			}
 		case "tab":
+			if m.step == stepSaved {
+				m.step = stepTransport
+				m.err = nil
+				m.focus()
+				return m, m.fetch()
+			}
 			if m.sel >= 0 {
 				m.accept()
 				return m, nil
@@ -429,6 +558,15 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 			m.tail = nextTail(m.tail)
 			return m, nil
 		case "enter":
+			if m.step == stepSaved {
+				name := strings.TrimSpace(m.saved[0].Name)
+				if m.sel >= 0 && m.sel < len(m.filtered) {
+					name = m.filtered[m.sel].Value
+				} else if len(m.filtered) > 0 {
+					name = m.filtered[0].Value
+				}
+				return m.openSaved(name)
+			}
 			if m.sel >= 0 {
 				m.accept()
 				return m, nil
@@ -449,7 +587,7 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 				m.editKube = false
 				m.focus()
 				return m, m.fetch()
-			case m.step > stepTransport:
+			case m.step > stepTransport, m.step == stepTransport && len(m.saved) > 0:
 				m.step--
 				m.err = nil
 				m.focus()
@@ -616,12 +754,15 @@ func (m startModel) valueColumn(window []complete.Candidate) int {
 // resizeInputs keeps the text inputs matched to the prompt bar.
 func (m *startModel) resizeInputs() {
 	w := max(m.promptWidth()-6, 10)
-	for _, in := range []*textinput.Model{&m.host, &m.target, &m.query, &m.kubeconfig} {
+	for _, in := range []*textinput.Model{&m.savedFilter, &m.host, &m.target, &m.query, &m.kubeconfig} {
 		in.Width = w
 	}
 }
 
 func (m startModel) breadcrumb() string {
+	if m.step == stepSaved {
+		return ""
+	}
 	var parts []string
 	if m.step > stepTransport {
 		if transports[m.transport] == source.TransportSSH {
@@ -648,6 +789,8 @@ func (m startModel) chips() string {
 		sel   int
 	)
 	switch m.step {
+	case stepSaved:
+		return ""
 	case stepTransport:
 		for _, t := range transports {
 			items = append(items, string(t))
@@ -673,6 +816,14 @@ func (m startModel) chips() string {
 }
 
 func (m startModel) help() string {
+	if m.step == stepSaved {
+		return strings.Join([]string{
+			key("↑↓", "pick"),
+			key("enter", "open"),
+			key("tab", "new source"),
+			key("esc", "quit"),
+		}, styleHint.Render(" · "))
+	}
 	if m.step == stepQuery {
 		return strings.Join([]string{
 			key("enter", "open logs"),
@@ -708,7 +859,7 @@ func (m startModel) help() string {
 // escLabel names what esc will do from here, so quitting is discoverable on
 // the first step rather than only through ctrl+c.
 func (m startModel) escLabel() string {
-	if m.step == stepTransport {
+	if m.step == stepTransport && len(m.saved) == 0 {
 		return "quit"
 	}
 	return "back"
@@ -798,6 +949,8 @@ func renderDetail(c complete.Candidate) string {
 func (m startModel) hints() string {
 	var lines []string
 	switch m.step {
+	case stepSaved:
+		lines = []string{"no saved sources yet — press tab to configure one by hand"}
 	case stepTransport:
 		lines = []string{
 			"local    read from this machine",

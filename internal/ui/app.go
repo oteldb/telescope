@@ -8,6 +8,7 @@ import (
 	"github.com/go-faster/errors"
 
 	"github.com/oteldb/telescope/internal/complete"
+	"github.com/oteldb/telescope/internal/config"
 	"github.com/oteldb/telescope/internal/logs"
 	"github.com/oteldb/telescope/internal/source"
 )
@@ -78,7 +79,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logs = newLogs(msg.cfg, logs.NewStore(storeLimit), msg.query)
 		m.logs.resize(m.w, m.h)
 		m.state = stateLogs
-		return m, startStream(msg.cfg)
+		m.start.history.Remember(msg.cfg)
+		return m, tea.Batch(startStream(msg.cfg), saveHistory(m.start.history))
 
 	case streamStartedMsg:
 		m.stream = msg.stream
@@ -174,6 +176,15 @@ type (
 	backMsg      struct{}
 	quitMsg      struct{}
 )
+
+// saveHistory records what was opened. A failure to write is not worth
+// interrupting the view for; the next run simply offers less.
+func saveHistory(h config.History) tea.Cmd {
+	return func() tea.Msg {
+		_ = h.Save()
+		return nil
+	}
+}
 
 func startStream(cfg source.Config) tea.Cmd {
 	return func() tea.Msg {
