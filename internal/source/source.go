@@ -49,8 +49,11 @@ type Config struct {
 	Container string
 	// Args is the verbatim shell command for [CollectorCommand].
 	Args string
-	// KubeConfig points [CollectorKubectl] at a specific config file.
-	KubeConfig string
+	// KubeConfig points [CollectorKubectl] at a specific config file, and
+	// KubeContext at one context within it. A context is worth naming on its
+	// own: a kubeconfig with no current-context is unusable without it.
+	KubeConfig  string
+	KubeContext string
 
 	// Elevate runs the collector under sudo, for logs or configs a plain user
 	// cannot read.
@@ -111,6 +114,9 @@ func (c Config) Command() string {
 		// "sudo env ..." or "sudo sh -c ...".
 		if k := strings.TrimSpace(c.KubeConfig); k != "" {
 			args = append(args, "--kubeconfig="+Quote(k))
+		}
+		if k := strings.TrimSpace(c.KubeContext); k != "" {
+			args = append(args, "--context="+Quote(k))
 		}
 		args = append(args, "logs")
 		if ns := strings.TrimSpace(c.Namespace); ns != "" {

@@ -37,6 +37,7 @@ type Source struct {
 	Container  string `yaml:"container,omitempty"`
 	Args       string `yaml:"args,omitempty"`
 	KubeConfig string `yaml:"kubeconfig,omitempty"`
+	Context    string `yaml:"context,omitempty"`
 
 	// Sudo runs the collector under sudo -n.
 	Sudo bool `yaml:"sudo,omitempty"`
@@ -112,19 +113,20 @@ func (s Source) Validate() error {
 // source that pins a host and a kubeconfig but leaves the pod open behaves.
 func (s Source) Stream() (cfg source.Config, ready bool, err error) {
 	cfg = source.Config{
-		Transport:  source.Transport(or(s.Transport, string(source.TransportLocal))),
-		Host:       s.Host,
-		Collector:  source.Collector(s.Collector),
-		Unit:       s.Unit,
-		UserUnit:   s.UserUnit,
-		Namespace:  s.Namespace,
-		Target:     s.Target,
-		Container:  s.Container,
-		Args:       s.Args,
-		KubeConfig: s.KubeConfig,
-		Elevate:    s.Sudo,
-		Tail:       defaultTail,
-		Follow:     defaultFollow,
+		Transport:   source.Transport(or(s.Transport, string(source.TransportLocal))),
+		Host:        s.Host,
+		Collector:   source.Collector(s.Collector),
+		Unit:        s.Unit,
+		UserUnit:    s.UserUnit,
+		Namespace:   s.Namespace,
+		Target:      s.Target,
+		Container:   s.Container,
+		Args:        s.Args,
+		KubeConfig:  s.KubeConfig,
+		KubeContext: s.Context,
+		Elevate:     s.Sudo,
+		Tail:        defaultTail,
+		Follow:      defaultFollow,
 	}
 	if s.Tail != nil {
 		cfg.Tail = *s.Tail

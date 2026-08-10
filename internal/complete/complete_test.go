@@ -235,6 +235,23 @@ func TestKubectlCommand(t *testing.T) {
 
 // TestKubectlListingUsesRequest checks that the pod listing runs with the same
 // privileges and config as the stream it is completing for.
+// TestKubeContextListing: naming a context is what makes a kubeconfig without
+// a current-context usable, so the listing must not require one.
+func TestKubeContextListing(t *testing.T) {
+	cmd := kubeContextLister.sources[0].build(Request{
+		Elevate:     true,
+		KubeConfig:  "/root/.kube/reader.kubeconfig",
+		KubeContext: "stale",
+	})
+	require.Contains(t, cmd,
+		"sudo -n kubectl --kubeconfig=/root/.kube/reader.kubeconfig config get-contexts -o name")
+	require.NotContains(t, cmd, "current-context", "the guard would need the answer being asked for")
+	require.NotContains(t, cmd, "--context=stale", "contexts are listed from the file, not through one")
+
+	require.Equal(t, []Candidate{{Value: "reader"}}, parseKubeContext(" reader \n"))
+	require.Empty(t, parseKubeContext("  "))
+}
+
 func TestKubectlListingUsesRequest(t *testing.T) {
 	build := listers[source.CollectorKubectl].sources[0].build
 	cmd := build(Request{Elevate: true, KubeConfig: "/etc/rancher/k3s/k3s.yaml"})
@@ -255,13 +272,15 @@ func TestUserUnitsAreNeverElevated(t *testing.T) {
 
 func TestRequestKeySeparatesPrivilegeAndConfig(t *testing.T) {
 	base := Request{Field: FieldTarget, Collector: source.CollectorKubectl}
-	elevated, other := base, base
+	elevated, other, ctx := base, base, base
 	elevated.Elevate = true
 	other.KubeConfig = "/etc/rancher/k3s/k3s.yaml"
+	ctx.KubeContext = "reader"
 
 	require.NotEqual(t, base.Key(), elevated.Key())
 	require.NotEqual(t, base.Key(), other.Key())
 	require.NotEqual(t, elevated.Key(), other.Key())
+	require.NotEqual(t, base.Key(), ctx.Key(), "pods differ per context")
 }
 
 func TestParseKubeConfig(t *testing.T) {

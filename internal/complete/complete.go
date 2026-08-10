@@ -35,6 +35,8 @@ const (
 	FieldTarget
 	// FieldKubeConfig completes kubeconfig paths found on the host.
 	FieldKubeConfig
+	// FieldKubeContext completes the contexts inside the chosen kubeconfig.
+	FieldKubeContext
 )
 
 // Request describes what to complete and where to look for it.
@@ -46,8 +48,9 @@ type Request struct {
 
 	// Elevate and KubeConfig mirror the stream config, so a listing runs with
 	// the same privileges and against the same cluster as the logs will.
-	Elevate    bool
-	KubeConfig string
+	Elevate     bool
+	KubeConfig  string
+	KubeContext string
 }
 
 // Key identifies the result set, so it can be cached and stale replies dropped.
@@ -55,8 +58,8 @@ func (r Request) Key() string {
 	if r.Field == FieldHost {
 		return "host"
 	}
-	return fmt.Sprintf("%d|%s|%s|%s|%t|%s",
-		r.Field, r.Transport, r.Host, r.Collector, r.Elevate, r.KubeConfig)
+	return fmt.Sprintf("%d|%s|%s|%s|%t|%s|%s",
+		r.Field, r.Transport, r.Host, r.Collector, r.Elevate, r.KubeConfig, r.KubeContext)
 }
 
 // Fetch collects the candidates for r. Hosts are read locally; everything else

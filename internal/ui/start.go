@@ -29,6 +29,23 @@ const (
 	maxPromptWidth = 100
 )
 
+// kubeEdit names which kubectl detail the prompt bar is editing.
+type kubeEdit int
+
+const (
+	kubeEditNone kubeEdit = iota
+	kubeEditConfig
+	kubeEditContext
+)
+
+// label names the detail for the chip above the prompt.
+func (k kubeEdit) label() string {
+	if k == kubeEditContext {
+		return "context"
+	}
+	return "kubeconfig"
+}
+
 type startStep int
 
 const (
@@ -86,10 +103,11 @@ type startModel struct {
 	query       textinput.Model
 	kubeconfig  textinput.Model
 
-	// editKube swaps the prompt bar over to the kubeconfig path while the
+	kubecontext textinput.Model
+	// kubeEdit swaps the prompt bar over to a kubectl detail while the
 	// collector step is open, so the pod listing can be re-run against it
 	// before a target is typed.
-	editKube bool
+	kubeEdit kubeEdit
 	// elevate runs the collector, and its listings, under sudo.
 	elevate bool
 
@@ -142,6 +160,7 @@ func newStart() startModel {
 		target:      mk(""),
 		query:       mk("grep term or regexp, empty for everything"),
 		kubeconfig:  mk("path to kubeconfig, e.g. /etc/rancher/k3s/k3s.yaml"),
+		kubecontext: mk("context inside that kubeconfig"),
 		tail:        1000,
 		follow:      true,
 		sel:         -1,
@@ -194,6 +213,15 @@ func (m startModel) savedCandidates() []complete.Candidate {
 	return out
 }
 
+// toggleKube switches the prompt to a detail, or back out of it when that
+// detail is already being edited.
+func toggleKube(cur, want kubeEdit) kubeEdit {
+	if cur == want {
+		return kubeEditNone
+	}
+	return want
+}
+
 // missingLabel names what an incomplete source will ask for.
 func missingLabel(c source.Collector) string {
 	switch c {
@@ -234,13 +262,14 @@ func (m startModel) prefill(cfg source.Config, query string) (startModel, tea.Cm
 	m.collector = max(slices.Index(collectors, cfg.Collector), 0)
 	m.host.SetValue(cfg.Host)
 	m.kubeconfig.SetValue(cfg.KubeConfig)
+	m.kubecontext.SetValue(cfg.KubeContext)
 	m.target.SetValue(config.Target(cfg))
 	m.query.SetValue(query)
 	m.elevate = cfg.Elevate
 	m.tail, m.follow = cfg.Tail, cfg.Follow
 
 	m.step = stepCollector
-	m.editKube = false
+	m.kubeEdit = kubeEditNone
 	m.err = nil
 	m.syncPlaceholder()
 	m.focus()
@@ -261,15 +290,19 @@ func (m startModel) request() (complete.Request, bool) {
 		return complete.Request{Field: complete.FieldHost}, true
 	case stepCollector:
 		req := complete.Request{
-			Field:      complete.FieldTarget,
-			Transport:  transports[m.transport],
-			Host:       strings.TrimSpace(m.host.Value()),
-			Collector:  collectors[m.collector],
-			Elevate:    m.elevate,
-			KubeConfig: strings.TrimSpace(m.kubeconfig.Value()),
+			Field:       complete.FieldTarget,
+			Transport:   transports[m.transport],
+			Host:        strings.TrimSpace(m.host.Value()),
+			Collector:   collectors[m.collector],
+			Elevate:     m.elevate,
+			KubeConfig:  strings.TrimSpace(m.kubeconfig.Value()),
+			KubeContext: strings.TrimSpace(m.kubecontext.Value()),
 		}
-		if m.editKube {
+		switch m.kubeEdit {
+		case kubeEditConfig:
 			req.Field, req.Collector = complete.FieldKubeConfig, source.CollectorKubectl
+		case kubeEditContext:
+			req.Field, req.Collector = complete.FieldKubeContext, source.CollectorKubectl
 		}
 		return req, true
 	default:
@@ -341,12 +374,13 @@ func (m *startModel) preload() tea.Cmd {
 	case stepCollector:
 		for _, c := range collectors {
 			queue(complete.Request{
-				Field:      complete.FieldTarget,
-				Transport:  transports[m.transport],
-				Host:       strings.TrimSpace(m.host.Value()),
-				Collector:  c,
-				Elevate:    m.elevate,
-				KubeConfig: strings.TrimSpace(m.kubeconfig.Value()),
+				Field:       complete.FieldTarget,
+				Transport:   transports[m.transport],
+				Host:        strings.TrimSpace(m.host.Value()),
+				Collector:   c,
+				Elevate:     m.elevate,
+				KubeConfig:  strings.TrimSpace(m.kubeconfig.Value()),
+				KubeContext: strings.TrimSpace(m.kubecontext.Value()),
 			})
 		}
 	}
@@ -407,8 +441,10 @@ func (m startModel) recent() []string {
 	switch {
 	case m.step == stepTransport:
 		return m.history.Hosts
-	case m.step == stepCollector && m.editKube:
+	case m.step == stepCollector && m.kubeEdit == kubeEditConfig:
 		return m.history.KubeConfigs
+	case m.step == stepCollector && m.kubeEdit == kubeEditContext:
+		return nil
 	case m.step == stepCollector:
 		return m.history.Recent(collectors[m.collector])
 	default:
@@ -467,8 +503,10 @@ func (m *startModel) input() *textinput.Model {
 		return &m.savedFilter
 	case m.step == stepTransport:
 		return &m.host
-	case m.step == stepCollector && m.editKube:
+	case m.step == stepCollector && m.kubeEdit == kubeEditConfig:
 		return &m.kubeconfig
+	case m.step == stepCollector && m.kubeEdit == kubeEditContext:
+		return &m.kubecontext
 	case m.step == stepCollector:
 		return &m.target
 	default:
@@ -492,6 +530,7 @@ func (m *startModel) focus() {
 	m.target.Blur()
 	m.query.Blur()
 	m.kubeconfig.Blur()
+	m.kubecontext.Blur()
 	if m.active() {
 		m.input().Focus()
 	}
@@ -520,6 +559,7 @@ func (m startModel) config() source.Config {
 	}
 	cfg.Elevate = m.elevate
 	cfg.KubeConfig = strings.TrimSpace(m.kubeconfig.Value())
+	cfg.KubeContext = strings.TrimSpace(m.kubecontext.Value())
 
 	target := strings.TrimSpace(m.target.Value())
 	switch cfg.Collector {
@@ -616,7 +656,13 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 			}
 		case "ctrl+k":
 			if m.step == stepCollector && m.kubectlSelected() {
-				m.editKube = !m.editKube
+				m.kubeEdit = toggleKube(m.kubeEdit, kubeEditConfig)
+				m.focus()
+				return m, m.fetch()
+			}
+		case "ctrl+x":
+			if m.step == stepCollector && m.kubectlSelected() {
+				m.kubeEdit = toggleKube(m.kubeEdit, kubeEditContext)
 				m.focus()
 				return m, m.fetch()
 			}
@@ -637,8 +683,8 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 				m.accept()
 				return m, nil
 			}
-			if m.editKube {
-				m.editKube = false
+			if m.kubeEdit != kubeEditNone {
+				m.kubeEdit = kubeEditNone
 				m.focus()
 				return m, m.fetch()
 			}
@@ -649,8 +695,8 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 			switch {
 			case m.sel >= 0:
 				m.sel = -1
-			case m.editKube:
-				m.editKube = false
+			case m.kubeEdit != kubeEditNone:
+				m.kubeEdit = kubeEditNone
 				m.focus()
 				return m, m.fetch()
 			case m.step > stepTransport, m.step == stepTransport && len(m.saved) > 0:
@@ -712,7 +758,7 @@ func (m startModel) advance() (startModel, tea.Cmd) {
 			return m, nil
 		}
 		m.step++
-		m.editKube = false
+		m.kubeEdit = kubeEditNone
 		m.err = nil
 		m.focus()
 		return m, m.fetch()
@@ -745,8 +791,8 @@ func (m startModel) head() string {
 		b.WriteString("\n\n")
 	}
 
-	if m.editKube {
-		b.WriteString(styleChipActive.Render("kubeconfig"))
+	if m.kubeEdit != kubeEditNone {
+		b.WriteString(styleChipActive.Render(m.kubeEdit.label()))
 		b.WriteString("\n\n")
 	}
 	box := styleBox
@@ -820,7 +866,7 @@ func (m startModel) valueColumn(window []complete.Candidate) int {
 // resizeInputs keeps the text inputs matched to the prompt bar.
 func (m *startModel) resizeInputs() {
 	w := max(m.promptWidth()-6, 10)
-	for _, in := range []*textinput.Model{&m.savedFilter, &m.host, &m.target, &m.query, &m.kubeconfig} {
+	for _, in := range []*textinput.Model{&m.savedFilter, &m.host, &m.target, &m.query, &m.kubeconfig, &m.kubecontext} {
 		in.Width = w
 	}
 }
@@ -902,7 +948,7 @@ func (m startModel) help() string {
 	if len(m.filtered) > 0 {
 		parts = []string{key("↑↓", "suggestions"), key("tab", "complete")}
 	}
-	if m.editKube {
+	if m.kubeEdit != kubeEditNone {
 		parts = []string{key("enter", "use it"), key("esc", "cancel")}
 		if len(m.filtered) > 0 {
 			parts = append([]string{key("↑↓", "suggestions")}, parts...)
@@ -914,7 +960,7 @@ func (m startModel) help() string {
 		parts = append(parts, key("ctrl+s", "sudo "+onOff(m.elevate)))
 	}
 	if m.step == stepCollector && m.kubectlSelected() {
-		parts = append(parts, key("ctrl+k", "kubeconfig"))
+		parts = append(parts, key("ctrl+k", "kubeconfig"), key("ctrl+x", "context"))
 	}
 	if _, ok := m.request(); ok {
 		parts = append(parts, key("ctrl+r", "refresh"))
@@ -952,7 +998,14 @@ func (m startModel) completions(limit int) string {
 	case m.candErr != nil:
 		msg, _, _ := strings.Cut(m.candErr.Error(), "\n")
 		return block.Render(styleErr.Render("  " + msg))
-	case len(m.filtered) == 0 || limit <= 0:
+	case limit <= 0:
+		return ""
+	case len(m.filtered) == 0:
+		// Saying nothing was found beats falling through to unrelated hints:
+		// a kubeconfig with no contexts is a real answer, not a missing one.
+		if msg := m.emptyLabel(); msg != "" {
+			return block.Render(styleHint.Render("  " + msg))
+		}
 		return ""
 	}
 
@@ -1011,8 +1064,44 @@ func renderDetail(c complete.Candidate) string {
 	}
 }
 
+// emptyLabel explains an empty suggestion list, or is blank when the step has
+// nothing to look up and the static hints should show instead.
+func (m startModel) emptyLabel() string {
+	req, ok := m.request()
+	if !ok {
+		return ""
+	}
+	if len(m.candidates) > 0 {
+		return "no match"
+	}
+	switch req.Field {
+	case complete.FieldHost:
+		return "no hosts in ssh config — type one"
+	case complete.FieldKubeConfig:
+		return "no kubeconfig found — type a path"
+	case complete.FieldKubeContext:
+		return "no contexts in this kubeconfig"
+	}
+	switch collectors[m.collector] {
+	case source.CollectorKubectl:
+		return "no pods"
+	case source.CollectorDocker:
+		return "no containers"
+	case source.CollectorJournal:
+		return "no units"
+	default:
+		return ""
+	}
+}
+
 // hints shows step-appropriate examples, in the spirit of a search landing page.
 func (m startModel) hints() string {
+	if m.kubeEdit != kubeEditNone {
+		// The examples below are about targets, not about the detail being
+		// edited, so they would only mislead here.
+		return ""
+	}
+
 	var lines []string
 	switch m.step {
 	case stepSaved:

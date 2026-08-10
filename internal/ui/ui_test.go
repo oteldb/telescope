@@ -157,6 +157,65 @@ func TestPartialSavedSourceUnwinds(t *testing.T) {
 		m.(Model).logs.cfg.Command())
 }
 
+// TestKubeContextEditor: ctrl+x picks a context, which is the only way to use
+// a kubeconfig whose current-context is unset.
+func TestKubeContextEditor(t *testing.T) {
+	m := send(t, New(), size(), k("enter"), k("tab")) // kubectl
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlK})
+	for _, r := range "/root/.kube/reader.kubeconfig" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m = send(t, m, k("enter"))
+
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlX})
+	require.Equal(t, kubeEditContext, m.(Model).start.kubeEdit)
+	require.Contains(t, screen(t, m), "context")
+	require.Equal(t, complete.Request{
+		Field:      complete.FieldKubeContext,
+		Transport:  source.TransportLocal,
+		Collector:  source.CollectorKubectl,
+		KubeConfig: "/root/.kube/reader.kubeconfig",
+	}.Key(), m.(Model).start.candKey, "contexts are listed from the chosen file")
+
+	m = send(t, m, candidates(m, "reader"))
+	// enter accepts the highlighted context, a second one leaves the editor.
+	m = send(t, m, k("down"), k("enter"))
+	require.Equal(t, "reader", m.(Model).start.kubecontext.Value())
+	m = send(t, m, k("enter"))
+	require.Equal(t, kubeEditNone, m.(Model).start.kubeEdit, "enter returns to the target")
+
+	// Pods are now listed through that context.
+	require.Contains(t, m.(Model).start.candKey, "reader")
+
+	for _, r := range "ns/pod" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m = send(t, m, k("enter"), k("enter"))
+	require.Equal(t,
+		"kubectl --kubeconfig=/root/.kube/reader.kubeconfig --context=reader "+
+			"logs -n ns pod --tail 1000 -f",
+		m.(Model).logs.cfg.Command())
+}
+
+// TestEmptyListingExplainsItself: a kubeconfig with no contexts is an answer,
+// not a missing one, and must not fall through to unrelated target examples.
+func TestEmptyListingExplainsItself(t *testing.T) {
+	m := send(t, New(), size(), k("enter"), k("tab")) // kubectl
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlX})
+	m = send(t, m, candidates(m))
+
+	out := screen(t, m)
+	require.Contains(t, out, "no contexts in this kubeconfig")
+	require.NotContains(t, out, "oteldb/oteldb-0", "target examples belong to the target step")
+
+	// A filter that matches nothing reads differently from nothing to offer.
+	m = send(t, m, candidates(m, "reader"))
+	for _, r := range "zzz" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	require.Contains(t, screen(t, m), "no match")
+}
+
 // TestSavedSourcesMayShareAName: the picker acts on what is highlighted, not
 // on the first entry that happens to match by name.
 func TestSavedSourcesMayShareAName(t *testing.T) {
@@ -509,14 +568,14 @@ func TestElevatedKubectlOverSSH(t *testing.T) {
 
 	// ctrl+k swaps the bar over to the kubeconfig path.
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlK})
-	require.True(t, m.(Model).start.editKube)
+	require.Equal(t, kubeEditConfig, m.(Model).start.kubeEdit)
 	require.Contains(t, screen(t, m), "kubeconfig")
 	for _, r := range "/etc/rancher/k3s/k3s.yaml" {
 		m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 	// enter returns to the target rather than advancing the step.
 	m = send(t, m, k("enter"))
-	require.False(t, m.(Model).start.editKube)
+	require.Equal(t, kubeEditNone, m.(Model).start.kubeEdit)
 	require.Equal(t, stepCollector, m.(Model).start.step)
 
 	// The preview already shows what will run.

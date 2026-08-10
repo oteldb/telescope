@@ -88,6 +88,14 @@ func TestConfigCommand(t *testing.T) {
 			want: `sudo -n sh -c 'cat /var/log/x | grep y'`,
 		},
 		{
+			name: "kubectl with an explicit context",
+			cfg: Config{
+				Collector: CollectorKubectl, Target: "pod",
+				KubeConfig: "/root/.kube/reader.kubeconfig", KubeContext: "reader",
+			},
+			want: "kubectl --kubeconfig=/root/.kube/reader.kubeconfig --context=reader logs pod",
+		},
+		{
 			name: "kubeconfig with a space is quoted",
 			cfg: Config{
 				Collector: CollectorKubectl, Target: "p",

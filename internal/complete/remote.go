@@ -60,6 +60,9 @@ func kubectl(r Request) string {
 	if k := strings.TrimSpace(r.KubeConfig); k != "" {
 		cmd += " --kubeconfig=" + source.Quote(k)
 	}
+	if k := strings.TrimSpace(r.KubeContext); k != "" {
+		cmd += " --context=" + source.Quote(k)
+	}
 	return cmd
 }
 
@@ -125,8 +128,11 @@ const (
 // still completes its system units.
 func list(ctx context.Context, r Request) ([]Candidate, error) {
 	l, ok := listers[r.Collector]
-	if r.Field == FieldKubeConfig {
+	switch r.Field {
+	case FieldKubeConfig:
 		l, ok = kubeConfigLister, true
+	case FieldKubeContext:
+		l, ok = kubeContextLister, true
 	}
 	if !ok {
 		return nil, nil

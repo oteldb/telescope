@@ -52,6 +52,31 @@ var kubeConfigLister = lister{sources: []listSource{{
 	parse: parseKubeConfig,
 }}}
 
+// kubeContextLister names the contexts inside the chosen kubeconfig.
+//
+// It deliberately does not guard on current-context: naming a context is
+// exactly what makes a kubeconfig without one usable.
+var kubeContextLister = lister{sources: []listSource{{
+	build: func(r Request) string {
+		// Ask without a context of its own, or the guard would need the very
+		// thing being chosen.
+		bare := r
+		bare.KubeContext = ""
+		return guard("command -v kubectl", "kubectl is not installed",
+			kubectl(bare)+" config get-contexts -o name")
+	},
+	parse: parseKubeContext,
+}}}
+
+// parseKubeContext reads one context name per line.
+func parseKubeContext(line string) []Candidate {
+	name := strings.TrimSpace(line)
+	if name == "" {
+		return nil
+	}
+	return []Candidate{{Value: name}}
+}
+
 // parseKubeConfig reads "path<tab>context".
 func parseKubeConfig(line string) []Candidate {
 	path, ctx, _ := strings.Cut(line, "\t")
