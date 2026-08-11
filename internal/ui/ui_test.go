@@ -63,6 +63,8 @@ func send(t *testing.T, m tea.Model, msgs ...tea.Msg) tea.Model {
 		case connectMsg:
 			// Safe to apply: the stream command it returns is never run.
 			m, _ = m.Update(out)
+		case requeryMsg:
+			m, _ = m.Update(out)
 		}
 	}
 	return m
@@ -1197,6 +1199,44 @@ func TestEmptyHostIsLocal(t *testing.T) {
 	cfg := m.(Model).logs.cfg
 	require.Equal(t, source.TransportLocal, cfg.Transport)
 	require.Equal(t, []string{"sh", "-c", cfg.Command()}, cfg.Argv())
+}
+
+// TestFilteringADatabaseAsksItAgain: a place that can answer part of the query
+// is asked it, and the view is rebuilt from what comes back rather than
+// filtered out of everything the database has.
+func TestFilteringADatabaseAsksItAgain(t *testing.T) {
+	cfg := source.Config{
+		Collector: source.CollectorVictoriaLogs,
+		Endpoint:  source.Endpoint{Name: "prod", URL: "https://logs.example.com"},
+		Follow:    true,
+	}
+	m := send(t, New(), size(), connectMsg{cfg: cfg})
+	m = send(t, m, linesMsg{lines: []source.Line{{Data: []byte("connection reset")}}, closed: true})
+	require.Equal(t, []string{"*"}, m.(Model).logs.cfg.Pushed())
+
+	m = send(t, m, k("/"))
+	m = typed(t, m, "reset")
+	m = send(t, m, k("enter"))
+
+	logs := m.(Model).logs
+	require.Equal(t, []string{`*:~"(?i)reset"`}, logs.cfg.Pushed())
+	require.Equal(t, "reset", logs.view.Filter().Query, "the filter is still applied here")
+	require.Empty(t, logs.store.Entries(), "the view is rebuilt from the answer")
+	require.Contains(t, ansi.Strip(screen(t, m)), "requerying")
+}
+
+// TestFilteringACommandDoesNotAskItAgain: nothing can be pushed into docker
+// logs, so filtering stays where it is and the lines already read stay too.
+func TestFilteringACommandDoesNotAskItAgain(t *testing.T) {
+	m := logsModel(t, "alpha", "beta")
+
+	m = send(t, m, k("/"))
+	m = typed(t, m, "beta")
+	m = send(t, m, k("enter"))
+
+	logs := m.(Model).logs
+	require.Len(t, logs.store.Entries(), 2, "the stream is not restarted")
+	require.Equal(t, []string{""}, logs.cfg.Pushed(), "there was nothing to ask")
 }
 
 func logsModel(t *testing.T, lines ...string) tea.Model {

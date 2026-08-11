@@ -75,6 +75,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.start.history.Remember(msg.cfg)
 		return m, tea.Batch(startStream(msg.cfg), saveHistory(m.start.history))
 
+	case requeryMsg:
+		// The sources are asked the new query and the view is rebuilt from what
+		// they answer. Nothing is remembered again: it is the same place, read
+		// through a different filter.
+		m.stopStream()
+		m.logs = newLogs(msg.cfg, logs.NewStore(storeLimit), msg.query)
+		m.logs.resize(m.w, m.h)
+		m.logs.status = "requerying"
+		return m, startStream(msg.cfg)
+
 	case streamStartedMsg:
 		m.stream = msg.stream
 		m.logs.status = "streaming"
@@ -164,6 +174,12 @@ type (
 	linesMsg         struct {
 		lines  []source.Line
 		closed bool
+	}
+	// requeryMsg asks the sources the filter again, for the part of it they can
+	// answer themselves.
+	requeryMsg struct {
+		cfg   source.Config
+		query string
 	}
 	initMsg      struct{}
 	openEntryMsg struct{ entry *logs.Entry }

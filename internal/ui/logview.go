@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -229,9 +230,16 @@ func (m logModel) updateSearch(km tea.KeyMsg) (logModel, tea.Cmd) {
 			return m, nil
 		}
 		m.queryErr = nil
-		m.view.SetFilter(f)
+		f = f.Compile()
 		m.searching = false
 		m.search.Blur()
+		// A source that can answer part of the query is asked it again, and the
+		// view is rebuilt from what comes back: the same lines, fetched rather
+		// than filtered out of everything else.
+		if cfg, ok := m.requery(f); ok {
+			return m, func() tea.Msg { return requeryMsg{cfg: cfg, query: f.Query} }
+		}
+		m.view.SetFilter(f)
 		m.cursor, m.top = 0, 0
 		return m, nil
 	case "esc":
@@ -244,6 +252,16 @@ func (m logModel) updateSearch(km tea.KeyMsg) (logModel, tea.Cmd) {
 	var cmd tea.Cmd
 	m.search, cmd = m.search.Update(km)
 	return m, cmd
+}
+
+// requery reports whether f asks the sources themselves something other than
+// what they were opened with, and with what config if so.
+func (m logModel) requery(f logs.Filter) (source.Config, bool) {
+	next := m.cfg.WithFilter(f.Expr())
+	if slices.Equal(next.Pushed(), m.cfg.Pushed()) {
+		return source.Config{}, false
+	}
+	return next, true
 }
 
 // syncFollow pins the cursor to the newest entry while following. It runs when
