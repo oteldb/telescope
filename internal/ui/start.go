@@ -146,19 +146,19 @@ type startModel struct {
 	loading bool
 	candErr error
 
-	// saved are the sources declared in the config file, and history is what
-	// previous runs reached for.
-	saved []config.Source
-	// savedIdx maps each filtered suggestion back to its source, since two
-	// sources may share a name and filtering reorders them.
+	// saved is what the config file declares, and history is what previous runs
+	// reached for.
+	saved saved
+	// savedIdx maps each filtered suggestion back to its entry, since two
+	// entries may share a name and filtering reorders them.
 	savedIdx []int
-	// picked are the saved sources marked to be read together, by their index
-	// in saved. Opening more than one merges them.
+	// picked are the saved places marked to be read together, by their index in
+	// saved. Opening more than one merges them.
 	picked  map[int]bool
 	history config.History
 
-	// endpoints are the log APIs declared in the config file, offered on the
-	// start screen and in the endpoint prompt.
+	// endpoints are the places queried over HTTP, offered in the endpoint
+	// prompt when a query is written by hand.
 	endpoints []source.Endpoint
 
 	// cache holds every completion result seen so far, keyed by request, so
@@ -200,14 +200,14 @@ func newStart() startModel {
 		inflight:    map[string]bool{},
 	}
 	cfg, err := loadConfig()
-	m.saved, m.err = cfg.Sources, err
-	endpoints, endpointErr := cfg.Resolved()
+	m.saved, m.err = saved{groups: cfg.Groups, places: cfg.Places}, err
+	endpoints, endpointErr := cfg.Endpoints()
 	if m.err == nil {
 		m.err = endpointErr
 	}
 	m.endpoints = endpoints
 	m.history = loadHistory()
-	if len(m.saved) == 0 && len(m.endpoints) == 0 {
+	if m.saved.len() == 0 {
 		m.step = stepCollector
 	} else {
 		m.candidates = m.savedCandidates()
@@ -226,41 +226,46 @@ var (
 	loadHistory = config.LoadHistory
 )
 
-// savedCandidates renders what the config file declares: its sources, then its
-// endpoints. An endpoint is offered in its own right because it is already
-// everything a query needs — a place and a way in — and most of them never get
-// a source written for them.
+// savedCandidates renders what the config file declares: its groups, then its
+// places.
 //
 // Anything that does not name a target says what it will ask for, since picking
 // it opens the prompt rather than the logs.
 func (m startModel) savedCandidates() []complete.Candidate {
-	out := make([]complete.Candidate, 0, len(m.saved)+len(m.endpoints))
-	for i, s := range m.saved {
-		cfg, ready, err := s.Stream()
+	out := make([]complete.Candidate, 0, m.saved.len())
+	for i := range m.saved.len() {
+		cfg, ready, err := m.saved.stream(i)
 		if err != nil {
-			out = append(out, complete.Candidate{Value: s.Name, State: "invalid", Detail: err.Error()})
+			out = append(out, complete.Candidate{
+				Value: m.saved.name(i), State: "invalid", Detail: err.Error(),
+			})
 			continue
 		}
-		where := "local"
-		switch {
-		case cfg.Collector.IsRemoteAPI():
-			where = cfg.Endpoint.Label()
-		case cfg.Host != "":
-			where = "ssh://" + cfg.Host
-		}
-		detail := where + " · " + string(cfg.Collector)
+		detail := savedWhere(cfg)
 		if !ready {
 			detail += " · " + missingLabel(cfg.Collector)
 		}
-		out = append(out, complete.Candidate{Value: m.mark(i) + s.Name, Detail: detail})
-	}
-	for _, e := range m.endpoints {
-		out = append(out, complete.Candidate{
-			Value:  " " + e.Name,
-			Detail: string(e.Collector) + " · " + endpointWhere(e) + " · " + missingLabel(e.Collector),
-		})
+		out = append(out, complete.Candidate{Value: m.mark(i) + m.saved.name(i), Detail: detail})
 	}
 	return out
+}
+
+// savedWhere says where an entry reads from, short enough for a list. A group
+// has no single where: the places it names are the whole of it.
+func savedWhere(cfg source.Config) string {
+	if cfg.Collector == source.CollectorMerge {
+		return strings.Join(cfg.Labels(), " + ")
+	}
+	where := "local"
+	switch {
+	case cfg.Collector.IsRemoteAPI():
+		// Where it points rather than what it is called: the name is already
+		// the entry, and two Grafana datasources differ only in the uid.
+		where = endpointWhere(cfg.Endpoint)
+	case cfg.Host != "":
+		where = "ssh://" + cfg.Host
+	}
+	return where + " · " + string(cfg.Collector)
 }
 
 // mark shows whether a saved source is picked to be read with others. The
@@ -272,22 +277,24 @@ func (m startModel) mark(i int) string {
 	return " "
 }
 
-// pick marks a saved source to be read alongside the others picked, or unmarks
-// it. Only a source that opens as it stands can be picked: a merge reads
-// everything at once and cannot stop to ask for a pod.
+// pick marks a saved place to be read alongside the others picked, or unmarks
+// it. Only a place that opens as it stands can be picked, and only a place: a
+// group is already several, and reads everything at once without stopping to
+// ask for a pod.
 func (m startModel) pick(i int) (startModel, tea.Cmd) {
-	if i < 0 || i >= len(m.saved) {
-		return m.refuse("an endpoint has no query yet — open it and write one")
+	place, ok := m.saved.place(i)
+	if !ok {
+		return m.refuse(m.saved.name(i) + " is already a group of places")
 	}
 	if m.picked[i] {
 		delete(m.picked, i)
 	} else {
-		_, ready, err := m.saved[i].Stream()
+		_, ready, err := place.Stream()
 		switch {
 		case err != nil:
 			return m.refuse(err.Error())
 		case !ready:
-			return m.refuse(m.saved[i].Name + " does not say enough to open on its own")
+			return m.refuse(place.Name + " does not say enough to open on its own")
 		}
 		m.picked[i] = true
 	}
@@ -303,16 +310,17 @@ func (m startModel) refuse(msg string) (startModel, tea.Cmd) {
 	return m, nil
 }
 
-// openPicked reads every picked source as one stream. The window, tail and
-// follow are the merge's own: it is a single view, and a view has one timeline.
+// openPicked reads every picked place as one stream, which is a group made on
+// the spot. The window, tail and follow are the group's own: it is a single
+// view, and a view has one timeline.
 func (m startModel) openPicked() (startModel, tea.Cmd) {
 	merge := make([]source.Config, 0, len(m.picked))
 	for _, i := range slices.Sorted(maps.Keys(m.picked)) {
-		cfg, _, err := m.saved[i].Stream()
+		cfg, _, err := m.saved.stream(i)
 		if err != nil {
 			return m.refuse(err.Error())
 		}
-		cfg.Name = m.saved[i].Name
+		cfg.Name = m.saved.name(i)
 		merge = append(merge, cfg)
 	}
 	cfg := source.Config{
@@ -346,16 +354,6 @@ func endpointWhere(e source.Endpoint) string {
 // grafanaProxyPath is how a datasource uid shows up in an endpoint's URL, which
 // is what makes it worth pulling back out for the list.
 const grafanaProxyPath = "/api/datasources/proxy/uid/"
-
-// savedEndpoint returns the endpoint the saved entry at i names, if it is one
-// rather than a source.
-func (m startModel) savedEndpoint(i int) (source.Endpoint, bool) {
-	i -= len(m.saved)
-	if i < 0 || i >= len(m.endpoints) {
-		return source.Endpoint{}, false
-	}
-	return m.endpoints[i], true
-}
 
 // hostValue is the ssh destination in hand, empty for this machine.
 func (m startModel) hostValue() string { return strings.TrimSpace(m.host.Value()) }
@@ -506,34 +504,24 @@ func missingLabel(c source.Collector) string {
 	}
 }
 
-// openSaved acts on the entry at index i: it streams a source that names a
-// target, and otherwise unwinds into the prompt with everything it did name
-// already filled in, so a source can pin a cluster and leave the pod open.
+// openSaved acts on the entry at index i: it streams one that says enough to
+// open, and otherwise unwinds into the prompt with everything it did name
+// already filled in, so a place can pin a cluster and leave the pod open.
 //
-// An endpoint has nothing but a place, so it always opens the prompt — with the
-// query waiting, which is all it was ever missing.
+// A group always says enough — that is what a group is — so it never unwinds.
 func (m startModel) openSaved(i int) (startModel, tea.Cmd) {
-	if e, ok := m.savedEndpoint(i); ok {
-		return m.prefill(source.Config{
-			Collector: e.Collector,
-			Endpoint:  e,
-			Tail:      m.tail,
-			Follow:    m.follow,
-		}, "")
-	}
-	if i < 0 || i >= len(m.saved) {
+	if i < 0 || i >= m.saved.len() {
 		return m, nil
 	}
-	s := m.saved[i]
-	cfg, ready, err := s.Stream()
+	cfg, ready, err := m.saved.stream(i)
 	if err != nil {
 		m.err = err
 		return m, nil
 	}
 	if ready {
-		return m, func() tea.Msg { return connectMsg{cfg: cfg, query: s.Query} }
+		return m, func() tea.Msg { return connectMsg{cfg: cfg, query: m.saved.query(i)} }
 	}
-	return m.prefill(cfg, s.Query)
+	return m.prefill(cfg, m.saved.query(i))
 }
 
 // prefill seeds the manual flow from a config and stops at the step that still
@@ -1126,7 +1114,7 @@ func (m startModel) choices() int {
 }
 
 // hasSaved reports whether the config file declared anything to go back to.
-func (m startModel) hasSaved() bool { return len(m.saved)+len(m.endpoints) > 0 }
+func (m startModel) hasSaved() bool { return m.saved.len() > 0 }
 
 // cycle moves the chip selection and refreshes the suggestions it invalidates.
 func (m *startModel) cycle(d int) tea.Cmd {

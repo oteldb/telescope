@@ -93,18 +93,94 @@ func size() tea.Msg { return tea.WindowSizeMsg{Width: 100, Height: 30} }
 
 // withSaved makes New() see a declared config and a history, without touching
 // the user's files.
-func withSaved(t *testing.T, sources []config.Source, h config.History) {
+func withSaved(t *testing.T, places []config.Place, h config.History) {
 	t.Helper()
-	prevCfg, prevHist := loadConfig, loadHistory
-	loadConfig = func() (config.Config, error) { return config.Config{Sources: sources}, nil }
+	withConfig(t, places, nil)
+	prev := loadHistory
 	loadHistory = func() config.History { return h }
-	t.Cleanup(func() { loadConfig, loadHistory = prevCfg, prevHist })
+	t.Cleanup(func() { loadHistory = prev })
+}
+
+// withConfig makes New() see what a config file would have said, resolved the
+// same way reading one resolves it.
+func withConfig(t *testing.T, places []config.Place, groups []config.Group) {
+	t.Helper()
+	cfg, err := config.New(places, groups)
+	require.NoError(t, err)
+	prev := loadConfig
+	loadConfig = func() (config.Config, error) { return cfg, nil }
+	t.Cleanup(func() { loadConfig = prev })
+}
+
+// TestGroupsComeFirst: a group is the reason for declaring places, so it heads
+// the list, and it opens as one stream without asking anything.
+func TestGroupsComeFirst(t *testing.T) {
+	withConfig(t,
+		[]config.Place{
+			{Name: "api", Type: "docker", Container: "api"},
+			{Name: "worker", Type: "docker", Container: "worker"},
+		},
+		[]config.Group{{Name: "prod", Places: []string{"api", "worker"}}},
+	)
+
+	m := send(t, New(), size())
+	out := ansi.Strip(screen(t, m))
+	require.Contains(t, out, "prod")
+	require.Contains(t, out, "api + worker", "a group says which places it reads")
+
+	m = send(t, m, k("enter"))
+	cfg := m.(Model).logs.cfg
+	require.Equal(t, source.CollectorMerge, cfg.Collector)
+	require.Equal(t, []string{"api", "worker"}, cfg.Labels())
+}
+
+// TestGroupOfEndpointsOpensWithNothingNamed: several log databases read as one,
+// with no query written anywhere — which is what a group is for.
+func TestGroupOfEndpointsOpensWithNothingNamed(t *testing.T) {
+	withConfig(t,
+		[]config.Place{
+			{Name: "vl-eu", Type: "victorialogs", URL: "https://eu.example.com"},
+			{Name: "vl-us", Type: "victorialogs", URL: "https://us.example.com",
+				Proxy: "socks5h://127.0.0.1:1080"},
+		},
+		[]config.Group{{Name: "prod", Places: []string{"vl-eu", "vl-us"}}},
+	)
+
+	m := send(t, New(), size(), k("enter"))
+	cfg := m.(Model).logs.cfg
+	require.Equal(t, source.CollectorMerge, cfg.Collector)
+	require.NoError(t, cfg.Validate())
+
+	children := cfg.Children()
+	require.Len(t, children, 2)
+	require.Empty(t, children[0].Target, "LogsQL has a match-all: the query is typed into the view")
+	require.Equal(t, "socks5h://127.0.0.1:1080", children[1].Endpoint.Proxy,
+		"each place is reached its own way")
+}
+
+// TestPlacesAreReachedTheirOwnWay: one group, one place read here and one over
+// ssh, which is the shape of an environment that is not all in one system.
+func TestPlacesAreReachedTheirOwnWay(t *testing.T) {
+	withConfig(t,
+		[]config.Place{
+			{Name: "here", Type: "docker", Container: "api"},
+			{Name: "there", Type: "journalctl", Via: "ssh://ops@node-1", Unit: "kubelet"},
+		},
+		[]config.Group{{Name: "both", Places: []string{"here", "there"}}},
+	)
+
+	m := send(t, New(), size(), k("enter"))
+	children := m.(Model).logs.cfg.Children()
+	require.Len(t, children, 2)
+	require.Equal(t, source.TransportLocal, children[0].Transport)
+	require.Equal(t, source.TransportSSH, children[1].Transport)
+	require.Equal(t, "ops@node-1", children[1].Host)
 }
 
 func TestSavedSourcesOpenFirst(t *testing.T) {
-	withSaved(t, []config.Source{
-		{Name: "node1 pods", Transport: "ssh", Host: "node1", Collector: "kubectl", Target: "ns/pod", Sudo: true, Query: "error"},
-		{Name: "local docker", Collector: "docker", Container: "navidrome"},
+	withSaved(t, []config.Place{
+		{Name: "node1 pods", Via: "ssh://node1", Type: "kubectl", Target: "ns/pod", Sudo: true, Query: "error"},
+		{Name: "local docker", Type: "docker", Container: "navidrome"},
 	}, config.History{})
 
 	m := send(t, New(), size())
@@ -123,11 +199,10 @@ func TestSavedSourcesOpenFirst(t *testing.T) {
 // TestPartialSavedSourceUnwinds covers the shape of a real config: an entry
 // that pins a node, a kubeconfig and sudo, leaving the pod to be picked.
 func TestPartialSavedSourceUnwinds(t *testing.T) {
-	withSaved(t, []config.Source{{
+	withSaved(t, []config.Place{{
 		Name:       "k3s-ops",
-		Transport:  "ssh",
-		Host:       "node1",
-		Collector:  "kubectl",
+		Via:        "ssh://node1",
+		Type:       "kubectl",
 		KubeConfig: "/root/.kube/ops.kubeconfig",
 		Sudo:       true,
 	}}, config.History{})
@@ -224,21 +299,25 @@ func TestEmptyListingExplainsItself(t *testing.T) {
 	require.Contains(t, screen(t, m), "no match")
 }
 
-// TestSavedSourcesMayShareAName: the picker acts on what is highlighted, not
-// on the first entry that happens to match by name.
-func TestSavedSourcesMayShareAName(t *testing.T) {
-	withSaved(t, []config.Source{
-		{Name: "same", Collector: "docker", Container: "first"},
-		{Name: "same", Collector: "docker", Container: "second"},
+// TestFilteredPickerActsOnTheHighlight: filtering reorders the list, so the
+// entry opened is the one under the cursor and not the one at that index in the
+// config file.
+func TestFilteredPickerActsOnTheHighlight(t *testing.T) {
+	withSaved(t, []config.Place{
+		{Name: "alpha", Type: "docker", Container: "first"},
+		{Name: "beta", Type: "docker", Container: "second"},
+		{Name: "beta two", Type: "docker", Container: "third"},
 	}, config.History{})
 
-	m := send(t, New(), size(), k("down"), k("down"), k("enter"))
-	require.Equal(t, "second", m.(Model).logs.cfg.Container)
+	m := send(t, New(), size())
+	m = typeIn(t, m, "beta")
+	m = send(t, m, k("down"), k("down"), k("enter"))
+	require.Equal(t, "third", m.(Model).logs.cfg.Container)
 }
 
 func TestSavedSourceCarriesQuery(t *testing.T) {
-	withSaved(t, []config.Source{
-		{Name: "errors", Collector: "docker", Container: "app", Query: "boom"},
+	withSaved(t, []config.Place{
+		{Name: "errors", Type: "docker", Container: "app", Query: "boom"},
 	}, config.History{})
 
 	m := send(t, New(), size(), k("enter"))
@@ -246,9 +325,9 @@ func TestSavedSourceCarriesQuery(t *testing.T) {
 }
 
 func TestSavedFilteringAndFallthrough(t *testing.T) {
-	withSaved(t, []config.Source{
-		{Name: "node1 pods", Collector: "docker", Container: "a"},
-		{Name: "prod journal", Collector: "journalctl"},
+	withSaved(t, []config.Place{
+		{Name: "node1 pods", Type: "docker", Container: "a"},
+		{Name: "prod journal", Type: "journalctl"},
 	}, config.History{})
 
 	m := send(t, New(), size())
@@ -1265,24 +1344,19 @@ func tabs(n int) []tea.Msg {
 
 // withEndpoints makes New() see declared endpoints, as a config file with an
 // endpoints section would.
-func withEndpoints(t *testing.T, endpoints []config.Endpoint, sources []config.Source) {
+func withEndpoints(t *testing.T, places []config.Place) {
 	t.Helper()
-	prev := loadConfig
-	loadConfig = func() (config.Config, error) {
-		c := config.Config{Endpoints: endpoints, Sources: sources}
-		return c, nil
-	}
-	t.Cleanup(func() { loadConfig = prev })
+	withConfig(t, places, nil)
 }
 
-// TestEndpointOpensFromTheStartScreen: an endpoint is already a place and a way
-// in, so it is offered next to the declared sources rather than only inside the
-// manual flow. Choosing one lands on the query, which is all it was missing.
+// TestEndpointOpensFromTheStartScreen: a log database is a place like any
+// other, so it is offered in the same list. LogsQL has a match-all and opens as
+// it stands; LogQL has none, so Loki lands on the query it was missing.
 func TestEndpointOpensFromTheStartScreen(t *testing.T) {
-	withEndpoints(t, []config.Endpoint{
+	withEndpoints(t, []config.Place{
 		{Name: "prod", Type: "victorialogs", URL: "https://grafana.example.com/api/datasources/proxy/uid/abc"},
 		{Name: "staging", Type: "loki", URL: "https://staging.example.com"},
-	}, nil)
+	})
 
 	m := send(t, New(), size())
 	require.Equal(t, stepSaved, m.(Model).start.step, "endpoints alone are enough to have a picker")
@@ -1307,11 +1381,11 @@ func TestEndpointOpensFromTheStartScreen(t *testing.T) {
 // TestEndpointIsPickedFromAList: with more endpoints than fit a row of chips,
 // the endpoint is chosen the way an ssh host is.
 func TestEndpointIsPickedFromAList(t *testing.T) {
-	withEndpoints(t, []config.Endpoint{
+	withEndpoints(t, []config.Place{
 		{Name: "humo-management", Type: "victorialogs", URL: "https://grafana.example.com", Datasource: "aaa"},
 		{Name: "humo-observer", Type: "victorialogs", URL: "https://grafana.example.com", Datasource: "bbb"},
 		{Name: "logs-loki", Type: "loki", URL: "https://loki.example.com"},
-	}, nil)
+	})
 
 	// tab leaves the picker for the manual flow; the chips are the collectors
 	// themselves, one per kind and never one per endpoint.
@@ -1341,11 +1415,15 @@ func TestEndpointIsPickedFromAList(t *testing.T) {
 
 // TestEndpointQueryOpens: what is typed is the query, terms and all.
 func TestEndpointQueryOpens(t *testing.T) {
-	withEndpoints(t, []config.Endpoint{
+	withEndpoints(t, []config.Place{
 		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com"},
-	}, nil)
+	})
 
-	m := send(t, New(), size(), k("enter"))
+	// tab leaves the picker for the manual flow, which is where a query is
+	// written against a declared endpoint.
+	m := send(t, New(), size(), k("tab"))
+	m = send(t, m, tabs(4)...)                        // victorialogs
+	m = send(t, m, k("down"), k("enter"), k("enter")) // the only endpoint declared
 	m = typeIn(t, m, "level:error app:api")
 	m = send(t, m, k("enter"), k("enter"))
 
@@ -1358,9 +1436,9 @@ func TestEndpointQueryOpens(t *testing.T) {
 // TestVictoriaLogsOpensWithoutAQuery: LogsQL has a match-all, so an endpoint is
 // enough on its own — the way a journal with no unit named is.
 func TestVictoriaLogsOpensWithoutAQuery(t *testing.T) {
-	withEndpoints(t, []config.Endpoint{
+	withEndpoints(t, []config.Place{
 		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com"},
-	}, nil)
+	})
 
 	m := send(t, New(), size(), k("enter"), k("enter"), k("enter"))
 	cfg := m.(Model).logs.cfg
@@ -1373,10 +1451,10 @@ func TestVictoriaLogsOpensWithoutAQuery(t *testing.T) {
 // TestEndpointTokenFailureIsReported: an endpoint telescope cannot authenticate
 // to says so where it is chosen.
 func TestEndpointTokenFailureIsReported(t *testing.T) {
-	withEndpoints(t, []config.Endpoint{
+	withEndpoints(t, []config.Place{
 		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com",
 			Token: config.Token{Env: "TELESCOPE_TEST_UNSET"}},
-	}, nil)
+	})
 
 	m := send(t, New(), size())
 	out := screen(t, m)
@@ -1387,9 +1465,9 @@ func TestEndpointTokenFailureIsReported(t *testing.T) {
 // TestEndpointOffersRecentQueries: a query is not listable, so history is the
 // only suggestion there is — and the step must still show it.
 func TestEndpointOffersRecentQueries(t *testing.T) {
-	withEndpoints(t, []config.Endpoint{
+	withEndpoints(t, []config.Place{
 		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com"},
-	}, nil)
+	})
 	prev := loadHistory
 	loadHistory = func() config.History {
 		return config.History{Targets: map[string][]string{
@@ -1399,7 +1477,9 @@ func TestEndpointOffersRecentQueries(t *testing.T) {
 	}
 	t.Cleanup(func() { loadHistory = prev })
 
-	m := send(t, New(), size(), k("enter"))
+	m := send(t, New(), size(), k("tab"))
+	m = send(t, m, tabs(4)...)                        // victorialogs
+	m = send(t, m, k("down"), k("enter"), k("enter")) // the only endpoint declared
 	out := screen(t, m)
 	require.Contains(t, out, "level:error")
 	require.NotContains(t, out, "app:elsewhere", "a query belongs to the endpoint it was written for")
@@ -1554,9 +1634,9 @@ func TestEntryViewAlignsOnItsOwnKeys(t *testing.T) {
 // TestPickSourcesToMerge: several saved sources marked with ctrl+a open as one
 // stream, tagged with where each line came from.
 func TestPickSourcesToMerge(t *testing.T) {
-	withSaved(t, []config.Source{
-		{Name: "api", Collector: "docker", Container: "api"},
-		{Name: "worker", Collector: "docker", Container: "worker"},
+	withSaved(t, []config.Place{
+		{Name: "api", Type: "docker", Container: "api"},
+		{Name: "worker", Type: "docker", Container: "worker"},
 	}, config.History{})
 
 	m := send(t, New(), size())
@@ -1576,9 +1656,9 @@ func TestPickSourcesToMerge(t *testing.T) {
 
 // TestPickOneOpensItAlone: marking a single source is not a merge of one.
 func TestPickOneOpensItAlone(t *testing.T) {
-	withSaved(t, []config.Source{
-		{Name: "api", Collector: "docker", Container: "api"},
-		{Name: "worker", Collector: "docker", Container: "worker"},
+	withSaved(t, []config.Place{
+		{Name: "api", Type: "docker", Container: "api"},
+		{Name: "worker", Type: "docker", Container: "worker"},
 	}, config.History{})
 
 	m := send(t, New(), size())
@@ -1590,9 +1670,9 @@ func TestPickOneOpensItAlone(t *testing.T) {
 // TestPickRefusesWhatWouldHaveToAsk: a merge reads everything at once, so a
 // source that still needs a pod cannot be part of one.
 func TestPickRefusesWhatWouldHaveToAsk(t *testing.T) {
-	withSaved(t, []config.Source{
-		{Name: "pods", Collector: "kubectl"},
-		{Name: "api", Collector: "docker", Container: "api"},
+	withSaved(t, []config.Place{
+		{Name: "pods", Type: "kubectl"},
+		{Name: "api", Type: "docker", Container: "api"},
 	}, config.History{})
 
 	m := send(t, New(), size())
