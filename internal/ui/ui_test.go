@@ -1155,15 +1155,59 @@ func TestLogViewFilter(t *testing.T) {
 		`{"level":"info","msg":"beta"}`,
 	)
 	m = send(t, m, k("/"))
-	for _, r := range "beta" {
-		m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-	}
+	m = typed(t, m, "beta")
 	m = send(t, m, k("enter"))
 
 	out := screen(t, m)
 	require.Contains(t, out, "1 shown")
 	require.Contains(t, out, "beta")
 	require.NotContains(t, out, "alpha")
+}
+
+// TestLogViewFilterKeepsAQueryThatDoesNotParse: the view goes on showing what
+// the last query selected, and the prompt says why this one selected nothing.
+func TestLogViewFilterKeepsAQueryThatDoesNotParse(t *testing.T) {
+	m := logsModel(t,
+		`{"level":"info","msg":"alpha"}`,
+		`{"level":"info","msg":"beta"}`,
+	)
+	m = send(t, m, k("/"))
+	m = typed(t, m, "beta")
+	m = send(t, m, k("enter"))
+	m = send(t, m, k("/"))
+	m = typed(t, m, " or (")
+	m = send(t, m, k("enter"))
+
+	out := ansi.Strip(screen(t, m))
+	require.Contains(t, out, "term was expected")
+	require.Contains(t, out, "1 shown")
+	require.Contains(t, out, "beta")
+	require.NotContains(t, out, "alpha")
+}
+
+// TestLogViewFilterIsAQuery checks that the filter is more than a grep: a field
+// and a level reach lines the words alone do not.
+func TestLogViewFilterIsAQuery(t *testing.T) {
+	m := logsModel(t,
+		`{"level":"info","msg":"alpha","pod":"api-7"}`,
+		`{"level":"error","msg":"beta","pod":"worker-1"}`,
+	)
+	m = send(t, m, k("/"))
+	m = typed(t, m, "level>=warn pod~worker")
+	m = send(t, m, k("enter"))
+
+	out := ansi.Strip(screen(t, m))
+	require.Contains(t, out, "1 shown")
+	require.Contains(t, out, "beta")
+	require.NotContains(t, out, "alpha")
+}
+
+func typed(t *testing.T, m tea.Model, s string) tea.Model {
+	t.Helper()
+	for _, r := range s {
+		m = send(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	return m
 }
 
 func TestEntryView(t *testing.T) {

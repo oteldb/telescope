@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-faster/jx"
 	"go.uber.org/zap/zapcore"
+
+	"github.com/oteldb/telescope/internal/query"
 )
 
 // timeKeys, levelKeys and bodyKeys are the field aliases understood on input,
@@ -79,44 +81,9 @@ func matches(key string, aliases []string) bool {
 	return false
 }
 
-func parseLevel(raw jx.Raw) (zapcore.Level, bool) {
-	s := strings.ToLower(strings.TrimSpace(asString(raw)))
-	switch s {
-	case "trace", "trace1", "trace2", "trace3", "trace4":
-		return zapcore.DebugLevel, true
-	case "warning":
-		return zapcore.WarnLevel, true
-	case "err", "critical", "crit", "alert", "emerg", "emergency":
-		return zapcore.ErrorLevel, true
-	case "notice":
-		return zapcore.InfoLevel, true
-	}
-	// Numeric severity, either an OTEL severity number or a syslog priority.
-	if n, err := strconv.Atoi(s); err == nil {
-		return severityNumber(n), true
-	}
-	var l zapcore.Level
-	if err := l.UnmarshalText([]byte(s)); err != nil {
-		return 0, false
-	}
-	return l, true
-}
-
-// severityNumber maps an OTEL severity number onto a zap level.
-func severityNumber(n int) zapcore.Level {
-	switch {
-	case n <= 4:
-		return zapcore.DebugLevel
-	case n <= 12:
-		return zapcore.InfoLevel
-	case n <= 16:
-		return zapcore.WarnLevel
-	case n <= 20:
-		return zapcore.ErrorLevel
-	default:
-		return zapcore.FatalLevel
-	}
-}
+// parseLevel reads a severity as written. It is the same reading a query does,
+// so that level>=warn on the prompt means what the level column shows.
+func parseLevel(raw jx.Raw) (zapcore.Level, bool) { return query.ParseLevel(asString(raw)) }
 
 // timeLayouts are tried in order for string timestamps.
 var timeLayouts = []string{

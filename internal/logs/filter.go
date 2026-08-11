@@ -1,11 +1,11 @@
 package logs
 
 import (
-	"bytes"
-	"regexp"
 	"strings"
 
 	"go.uber.org/zap/zapcore"
+
+	"github.com/oteldb/telescope/internal/query"
 )
 
 // MinLevel is the minimum severity a [Filter] admits.
@@ -44,49 +44,37 @@ func (l MinLevel) Next() MinLevel {
 	return l + 1
 }
 
-// Filter selects entries by grep term and minimum level.
+// Filter selects entries by query and minimum level. The level is the one the
+// view cycles with a key, and it narrows whatever the query already said.
 type Filter struct {
 	Query    string
 	MinLevel MinLevel
 
-	re      *regexp.Regexp
-	literal []byte
+	expr query.Expr
+	err  error
 }
 
-// Compile prepares the query for matching. A query that is not a valid regexp
-// degrades to a case-insensitive substring search.
+// Compile parses the query. A query that does not parse is kept, with the
+// reason: what to do about it is the caller's, and a view that silently
+// filtered by something else would be worse than one that says so.
 func (f Filter) Compile() Filter {
-	f.re, f.literal = nil, nil
-	q := f.Query
-	if q == "" {
-		return f
-	}
-	re, err := regexp.Compile("(?i)" + q)
-	if err != nil {
-		f.literal = bytes.ToLower([]byte(q))
-		return f
-	}
-	f.re = re
+	f.expr, f.err = query.Parse(f.Query)
 	return f
 }
 
-// Match reports whether e passes the filter.
-//
-// The labels a source reported are matched along with the line: they are how a
-// line is found by the pod that wrote it, and the list has no room to show them.
+// Err is why the query did not parse, if it did not.
+func (f Filter) Err() error { return f.err }
+
+// Match reports whether e passes the filter. A query that did not parse selects
+// nothing, so a filter is never quietly wider than what was typed.
 func (f Filter) Match(e *Entry) bool {
 	if e.Record.HasLevel && e.Record.Level < f.MinLevel.Level() {
 		return false
 	}
-	switch {
-	case f.re != nil:
-		return f.re.Match(e.Raw) || f.re.MatchString(e.labelText)
-	case f.literal != nil:
-		return bytes.Contains(bytes.ToLower(e.Raw), f.literal) ||
-			bytes.Contains(bytes.ToLower([]byte(e.labelText)), f.literal)
-	default:
-		return true
+	if f.err != nil {
+		return false
 	}
+	return query.Match(f.expr, e)
 }
 
 // Equal reports whether two filters select the same entries.
@@ -94,15 +82,15 @@ func (f Filter) Equal(o Filter) bool {
 	return f.Query == o.Query && f.MinLevel == o.MinLevel
 }
 
-// Describe renders the filter for the status bar.
+// Describe renders the filter for the status bar, as the query it would be
+// typed as rather than as what was typed: a filter reads back canonically.
 func (f Filter) Describe() string {
 	var parts []string
-	if f.Query != "" {
-		kind := "re"
-		if f.re == nil {
-			kind = "text"
-		}
-		parts = append(parts, kind+":"+f.Query)
+	switch {
+	case f.err != nil:
+		parts = append(parts, "bad query: "+f.err.Error())
+	case f.expr != nil:
+		parts = append(parts, f.expr.String())
 	}
 	if f.MinLevel > LevelAll {
 		parts = append(parts, "level≥"+f.MinLevel.Level().String())

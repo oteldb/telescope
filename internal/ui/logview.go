@@ -39,6 +39,10 @@ type logModel struct {
 
 	search    textinput.Model
 	searching bool
+	// queryErr is why what is being typed is not a query yet. It belongs to the
+	// prompt rather than to the view, which is still showing the last one that
+	// was.
+	queryErr error
 
 	status string
 	err    error
@@ -48,7 +52,7 @@ func newLogs(cfg source.Config, store *logs.Store, query string) logModel {
 	ti := textinput.New()
 	ti.Prompt = "❯ "
 	ti.PromptStyle = lipgloss.NewStyle().Foreground(colorAccent)
-	ti.Placeholder = "grep term or regexp"
+	ti.Placeholder = `word, "phrase", /regexp/, pod=api, level>=warn`
 	ti.SetValue(query)
 
 	return logModel{
@@ -218,6 +222,13 @@ func (m logModel) updateSearch(km tea.KeyMsg) (logModel, tea.Cmd) {
 	case "enter":
 		f := m.view.Filter()
 		f.Query = strings.TrimSpace(m.search.Value())
+		// A query that does not parse leaves the view as it was: the prompt
+		// stays open on what was typed, which is where it can be fixed.
+		if err := f.Compile().Err(); err != nil {
+			m.queryErr = err
+			return m, nil
+		}
+		m.queryErr = nil
 		m.view.SetFilter(f)
 		m.searching = false
 		m.search.Blur()
@@ -225,6 +236,7 @@ func (m logModel) updateSearch(km tea.KeyMsg) (logModel, tea.Cmd) {
 		return m, nil
 	case "esc":
 		m.searching = false
+		m.queryErr = nil
 		m.search.Blur()
 		m.search.SetValue(m.view.Filter().Query)
 		return m, nil
@@ -324,6 +336,8 @@ func (m logModel) filterBar() string {
 
 	var input string
 	switch {
+	case m.searching && m.queryErr != nil:
+		input = m.search.View() + "  " + styleErr.Render(m.queryErr.Error())
 	case m.searching:
 		input = m.search.View()
 	case m.view.Filter().Query != "":

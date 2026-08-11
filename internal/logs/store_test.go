@@ -69,8 +69,12 @@ func TestViewFilter(t *testing.T) {
 		{"all", Filter{}, []string{"alpha", "beta", "plain gamma"}},
 		{"literal", Filter{Query: "eta"}, []string{"beta"}},
 		{"case insensitive", Filter{Query: "ALPHA"}, []string{"alpha"}},
-		{"regexp", Filter{Query: "al|ga"}, []string{"alpha", "plain gamma"}},
-		{"broken regexp is literal", Filter{Query: "beta("}, nil},
+		{"regexp", Filter{Query: "/al|ga/"}, []string{"alpha", "plain gamma"}},
+		{"a query that does not parse selects nothing", Filter{Query: "beta("}, nil},
+		{"terms are and-ed", Filter{Query: "plain gamma"}, []string{"plain gamma"}},
+		{"alternatives", Filter{Query: "alpha or beta"}, []string{"alpha", "beta"}},
+		{"negation", Filter{Query: "-alpha"}, []string{"beta", "plain gamma"}},
+		{"level compared", Filter{Query: "level>=error"}, []string{"beta"}},
 		{"level", Filter{MinLevel: LevelError}, []string{"beta", "plain gamma"}},
 		{"level and query", Filter{MinLevel: LevelError, Query: "a"}, []string{"beta", "plain gamma"}},
 	} {
@@ -113,9 +117,11 @@ func TestViewSetFilterResets(t *testing.T) {
 
 func TestFilterDescribe(t *testing.T) {
 	require.Equal(t, "no filter", Filter{}.Compile().Describe())
-	require.Equal(t, "re:a|b", Filter{Query: "a|b"}.Compile().Describe())
-	require.Equal(t, "text:a(", Filter{Query: "a("}.Compile().Describe())
+	require.Equal(t, "/a|b/", Filter{Query: "/a|b/"}.Compile().Describe())
 	require.Equal(t, "level≥warn", Filter{MinLevel: LevelWarn}.Compile().Describe())
+	// A query is described as it would be typed, not as it was.
+	require.Equal(t, "alpha or beta", Filter{Query: "alpha OR   beta"}.Compile().Describe())
+	require.Contains(t, Filter{Query: "a("}.Compile().Describe(), "bad query")
 }
 
 func bodies(entries []*Entry) []string {
@@ -168,7 +174,11 @@ func TestLabelsAreGreppable(t *testing.T) {
 	}})
 	s.Append(line("artifact up-to-date"))
 
-	for _, q := range []string{"source-controller", "k8s_pod_name=source"} {
+	for _, q := range []string{
+		"source-controller",
+		"k8s_pod_name=source-controller-7f56dddc9d",
+		"k8s_pod_name~source",
+	} {
 		require.Len(t, NewView(Filter{Query: q}).Entries(s), 1, "query %q", q)
 	}
 }
