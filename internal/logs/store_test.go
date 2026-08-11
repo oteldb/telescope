@@ -165,6 +165,32 @@ func TestLabelLevelFilters(t *testing.T) {
 	require.Equal(t, "loud", got[0].Record.Body)
 }
 
+// TestAWordMatchesWhatTheLineSays: for a structured line that is its values.
+// A key is not something the line said, and it is also the only reading a log
+// database can answer, so pushing a query down cannot change the answer.
+func TestAWordMatchesWhatTheLineSays(t *testing.T) {
+	s := NewStore(10)
+	s.Append(line(`{"level":"info","msg":"connection reset","pod":"api-7"}`))
+	s.Append(line(`plain connection reset`))
+
+	for _, tt := range []struct {
+		name  string
+		query string
+		want  int
+	}{
+		{"a value is matched", "reset", 2},
+		{"a value of any field is matched", "api-7", 1},
+		{"part of a value is matched", "api", 1},
+		{"a key is not", "pod", 0},
+		{"nor is the JSON around it", `":"`, 0},
+		{"an unstructured line is all value", "plain", 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Len(t, NewView(Filter{Query: tt.query}).Entries(s), tt.want)
+		})
+	}
+}
+
 // TestLabelsAreGreppable: the list has no room for twenty labels, so the only
 // way to reach them is the filter.
 func TestLabelsAreGreppable(t *testing.T) {

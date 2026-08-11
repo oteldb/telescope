@@ -65,6 +65,10 @@ func (f Filter) Compile() Filter {
 // Err is why the query did not parse, if it did not.
 func (f Filter) Err() error { return f.err }
 
+// Expr is the parsed query, for a source that can be asked part of it. A nil
+// expr selects everything.
+func (f Filter) Expr() query.Expr { return f.expr }
+
 // Match reports whether e passes the filter. A query that did not parse selects
 // nothing, so a filter is never quietly wider than what was typed.
 func (f Filter) Match(e *Entry) bool {
