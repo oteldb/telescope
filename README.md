@@ -135,7 +135,7 @@ time and level; the columns stay reserved but empty, so both kinds line up.
 
 Everything else is in the entry view, under `source` and `labels`, and reachable
 from the filter: `/` matches the labels along with the line, so
-`k8s_pod_name=source-controller` finds lines that never mention it.
+`k8s_pod_name~source-controller` finds lines that never mention it.
 
 There, a value is drawn by what its key says it is: a severity as a severity, a
 `trace_id` or `span_id` marked so it can be picked out of thirty OTEL
@@ -216,9 +216,30 @@ whatever was typed — bound it in the command itself.
 | `esc` | back to sources |
 | `q`, `ctrl+c` | quit |
 
-The filter is a regular expression, falling back to a case-insensitive
-substring when it does not compile. It matches the raw line and the labels the
-source reported with it, not the rendering.
+The filter is a small query:
+
+| written | means |
+| --- | --- |
+| `reset`, `"connection reset"` | a case-insensitive substring |
+| `/res[ei]t/` | a regular expression, always case-insensitive |
+| `pod=api-7`, `pod!=api-7` | a field, compared exactly |
+| `pod~api` | a field, matched as a regular expression |
+| `level>=warn` | severity, which is the one thing that is ordered |
+| `a b`, `a and b`, `a or b`, `not a`, `-a`, `(a b) or c` | the rest |
+
+Terms sitting next to each other are and-ed, which is why a query that is only
+words reads as the grep it replaces. Words and regular expressions match the raw
+line and the labels the source reported with it, not the rendering. A field is
+looked up where the line named it first, then among those labels, then under the
+names a record is read as, so `msg` and `trace_id` work whatever the shipper
+called them; `source` is the merge tag and `stream` is `stdout` or `stderr`. A
+line that never reported a level passes no `level` comparison at all — an
+unlevelled line is not quietly an info one.
+
+Every term asks about one line and nothing else, which is what lets one query
+mean the same thing across a merge of several sources. A query that does not
+parse is not applied: the prompt stays open on what was typed and says why,
+rather than filtering by something else.
 
 `l` cycles the minimum level over what a line says about itself and what its
 source said for it, so a Loki view filters by `detected_level` even though no
