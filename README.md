@@ -137,6 +137,19 @@ Everything else is in the entry view, under `source` and `labels`, and reachable
 from the filter: `/` matches the labels along with the line, so
 `k8s_pod_name=source-controller` finds lines that never mention it.
 
+There, a value is drawn by what its key says it is: a severity as a severity, a
+`trace_id` or `span_id` marked so it can be picked out of thirty OTEL
+attributes, and everything else through the same highlighting the log list uses.
+A trace or span id found in a label is the entry's, so it shows in the header
+beside the time as well.
+
+Values are somebody else's bytes, and are shown rather than obeyed: control
+characters are escaped visibly — `\n`, `\t`, `\e[2J`, `\xff` for a byte that is
+not a character at all — so nothing in a log line can break a row in two or
+repaint the screen. Rendered lines keep the colors a collector wrote, because
+that is what makes `docker logs` look like `docker logs`, and lose every other
+escape sequence.
+
 ### Time range
 
 A line count is not a time range. `ctrl+g` bounds the window instead, on the
