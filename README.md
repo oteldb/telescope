@@ -227,6 +227,15 @@ line mentions a level.
 A line whose rendering spans several lines, such as a stacktrace, occupies one
 row marked `⏎N`; `enter` shows the whole thing.
 
+Rows are shaded by the second they happened in, so a burst of lines reads as one
+block and a gap between them shows as a seam. It is not striping for its own
+sake: on a busy stream a band is a group, and on a quiet one, where every line
+falls in a second of its own, it comes out as plain alternating rows. Which band
+a line belongs to is settled when it arrives, so scrolling and filtering never
+repaint what is already on screen. The row under the cursor takes a violet to
+magenta fade instead — a line brings colors of its own, and the background is
+laid under them without disturbing them.
+
 ### Entry view
 
 | key | |
