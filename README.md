@@ -104,6 +104,39 @@ worst one.
 A merge cannot stop to ask, so every source it names has to open as it stands.
 It reads sources, not other merges.
 
+### Labels
+
+A `docker logs` line is a line. A line out of a log database is a line and
+everything the database knows about it, and that is often where the interesting
+part is: a Loki entry can be nothing but `artifact up-to-date`, with the pod,
+the container, the namespace and the severity in its label set.
+
+Telescope keeps both, and tells them apart:
+
+- **source labels** describe the stream — the endpoint and the query, the
+  container, the unit, the namespace, the ssh host. They are the same for every
+  line in it.
+- **labels** are what the source reported beside the line itself: for Loki, the
+  labels of the stream it was found in plus its structured metadata.
+
+The log list stays a list. What labels buy it is two columns to the left of the
+message, drawn outside the horizontal scroll so `←`/`→` never takes them away:
+
+```
+  15:16:36.357 ERROR read_request_line: Client (fd: 4) closed socket
+  15:16:38.402 INFO  artifact up-to-date with remote revision: '0.40.0'
+```
+
+The time is the one the source reported, and the level comes from `level`,
+`severity`, `detected_level` or their spellings. Both columns appear only once a
+line needs them, and stay for the rest of the view so the text does not shift as
+lines arrive. A structured line is left to the formatter, which renders its own
+time and level; the columns stay reserved but empty, so both kinds line up.
+
+Everything else is in the entry view, under `source` and `labels`, and reachable
+from the filter: `/` matches the labels along with the line, so
+`k8s_pod_name=source-controller` finds lines that never mention it.
+
 ### Time range
 
 A line count is not a time range. `ctrl+g` bounds the window instead, on the
@@ -171,7 +204,12 @@ whatever was typed — bound it in the command itself.
 | `q`, `ctrl+c` | quit |
 
 The filter is a regular expression, falling back to a case-insensitive
-substring when it does not compile. It matches the raw line, not the rendering.
+substring when it does not compile. It matches the raw line and the labels the
+source reported with it, not the rendering.
+
+`l` cycles the minimum level over what a line says about itself and what its
+source said for it, so a Loki view filters by `detected_level` even though no
+line mentions a level.
 
 A line whose rendering spans several lines, such as a stacktrace, occupies one
 row marked `⏎N`; `enter` shows the whole thing.
@@ -183,6 +221,10 @@ row marked `⏎N`; `enter` shows the whole thing.
 | `↑` `k`, `↓` `j`, `pgup` `pgdown`, `home` `g`, `end` `G` | scroll |
 | `esc`, `enter`, `backspace` | back |
 | `q`, `ctrl+c` | quit |
+
+The entry is shown whole: its time, level, trace and body, then `source` and
+`labels` (see [Labels](#labels)), the full rendering with its stacktrace, the
+structured fields of the line, and the raw bytes it arrived as.
 
 ## Completion
 
