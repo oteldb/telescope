@@ -25,6 +25,9 @@ func (c Config) Children() []Config {
 	out := make([]Config, 0, len(c.Merge))
 	for _, sub := range c.Merge {
 		sub.Range, sub.Tail, sub.Follow = c.Range, c.Tail, c.Follow
+		// The filter is the group's: it is one view, read through one query,
+		// and each place answers as much of it as it can.
+		sub.Filter = c.Filter
 		sub.Stamp = true
 		out = append(out, sub)
 	}

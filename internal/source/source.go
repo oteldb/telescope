@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/oteldb/telescope/internal/query"
 )
 
 // journalStamp is the timestamp journalctl reads, in the local time it is
@@ -85,6 +87,11 @@ type Config struct {
 	// Elevate runs the collector under sudo, for logs or configs a plain user
 	// cannot read.
 	Elevate bool
+
+	// Filter is the query the view is filtering by, given to the sources that
+	// can answer it themselves. It never narrows what is shown: what a source
+	// cannot be asked, the view still asks of every line it gets back.
+	Filter query.Expr
 
 	// Stamp asks the collector to report the time of each line out of band, in
 	// [Line.At]. It costs a flag the collector may not have, so it is only
@@ -173,6 +180,32 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// WithFilter returns the config as it would be opened while the view filters by
+// f, which is what a source able to answer part of the filter is asked.
+func (c Config) WithFilter(f query.Expr) Config {
+	c.Filter = f
+	return c
+}
+
+// Pushed is the query each source is actually sent, one per stream and in the
+// order they are read, so a view can tell whether changing the filter would ask
+// anything different. A source that answers no query of its own contributes an
+// empty string.
+func (c Config) Pushed() []string {
+	switch c.Collector {
+	case CollectorMerge:
+		var out []string
+		for _, sub := range c.Children() {
+			out = append(out, sub.Pushed()...)
+		}
+		return out
+	case CollectorVictoriaLogs:
+		return []string{c.vlogsQuery()}
+	default:
+		return []string{""}
+	}
 }
 
 // Command returns the shell command producing the logs, without the transport

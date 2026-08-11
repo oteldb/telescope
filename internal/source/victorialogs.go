@@ -13,6 +13,8 @@ import (
 
 	"github.com/go-faster/errors"
 	"github.com/go-faster/jx"
+
+	"github.com/oteldb/telescope/internal/query"
 )
 
 // VictoriaLogs API paths, resolved against [Endpoint.URL].
@@ -36,11 +38,22 @@ const vlogsMatchAll = "*"
 // vlogsQuery is the LogsQL to run, which is the target as typed. Nothing typed
 // is a tail of the whole database, the way running a collector with no unit or
 // container named is.
+// vlogsQuery is what is sent: the query the place names, narrowed by as much of
+// the view's filter as LogsQL can be asked. What it cannot be asked the view
+// still applies to every line that comes back, so this only ever saves work.
 func (c Config) vlogsQuery() string {
-	if q := strings.TrimSpace(c.Target); q != "" {
-		return q
+	selector := strings.TrimSpace(c.Target)
+	pushed, ok := query.LogsQL(c.Filter)
+	switch {
+	case selector == "" && !ok:
+		return vlogsMatchAll
+	case selector == "":
+		return pushed
+	case !ok:
+		return selector
+	default:
+		return "(" + selector + ") " + pushed
 	}
-	return vlogsMatchAll
 }
 
 // streamVictoriaLogs reads the backfill, then follows.
