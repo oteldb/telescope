@@ -96,7 +96,7 @@ func (m entryModel) lines(width int) []string {
 
 	// The header labels are fixed; the fields bring their own, and the widest
 	// of all of them is what everything lines up on.
-	labels := []string{"received", "source", "level", "trace", "span", "body"}
+	labels := []string{"received", "source", "level", "trace_id", "span_id", "body"}
 	for _, f := range e.Record.Fields {
 		labels = append(labels, f.Key)
 	}
@@ -114,6 +114,11 @@ func (m entryModel) lines(width int) []string {
 			return
 		}
 		out = append(out, wrapField(label, value, indent, width))
+	}
+	// A key says what its value is, and a value that is somebody else's bytes
+	// says nothing about how it should be drawn.
+	field := func(key, value string) {
+		add(key, renderValue(key, value))
 	}
 
 	stream := "stdout"
@@ -135,11 +140,11 @@ func (m entryModel) lines(width int) []string {
 	// Which source a line came from, for a merge of several.
 	add("source", e.Source)
 	if e.Record.HasLevel {
-		add("level", e.Record.Level.CapitalString())
+		add("level", renderLevelWord(e.Record.Level))
 	}
-	add("trace", e.Record.TraceID)
-	add("span", e.Record.SpanID)
-	add("body", e.Record.Body)
+	field("trace_id", e.Record.TraceID)
+	field("span_id", e.Record.SpanID)
+	add("body", logs.Escape(e.Record.Body))
 
 	// Where the whole stream comes from, then what this line brought with it.
 	// A log database says more about a line than the line does, and none of it
@@ -150,7 +155,7 @@ func (m entryModel) lines(width int) []string {
 		}
 		out = append(out, "", styleTitle.Render(title))
 		for _, l := range labels {
-			out = append(out, wrapField(l.Key, l.Value, indent, width))
+			out = append(out, wrapField(logs.Escape(l.Key), renderValue(l.Key, l.Value), indent, width))
 		}
 	}
 	section("source", origin)
@@ -166,12 +171,18 @@ func (m entryModel) lines(width int) []string {
 	if len(e.Record.Fields) > 0 {
 		out = append(out, "", styleTitle.Render("fields"))
 		for _, f := range e.Record.Fields {
-			out = append(out, wrapField(f.Key, f.String(), indent, width))
+			out = append(out, wrapField(logs.Escape(f.Key), renderValue(f.Key, f.String()), indent, width))
 		}
 	}
 
 	out = append(out, "", styleTitle.Render("raw"))
 	for l := range strings.SplitSeq(prettyJSON(e.Raw), "\n") {
+		// Escaping brings its own color, and dimming it over would put the
+		// escapes back at the mercy of what they escaped.
+		if escaped := logs.Escape(l); escaped != l {
+			out = append(out, "  "+escaped)
+			continue
+		}
 		out = append(out, "  "+styleDim.Render(l))
 	}
 	return out

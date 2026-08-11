@@ -14,6 +14,7 @@ import (
 	"github.com/go-faster/errors"
 	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/oteldb/telescope/internal/complete"
 	"github.com/oteldb/telescope/internal/config"
@@ -1647,4 +1648,50 @@ func TestEntryViewShowsLabels(t *testing.T) {
 	require.Contains(t, out, "labels")
 	require.Contains(t, out, "k8s_pod_name")
 	require.Contains(t, out, "source-controller-7f56dddc9d")
+}
+
+// TestEntryViewEscapesWhatItShows: a label value is bytes somebody else chose,
+// and a view that obeys them is a view somebody else draws.
+func TestEntryViewEscapesWhatItShows(t *testing.T) {
+	e := logs.NewStore(10).Append(source.Line{
+		Data: []byte("hello"),
+		Labels: []source.Label{
+			{Key: "note", Value: "one\ntwo\x1b[2J"},
+		},
+	})
+
+	m := newEntry(source.Config{Collector: source.CollectorLoki, Target: "*"}, e)
+	m.resize(100, 40)
+	out := m.View()
+
+	require.Contains(t, ansi.Strip(out), `one\ntwo\e[2J`)
+	require.NotContains(t, out, "\x1b[2J", "the sequence is shown, not run")
+	for line := range strings.SplitSeq(ansi.Strip(out), "\n") {
+		require.NotEqual(t, "two", strings.Trim(line, "│ "), "and it stays on one row")
+	}
+}
+
+// TestEntryViewRecognizesLabels: a trace id and a severity are worth spotting
+// in a wall of twenty OTEL attributes.
+func TestEntryViewRecognizesLabels(t *testing.T) {
+	e := logs.NewStore(10).Append(source.Line{
+		Data: []byte("Query Clickhouse"),
+		At:   time.Now(),
+		Labels: []source.Label{
+			{Key: "detected_level", Value: "DEBUG"},
+			{Key: "trace_id", Value: "e8b5497ee616f2116b0c46f13eb82c82"},
+			{Key: "span_id", Value: "e3ac4c34da7b0d90"},
+		},
+	})
+	require.Equal(t, "e8b5497ee616f2116b0c46f13eb82c82", e.Record.TraceID,
+		"a trace id in a label is a trace id")
+	require.Equal(t, "e3ac4c34da7b0d90", e.Record.SpanID)
+
+	m := newEntry(source.Config{Collector: source.CollectorLoki, Target: "*"}, e)
+	m.resize(100, 40)
+	out := m.View()
+
+	trace := styleTrace.Render("e8b5497ee616f2116b0c46f13eb82c82")
+	require.Contains(t, out, trace, "the id is colored as one")
+	require.Contains(t, out, renderLevelWord(zapcore.DebugLevel), "and the level as a level")
 }

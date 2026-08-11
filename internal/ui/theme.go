@@ -5,6 +5,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"go.uber.org/zap/zapcore"
+
+	"github.com/oteldb/telescope/internal/logs"
 )
 
 // screenPad is the horizontal breathing room kept around every view.
@@ -95,6 +97,40 @@ var levelStyles = map[zapcore.Level]lipgloss.Style{
 	zapcore.DPanicLevel: lipgloss.NewStyle().Foreground(colorErr).Bold(true),
 	zapcore.PanicLevel:  lipgloss.NewStyle().Foreground(colorErr).Bold(true),
 	zapcore.FatalLevel:  lipgloss.NewStyle().Foreground(colorErr).Bold(true),
+}
+
+// styleTrace marks a trace or span id, which is not read so much as recognized
+// and carried to whatever else knows it.
+var styleTrace = lipgloss.NewStyle().Foreground(colorMatch)
+
+// renderLevelWord renders a severity as the word it is.
+func renderLevelWord(l zapcore.Level) string {
+	if style, ok := levelStyles[l]; ok {
+		return style.Render(l.CapitalString())
+	}
+	return styleDim.Render(l.CapitalString())
+}
+
+// renderValue draws an attribute's value according to what its key says it is,
+// and defends against what it might actually be: a value out of a log database
+// is bytes somebody else chose, so its control characters are shown rather
+// than obeyed. A value with any is left as the escaping renders it — the
+// escapes are the thing worth seeing.
+func renderValue(key, value string) string {
+	if escaped := logs.Escape(value); escaped != value {
+		return escaped
+	}
+	switch logs.KindOf(key) {
+	case logs.KindLevel:
+		if l, ok := logs.LevelOf(value); ok {
+			return renderLevelWord(l)
+		}
+	case logs.KindTrace:
+		return styleTrace.Render(value)
+	case logs.KindTime:
+		return styleDim.Render(value)
+	}
+	return logs.Highlight(value)
 }
 
 // levelWidth is the gutter column a severity is rendered in, wide enough for
