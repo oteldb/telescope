@@ -77,6 +77,12 @@ func (s *Store) Append(l source.Line) *Entry {
 			rec.Level, rec.HasLevel = lvl, true
 		}
 	}
+	if rec.TraceID == "" {
+		rec.TraceID = labelValue(l.Labels, traceKeys)
+	}
+	if rec.SpanID == "" {
+		rec.SpanID = labelValue(l.Labels, spanKeys)
+	}
 
 	text, ok := s.fmt.Format(l.Data)
 	if !ok {
@@ -86,6 +92,9 @@ func (s *Store) Append(l source.Line) *Entry {
 	if !rec.Structured && text == string(l.Data) {
 		text = Highlight(text)
 	}
+	// Whatever produced the rendering, part of it came from somebody else's
+	// bytes, and a cursor movement inside a list is not a rendering.
+	text = Sanitize(text)
 
 	head, rest, multiline := strings.Cut(text, "\n")
 	extra := 0
