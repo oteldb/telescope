@@ -227,3 +227,41 @@ func FuzzParseLokiStreams(f *testing.F) {
 		}
 	})
 }
+
+// TestLokiCarriesLabels: a Loki line is often nothing but a message, and what
+// wrote it is only in the labels of the stream it was found in. Dropping them
+// leaves a view of bare sentences with nothing to tell them apart.
+func TestLokiCarriesLabels(t *testing.T) {
+	const body = `{"status":"success","data":{"resultType":"streams","result":[
+		{"stream":{"service_name":"api","detected_level":"ERROR","namespace":"prod"},
+		 "values":[["1700000000000000000","boom",{"trace_id":"abc","detected_level":"WARN"}],
+		           ["1700000001000000000","fine"]]}]}}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	s, err := Start(t.Context(), lokiConfig(srv.URL, false))
+	require.NoError(t, err)
+
+	var got []Line
+	for l := range s.Lines() {
+		got = append(got, l)
+	}
+	require.NoError(t, <-s.Done())
+	require.Len(t, got, 2)
+
+	require.Equal(t, []Label{
+		{Key: "detected_level", Value: "WARN"},
+		{Key: "namespace", Value: "prod"},
+		{Key: "service_name", Value: "api"},
+		{Key: "trace_id", Value: "abc"},
+	}, got[0].Labels, "the entry's own metadata wins over the stream's")
+
+	require.Equal(t, []Label{
+		{Key: "detected_level", Value: "ERROR"},
+		{Key: "namespace", Value: "prod"},
+		{Key: "service_name", Value: "api"},
+	}, got[1].Labels, "an entry with no metadata of its own still knows its stream")
+}

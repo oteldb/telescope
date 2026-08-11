@@ -144,11 +144,12 @@ func lokiNanos(t time.Time) string { return strconv.FormatInt(t.UnixNano(), 10) 
 
 // lokiEntry is one log line of a query result.
 type lokiEntry struct {
-	at   time.Time
-	data []byte
+	at     time.Time
+	data   []byte
+	labels []Label
 }
 
-func (e lokiEntry) line() Line { return Line{Data: e.data, At: e.at} }
+func (e lokiEntry) line() Line { return Line{Data: e.data, At: e.at, Labels: e.labels} }
 
 // lokiRequest runs one query and returns its entries, oldest first.
 //
@@ -190,8 +191,11 @@ func (c Config) lokiRequest(ctx context.Context, client *http.Client, params url
 // maxResponseSize bounds one query result, which is held whole in memory.
 const maxResponseSize = 128 << 20
 
-// parseLokiStreams reads the entries of a "streams" result, ignoring the labels
-// and anything else the document carries.
+// parseLokiStreams reads the entries of a "streams" result.
+//
+// The labels of a stream are what the query selected it by, and are carried
+// onto every entry in it: a Loki line is often nothing but a message, and what
+// wrote it is only in the label set.
 //
 // A metric query answers with a "matrix" instead, which has no lines in it; it
 // is reported rather than shown as an empty result.
@@ -214,27 +218,47 @@ func parseLokiStreams(body []byte) ([]lokiEntry, error) {
 				return err
 			case "result":
 				return arr(d, func(d *jx.Decoder) error {
-					return d.ObjBytes(func(d *jx.Decoder, key []byte) error {
-						if string(key) != "values" {
+					// The label set may be written after the values it belongs
+					// to, so the entries of one stream are held until the whole
+					// object has been read.
+					var (
+						labels  []Label
+						entries []lokiEntry
+					)
+					if err := d.ObjBytes(func(d *jx.Decoder, key []byte) error {
+						switch string(key) {
+						case "stream":
+							ls, err := decodeLabels(d)
+							labels = ls
+							return err
+						case "values":
+							return arr(d, func(d *jx.Decoder) error {
+								// Read the whole entry before looking inside
+								// it, so one malformed entry costs that entry
+								// and not the rest of the result behind it.
+								raw, err := d.Raw()
+								if err != nil {
+									return err
+								}
+								e, err := parseLokiValue(raw)
+								if err != nil {
+									parseErr = err
+									return nil
+								}
+								entries = append(entries, e)
+								return nil
+							})
+						default:
 							return d.Skip()
 						}
-						return arr(d, func(d *jx.Decoder) error {
-							// Read the whole entry before looking inside it, so
-							// one malformed entry costs that entry and not the
-							// rest of the result behind it.
-							raw, err := d.Raw()
-							if err != nil {
-								return err
-							}
-							e, err := parseLokiValue(raw)
-							if err != nil {
-								parseErr = err
-								return nil
-							}
-							out = append(out, e)
-							return nil
-						})
-					})
+					}); err != nil {
+						return err
+					}
+					for i := range entries {
+						entries[i].labels = entryLabels(labels, entries[i].labels)
+					}
+					out = append(out, entries...)
+					return nil
 				})
 			default:
 				return d.Skip()
@@ -262,8 +286,55 @@ func arr(d *jx.Decoder, fn func(*jx.Decoder) error) error {
 	return d.Arr(fn)
 }
 
-// parseLokiValue reads one ["<unix nanos>", "<line>", ...] pair. Newer Loki
-// appends structured metadata as a third element, which is skipped.
+// decodeLabels reads a label set, which is a flat object of strings. A value
+// that is not a string is kept as it was written rather than dropped.
+func decodeLabels(d *jx.Decoder) ([]Label, error) {
+	if d.Next() == jx.Null {
+		return nil, d.Skip()
+	}
+	var out []Label
+	if err := d.ObjBytes(func(d *jx.Decoder, key []byte) error {
+		raw, err := d.RawAppend(nil)
+		if err != nil {
+			return err
+		}
+		value := string(raw)
+		if raw.Type() == jx.String {
+			s, err := jx.DecodeBytes(raw).Str()
+			if err != nil {
+				return err
+			}
+			value = s
+		}
+		out = append(out, Label{Key: string(key), Value: value})
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(out, func(a, b Label) int { return strings.Compare(a.Key, b.Key) })
+	return out, nil
+}
+
+// entryLabels puts an entry's own labels together with those of the stream it
+// belongs to. What the entry carries wins: structured metadata is written per
+// line, and the stream is only where the line was found.
+func entryLabels(stream, own []Label) []Label {
+	if len(own) == 0 {
+		// Shared, since every entry of a stream has the same set.
+		return stream
+	}
+	out := slices.Clone(own)
+	for _, l := range stream {
+		if !slices.ContainsFunc(own, func(o Label) bool { return o.Key == l.Key }) {
+			out = append(out, l)
+		}
+	}
+	slices.SortFunc(out, func(a, b Label) int { return strings.Compare(a.Key, b.Key) })
+	return out
+}
+
+// parseLokiValue reads one ["<unix nanos>", "<line>", {...}] entry, where the
+// third element is the structured metadata newer Loki writes per line.
 func parseLokiValue(raw jx.Raw) (lokiEntry, error) {
 	var (
 		e lokiEntry
@@ -289,6 +360,13 @@ func parseLokiValue(raw jx.Raw) (lokiEntry, error) {
 				return err
 			}
 			e.data = slices.Clone(s)
+			return nil
+		case 2:
+			ls, err := decodeLabels(d)
+			if err != nil {
+				return err
+			}
+			e.labels = ls
 			return nil
 		default:
 			return d.Skip()

@@ -26,6 +26,11 @@ type Line struct {
 	// Source names which stream the line came from, for a merge. Empty when
 	// there is only one, since a label nobody can be confused with says nothing.
 	Source string
+	// Labels are the attributes the source reported beside the line, which is
+	// how a log database says what a bare message cannot: the pod it came
+	// from, the severity it was indexed under. Nil for a collector that hands
+	// over the line and nothing else.
+	Labels []Label
 }
 
 // options are the knobs [Start] takes.
