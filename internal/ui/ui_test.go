@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -1726,4 +1727,66 @@ func TestLongKeyKeepsItsValue(t *testing.T) {
 	}
 	require.NotZero(t, long)
 	require.Equal(t, short, long, "both values start in the shared column")
+}
+
+// bgSeqs returns the background sequences of a rendered row, in order.
+var bgSeqs = regexp.MustCompile(`\x1b\[48;[0-9;]*m`).FindAllString
+
+// TestCursorRowFades: the row under the cursor takes a violet-to-magenta fade,
+// and the line's own coloring has to survive being laid on it.
+func TestCursorRowFades(t *testing.T) {
+	row := "\x1b[38;2;1;2;3mhello\x1b[0m world"
+	out := cursorRow(row, 40)
+
+	require.Equal(t, "hello world"+strings.Repeat(" ", 29), ansi.Strip(out),
+		"the row reaches the frame")
+	require.Contains(t, out, "\x1b[38;2;1;2;3m", "and keeps what it was wearing")
+
+	seqs := bgSeqs(out, -1)
+	require.Greater(t, len(seqs), 2)
+	require.NotEqual(t, seqs[0], seqs[len(seqs)-1], "the background fades across the row")
+}
+
+// TestBandIsOneColorAllTheWay: a band is flat, so however many times the line
+// resets its own colors, the wash under it is one color and one sequence per
+// reset — not one per column.
+func TestBandIsOneColorAllTheWay(t *testing.T) {
+	row := "\x1b[31ma\x1b[0mb\x1b[0mc"
+	out := bandRow(row, 30)
+
+	require.Equal(t, "abc"+strings.Repeat(" ", 27), ansi.Strip(out))
+	seqs := bgSeqs(out, -1)
+	require.NotEmpty(t, seqs)
+	for _, s := range seqs {
+		require.Equal(t, seqs[0], s, "one wash, not a gradient")
+	}
+	require.LessOrEqual(t, len(seqs), 3, "one per reset, not one per column")
+}
+
+// TestBandsAndCursorReachTheList: what the store worked out about time shows up
+// in the view, under the row it belongs to.
+func TestBandsAndCursorReachTheList(t *testing.T) {
+	lg := newLogs(source.Config{Collector: source.CollectorLoki, Target: "*"}, logs.NewStore(10), "")
+	lg.resize(80, 20)
+	at := time.Date(2026, 8, 11, 15, 16, 36, 0, time.Local)
+	words := []string{"first", "second", "third", "fourth"}
+	for i, w := range words {
+		lg.append(source.Line{Data: []byte(w), At: at.Add(time.Duration(i) * time.Second)})
+	}
+	lg.cursor, lg.follow = 3, false
+
+	rows := map[string]string{}
+	for line := range strings.SplitSeq(lg.View(), "\n") {
+		for _, w := range words {
+			if strings.Contains(ansi.Strip(line), w) {
+				rows[w] = line
+			}
+		}
+	}
+	require.Len(t, rows, 4)
+
+	painted := func(w string) bool { return len(bgSeqs(rows[w], 1)) > 0 }
+	require.True(t, painted("fourth"), "the cursor row is painted")
+	require.Equal(t, painted("first"), painted("third"), "every other second is washed")
+	require.NotEqual(t, painted("first"), painted("second"), "and the one between is not")
 }

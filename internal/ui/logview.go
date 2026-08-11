@@ -282,7 +282,15 @@ func (m logModel) View() string {
 	inner := max(m.width()-2, 10)
 	body := make([]string, 0, height)
 	for i := top; i < len(entries) && i < top+height; i++ {
-		body = append(body, renderLine(entries[i], m.tags[entries[i].Source], m.gutter(entries[i]), i == m.cursor, m.hoff, inner))
+		e := entries[i]
+		row := renderLine(e, m.tags[e.Source], m.gutter(e), i == m.cursor, m.hoff, inner)
+		switch {
+		case i == m.cursor:
+			row = cursorRow(row, inner)
+		case e.Band:
+			row = bandRow(row, inner)
+		}
+		body = append(body, row)
 	}
 	for len(body) < height {
 		body = append(body, "")
