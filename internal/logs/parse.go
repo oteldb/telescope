@@ -16,7 +16,7 @@ import (
 // VictoriaLogs answers with, and friends.
 var (
 	timeKeys  = []string{"ts", "time", "timestamp", "@timestamp", "Timestamp", "ObservedTimestamp", "_time"}
-	levelKeys = []string{"level", "lvl", "severity", "SeverityText", "severity_text"}
+	levelKeys = []string{"level", "lvl", "severity", "SeverityText", "severity_text", "detected_level"}
 	bodyKeys  = []string{"msg", "message", "Body", "body", "_msg"}
 	traceKeys = []string{"trace_id", "traceID", "TraceID", "traceid"}
 	spanKeys  = []string{"span_id", "spanID", "SpanID", "spanid"}
@@ -59,7 +59,7 @@ func Parse(line []byte) Record {
 			r.Body = asString(f.Value)
 		case matches(f.Key, levelKeys):
 			if l, ok := parseLevel(f.Value); ok {
-				r.Level = l
+				r.Level, r.HasLevel = l, true
 			}
 		case r.TraceID == "" && matches(f.Key, traceKeys):
 			r.TraceID = asString(f.Value)

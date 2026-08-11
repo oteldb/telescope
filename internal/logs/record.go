@@ -26,9 +26,12 @@ type Record struct {
 	// Structured is false for lines we could not parse, which are shown as-is.
 	Structured bool
 
-	Time  time.Time
-	Level zapcore.Level
-	Body  string
+	Time time.Time
+	// Level is the severity, and HasLevel says it was actually reported: the
+	// zero value of a level is Info, which is not the same as saying nothing.
+	Level    zapcore.Level
+	HasLevel bool
+	Body     string
 
 	TraceID string
 	SpanID  string

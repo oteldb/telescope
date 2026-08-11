@@ -4,8 +4,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/oteldb/telescope/internal/source"
 )
@@ -122,4 +124,66 @@ func bodies(entries []*Entry) []string {
 		out = append(out, e.Record.Body)
 	}
 	return out
+}
+
+// TestLevelFromLabels: a log database indexes the severity whether or not the
+// message repeats it, and a Loki line is often only the message.
+func TestLevelFromLabels(t *testing.T) {
+	s := NewStore(10)
+	e := s.Append(source.Line{
+		Data:   []byte("read_request_line: client closed socket"),
+		Labels: []source.Label{{Key: "detected_level", Value: "ERROR"}},
+	})
+	require.False(t, e.Record.Structured, "the line is still a bare sentence")
+	require.True(t, e.Record.HasLevel)
+	require.Equal(t, zapcore.ErrorLevel, e.Record.Level)
+
+	// And what the line says about itself is not overruled by a label.
+	own := s.Append(source.Line{
+		Data:   []byte(`{"level":"info","msg":"hi"}`),
+		Labels: []source.Label{{Key: "detected_level", Value: "ERROR"}},
+	})
+	require.Equal(t, zapcore.InfoLevel, own.Record.Level)
+}
+
+// TestLabelLevelFilters: a promoted level is a level, so the level filter
+// reaches it.
+func TestLabelLevelFilters(t *testing.T) {
+	s := NewStore(10)
+	s.Append(source.Line{Data: []byte("quiet"), Labels: []source.Label{{Key: "level", Value: "INFO"}}})
+	s.Append(source.Line{Data: []byte("loud"), Labels: []source.Label{{Key: "level", Value: "ERROR"}}})
+
+	v := NewView(Filter{MinLevel: LevelError})
+	got := v.Entries(s)
+	require.Len(t, got, 1)
+	require.Equal(t, "loud", got[0].Record.Body)
+}
+
+// TestLabelsAreGreppable: the list has no room for twenty labels, so the only
+// way to reach them is the filter.
+func TestLabelsAreGreppable(t *testing.T) {
+	s := NewStore(10)
+	s.Append(source.Line{Data: []byte("artifact up-to-date"), Labels: []source.Label{
+		{Key: "k8s_pod_name", Value: "source-controller-7f56dddc9d"},
+	}})
+	s.Append(line("artifact up-to-date"))
+
+	for _, q := range []string{"source-controller", "k8s_pod_name=source"} {
+		require.Len(t, NewView(Filter{Query: q}).Entries(s), 1, "query %q", q)
+	}
+}
+
+// TestSourceTimeIsATime: a time reported beside the line is when it was
+// written, not when it turned up here.
+func TestSourceTimeIsATime(t *testing.T) {
+	s := NewStore(10)
+	at := time.Date(2026, 8, 11, 15, 16, 36, 0, time.UTC)
+
+	reported := s.Append(source.Line{Data: []byte("hello"), At: at})
+	require.True(t, reported.HasTime)
+	require.Equal(t, at, reported.At)
+
+	bare := s.Append(line("hello"))
+	require.False(t, bare.HasTime)
+	require.False(t, bare.At.IsZero(), "it still has an arrival time to sort by")
 }

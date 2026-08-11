@@ -24,8 +24,17 @@ type Entry struct {
 	Stderr bool
 	// Source names which stream the line came from, for a merge of several.
 	Source string
+	// Labels are what the source reported beside the line.
+	Labels []source.Label
 	At     time.Time // Record time, falling back to arrival time
-	Record Record
+	// HasTime says At is when the line was written rather than when it turned
+	// up here, which is the difference between a time worth showing and one
+	// that only says the view is running.
+	HasTime bool
+	Record  Record
+
+	// labelText is the label set as one string, so a filter can match it.
+	labelText string
 }
 
 // LineTime is when a line was written, as far as anything here can tell: what
@@ -61,6 +70,13 @@ func NewStore(max int) *Store {
 // Append renders and stores a line.
 func (s *Store) Append(l source.Line) *Entry {
 	rec := Parse(l.Data)
+	// What the line does not say about itself, the source may have said for
+	// it: a Loki entry is often a bare message with the severity in a label.
+	if !rec.HasLevel {
+		if lvl, ok := levelFromLabels(l.Labels); ok {
+			rec.Level, rec.HasLevel = lvl, true
+		}
+	}
 
 	text, ok := s.fmt.Format(l.Data)
 	if !ok {
@@ -80,15 +96,18 @@ func (s *Store) Append(l source.Line) *Entry {
 	}
 
 	e := &Entry{
-		Seq:    s.seq,
-		Raw:    l.Data,
-		Text:   text,
-		Head:   head,
-		Extra:  extra,
-		Stderr: l.Stderr,
-		Source: l.Source,
-		At:     rec.Time,
-		Record: rec,
+		Seq:       s.seq,
+		Raw:       l.Data,
+		Text:      text,
+		Head:      head,
+		Extra:     extra,
+		Stderr:    l.Stderr,
+		Source:    l.Source,
+		Labels:    l.Labels,
+		At:        rec.Time,
+		HasTime:   !rec.Time.IsZero() || !l.At.IsZero(),
+		Record:    rec,
+		labelText: labelText(l.Labels),
 	}
 	// A source that reports the time out of band, such as a log database,
 	// knows better than the arrival time; a time inside the line still wins,

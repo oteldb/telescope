@@ -71,15 +71,19 @@ func (f Filter) Compile() Filter {
 }
 
 // Match reports whether e passes the filter.
+//
+// The labels a source reported are matched along with the line: they are how a
+// line is found by the pod that wrote it, and the list has no room to show them.
 func (f Filter) Match(e *Entry) bool {
-	if e.Record.Structured && e.Record.Level < f.MinLevel.Level() {
+	if e.Record.HasLevel && e.Record.Level < f.MinLevel.Level() {
 		return false
 	}
 	switch {
 	case f.re != nil:
-		return f.re.Match(e.Raw)
+		return f.re.Match(e.Raw) || f.re.MatchString(e.labelText)
 	case f.literal != nil:
-		return bytes.Contains(bytes.ToLower(e.Raw), f.literal)
+		return bytes.Contains(bytes.ToLower(e.Raw), f.literal) ||
+			bytes.Contains(bytes.ToLower([]byte(e.labelText)), f.literal)
 	default:
 		return true
 	}
