@@ -49,6 +49,11 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   a stream selector; `journalctl` and VictoriaLogs need nothing. That is the
   whole of what a `Group` may name, and why one can be four regions and no
   query.
+- **Pushing a query down is an optimization, never an answer.** `query.LogsQL`
+  compiles what it can prove and drops the rest, `logs.Filter` still runs over
+  everything that comes back, and only a conjunction may lose a term — an `or`
+  branch or a `not` operand would narrow. `Config.Pushed()` is what the view
+  compares to decide whether a filter is worth asking again.
 - **A merge trusts its children to be ordered** and does a k-way merge over
   their heads. Each child may have exactly one line pending — the per-child ack
   channel is what enforces that, not the unbuffered item channel. A source that

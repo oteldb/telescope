@@ -239,18 +239,55 @@ The filter is a small query:
 | `a b`, `a and b`, `a or b`, `not a`, `-a`, `(a b) or c` | the rest |
 
 Terms sitting next to each other are and-ed, which is why a query that is only
-words reads as the grep it replaces. Words and regular expressions match the raw
-line and the labels the source reported with it, not the rendering. A field is
-looked up where the line named it first, then among those labels, then under the
-names a record is read as, so `msg` and `trace_id` work whatever the shipper
-called them; `source` is the merge tag and `stream` is `stdout` or `stderr`. A
-line that never reported a level passes no `level` comparison at all — an
+words reads as the grep it replaces.
+
+Words and regular expressions match what a line **says**: for a structured line
+its values, not the JSON around them, and for anything else the line itself.
+Searching for `level` does not match every line that has one. The labels the
+source reported are searched too, since the list has no room to show them.
+
+A field is looked up where the line named it first, then among those labels,
+then under the names a record is read as, so `msg` and `trace_id` work whatever
+the shipper called them; `source` is the merge tag and `stream` is `stdout` or
+`stderr`. A key is matched exactly — a field name is what it is — while values
+are compared without case, because a pod name typed in a hurry is still that
+pod. A line that never reported a level passes no `level` comparison at all: an
 unlevelled line is not quietly an info one.
 
 Every term asks about one line and nothing else, which is what lets one query
-mean the same thing across a merge of several sources. A query that does not
-parse is not applied: the prompt stays open on what was typed and says why,
-rather than filtering by something else.
+mean the same thing across a group of several places — and what lets a place
+that can answer part of it be asked. A query that does not parse is not applied:
+the prompt stays open on what was typed and says why, rather than filtering by
+something else.
+
+### Pushed down
+
+Applying a filter over a log database asks the database again, with as much of
+the query as it can be asked, and rebuilds the view from the answer. Filtering a
+group of four VictoriaLogs instances is four queries, not four tails of
+everything they hold.
+
+What survives translation is a narrowing and never a change of meaning. A term
+that cannot be translated with certainty is dropped rather than approximated —
+`level>=warn` is read here from a dozen spellings and from severity numbers, and
+no one field holds it — and the filter still runs over everything that comes
+back. Only a conjunction may lose a term that way: dropping a branch of an `or`,
+or the operand of a `not`, would exclude lines the filter keeps, so those are
+not pushed at all. The result is the same either way; the difference is how much
+came over the wire.
+
+| written | sent to VictoriaLogs |
+| --- | --- |
+| `reset` | `*:~"(?i)reset"` |
+| `pod=api-7` | `pod:~"(?i)^api-7$"` |
+| `pod!=api-7` | `-pod:~"(?i)^api-7$"` |
+| `level>=warn reset` | `*:~"(?i)reset"`, the level applied here |
+| `level>=warn or reset` | nothing: the `or` cannot lose a branch |
+
+A query the place itself names bounds all of this: it is sent as written, and
+what the filter adds narrows it further. Loki is sent its selector and nothing
+more — a LogQL line filter reads the line and not the labels beside it, so
+pushing one there would drop lines this filter keeps.
 
 `l` cycles the minimum level over what a line says about itself and what its
 source said for it, so a Loki view filters by `detected_level` even though no
