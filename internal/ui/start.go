@@ -21,12 +21,6 @@ import (
 	"github.com/oteldb/telescope/internal/source"
 )
 
-// logo is the banner shown on the start screen.
-const logo = "" +
-	"╺┳╸┏━╸╻  ┏━╸┏━┓┏━╸┏━┓┏━┓┏━╸\n" +
-	" ┃ ┣╸ ┃  ┣╸ ┗━┓┃  ┃ ┃┣━┛┣╸ \n" +
-	" ╹ ┗━╸┗━╸┗━╸┗━┛┗━╸┗━┛╹  ┗━╸"
-
 // The prompt bar grows with the terminal between these bounds.
 const (
 	minPromptWidth = 64
@@ -1227,8 +1221,10 @@ func (m startModel) advance() (startModel, tea.Cmd) {
 // head renders everything above the suggestion list.
 func (m startModel) head() string {
 	var b strings.Builder
-	b.WriteString(styleLogo.Render(logo))
-	b.WriteString("\n")
+	b.WriteString(renderLogo(m.contentWidth()))
+	// The wordmark ends on a slant, and a tagline on the very next row reads as
+	// part of it.
+	b.WriteString("\n\n")
 	b.WriteString(styleHint.Render("telemetry viewer · logs"))
 	b.WriteString("\n\n")
 
