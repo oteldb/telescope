@@ -69,6 +69,10 @@ const (
 	stepSaved startStep = iota
 	stepCollector
 	stepQuery
+	// stepGroup is reached only from the saved list, and only for a group whose
+	// places name no target. It is last so that the steps before it keep
+	// running in order: it is a detour, not a step of the manual flow.
+	stepGroup
 )
 
 // collectors are the chips of the first step: what produces the logs. Where
@@ -161,6 +165,12 @@ type startModel struct {
 	// prompt when a query is written by hand.
 	endpoints []source.Endpoint
 
+	// group is the group waiting on the one thing its places do not name, and
+	// groupAsks is what that is. A group cannot ask once per place, so it asks
+	// once and every place that was waiting gets the answer.
+	group     source.Config
+	groupAsks source.Collector
+
 	// cache holds every completion result seen so far, keyed by request, so
 	// stepping back and forth never waits on a listing twice.
 	cache map[string]cacheEntry
@@ -243,7 +253,11 @@ func (m startModel) savedCandidates() []complete.Candidate {
 		}
 		detail := savedWhere(cfg)
 		if !ready {
-			detail += " · " + missingLabel(cfg.Collector)
+			asks := cfg.Collector
+			if got, ok := m.saved.asks(i); ok {
+				asks = got
+			}
+			detail += " · " + missingLabel(asks)
 		}
 		out = append(out, complete.Candidate{Value: m.mark(i) + m.saved.name(i), Detail: detail})
 	}
@@ -521,7 +535,37 @@ func (m startModel) openSaved(i int) (startModel, tea.Cmd) {
 	if ready {
 		return m, func() tea.Msg { return connectMsg{cfg: cfg, query: m.saved.query(i)} }
 	}
+	if asks, ok := m.saved.asks(i); ok {
+		return m.askGroup(cfg, asks, m.saved.query(i))
+	}
 	return m.prefill(cfg, m.saved.query(i))
+}
+
+// askGroup stops on the one thing a group's places do not name. The same
+// deployment usually has the same name on every cluster, so it is asked for
+// once and given to all of them.
+func (m startModel) askGroup(cfg source.Config, asks source.Collector, query string) (startModel, tea.Cmd) {
+	m.step = stepGroup
+	m.group, m.groupAsks = cfg, asks
+	m.detail = detailNone
+	m.err = nil
+	m.target.SetValue("")
+	m.query.SetValue(query)
+	m.syncPlaceholder()
+	m.focus()
+	return m, m.fetch()
+}
+
+// groupAsking is the first place of the pending group that is still being asked
+// about. Its cluster is what the suggestions are listed from: the places differ
+// in where they are, and the answer is the same for all of them.
+func (m startModel) groupAsking() (source.Config, bool) {
+	for _, sub := range m.group.Merge {
+		if sub.Validate() != nil {
+			return sub, true
+		}
+	}
+	return source.Config{}, false
 }
 
 // prefill seeds the manual flow from a config and stops at the step that still
@@ -555,6 +599,20 @@ func (m startModel) request() (complete.Request, bool) {
 	case stepSaved:
 		// Declared sources are already in memory; nothing to look up.
 		return complete.Request{}, false
+	case stepGroup:
+		sub, ok := m.groupAsking()
+		if !ok || sub.Collector.IsRemoteAPI() {
+			return complete.Request{}, false
+		}
+		return complete.Request{
+			Field:       complete.FieldTarget,
+			Transport:   sub.Transport,
+			Host:        sub.Host,
+			Collector:   sub.Collector,
+			Elevate:     sub.Elevate,
+			KubeConfig:  sub.KubeConfig,
+			KubeContext: sub.KubeContext,
+		}, true
 	case stepCollector:
 		switch m.detail {
 		case detailRange, detailEndpoint:
@@ -840,7 +898,7 @@ func (m *startModel) input() *textinput.Model {
 		return &m.kubecontext
 	case m.step == stepCollector && m.detail == detailEndpoint:
 		return &m.endpointURL
-	case m.step == stepCollector:
+	case m.step == stepCollector, m.step == stepGroup:
 		return &m.target
 	default:
 		return &m.query
@@ -871,7 +929,11 @@ func (m *startModel) focus() {
 }
 
 func (m *startModel) syncPlaceholder() {
-	switch m.collectorAt() {
+	collector := m.collectorAt()
+	if m.step == stepGroup {
+		collector = m.groupAsks
+	}
+	switch collector {
 	case source.CollectorJournal:
 		m.target.Placeholder = "[user/]unit, e.g. kubelet — empty for the whole journal"
 	case source.CollectorKubectl:
@@ -905,20 +967,7 @@ func (m startModel) config() source.Config {
 
 	// The filter terms narrowed the list; what is left, plus whatever the terms
 	// named, is the target itself.
-	target := complete.Target(m.target.Value(), cfg.Collector)
-	switch cfg.Collector {
-	case source.CollectorJournal:
-		cfg.Unit, cfg.UserUnit = source.ParseJournalTarget(target)
-	case source.CollectorKubectl:
-		cfg.Namespace, cfg.Target, cfg.Container = source.ParseKubeTarget(target)
-	case source.CollectorDocker:
-		cfg.Container = target
-	case source.CollectorCommand:
-		cfg.Args = target
-	case source.CollectorVictoriaLogs, source.CollectorLoki:
-		cfg.Target = target
-	}
-	return cfg
+	return cfg.WithTarget(complete.Target(m.target.Value(), cfg.Collector))
 }
 
 func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
@@ -1081,6 +1130,11 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 				m.detail = detailNone
 				m.focus()
 				return m, m.fetch()
+			case m.step == stepGroup:
+				m.step = stepSaved
+				m.err = nil
+				m.focus()
+				return m, m.fetch()
 			case m.step > stepCollector, m.step == stepCollector && m.hasSaved():
 				m.step--
 				m.err = nil
@@ -1142,6 +1196,15 @@ func (m startModel) advance() (startModel, tea.Cmd) {
 		m.detail = detailRange
 		m.focus()
 		return m, m.fetch()
+	}
+	if m.step == stepGroup {
+		cfg := m.group.WithTarget(complete.Target(m.target.Value(), m.groupAsks))
+		if err := cfg.Validate(); err != nil {
+			m.err = err
+			return m, nil
+		}
+		query := strings.TrimSpace(m.query.Value())
+		return m, func() tea.Msg { return connectMsg{cfg: cfg, query: query} }
 	}
 	if m.step < stepQuery {
 		m.step++
@@ -1298,6 +1361,13 @@ func (m startModel) breadcrumb() string {
 	if m.step == stepSaved {
 		return ""
 	}
+	if m.step == stepGroup {
+		answered := m.group.WithTarget(complete.Target(m.target.Value(), m.groupAsks))
+		crumb := styleDim.Render(strings.Join([]string{
+			m.group.Name, answered.Command(),
+		}, "  ▸  "))
+		return ansi.Truncate(crumb, m.contentWidth(), styleDim.Render("…"))
+	}
 	// Where the logs are, when it is anywhere but this machine. Saying "local"
 	// is saying nothing: it is what every source is until told otherwise.
 	var parts []string
@@ -1343,6 +1413,13 @@ func (m startModel) chips() string {
 }
 
 func (m startModel) help() string {
+	if m.step == stepGroup {
+		return strings.Join([]string{
+			key("↑↓", "suggestions"),
+			key("enter", "open "+strconv.Itoa(len(m.group.Merge))+" places"),
+			key("esc", "back"),
+		}, styleHint.Render(" · "))
+	}
 	if m.step == stepSaved {
 		open := "open"
 		if len(m.picked) > 1 {

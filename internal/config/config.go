@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/go-faster/errors"
 	"github.com/go-faster/yaml"
@@ -111,9 +112,14 @@ func (c *Config) resolvePlaces() error {
 		c.Places[i].resolved, c.Places[i].resolveErr = p.Endpoint()
 	}
 	for _, g := range c.Groups {
-		if seen[g.Name] {
+		if !seen[g.Name] {
+			seen[g.Name] = true
+			continue
+		}
+		if slices.ContainsFunc(c.Places, func(p Place) bool { return p.Name == g.Name }) {
 			return errors.Errorf("group %q is also the name of a place", g.Name)
 		}
+		return errors.Errorf("group %q is declared twice", g.Name)
 	}
 	return nil
 }

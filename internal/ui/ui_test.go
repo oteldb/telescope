@@ -179,6 +179,78 @@ func TestPlacesAreReachedTheirOwnWay(t *testing.T) {
 	require.Equal(t, "ops@node-1", children[1].Host)
 }
 
+// TestGroupAsksOnceForTheTarget: the same deployment on several clusters is
+// one thing to type, not one per cluster, so a group whose places name no pod
+// stops on the prompt and gives what is typed to all of them.
+func TestGroupAsksOnceForTheTarget(t *testing.T) {
+	withConfig(t,
+		[]config.Place{
+			{Name: "ops", Type: "kubectl", Via: "ssh://bastion", KubeConfig: "/root/ops.yml"},
+			{Name: "obs", Type: "kubectl", Via: "ssh://bastion", KubeConfig: "/root/obs.yml"},
+		},
+		[]config.Group{{Name: "both", Places: []string{"ops", "obs"}}},
+	)
+
+	m := send(t, New(), size())
+	require.Contains(t, ansi.Strip(screen(t, m)), "pick a pod", "the list says what it will ask for")
+
+	m = send(t, m, k("enter"))
+	require.Equal(t, stepGroup, m.(Model).start.step, "it stops rather than opening")
+	require.Contains(t, ansi.Strip(screen(t, m)), "open 2 places")
+
+	m = typed(t, m, "flux-system/deploy/kustomize-controller")
+	m = send(t, m, k("enter"))
+
+	cfg := m.(Model).logs.cfg
+	require.Equal(t, source.CollectorMerge, cfg.Collector)
+	children := cfg.Children()
+	require.Len(t, children, 2)
+	for _, child := range children {
+		require.Equal(t, "flux-system", child.Namespace)
+		require.Equal(t, "deploy/kustomize-controller", child.Target)
+	}
+	require.Equal(t, []string{"/root/ops.yml", "/root/obs.yml"},
+		[]string{children[0].KubeConfig, children[1].KubeConfig},
+		"each cluster is still its own")
+}
+
+// TestGroupAskingKeepsWhatAPlaceAlreadyNamed: a place that names its own target
+// is not asked about, so a group may mix the two.
+func TestGroupAskingKeepsWhatAPlaceAlreadyNamed(t *testing.T) {
+	withConfig(t,
+		[]config.Place{
+			{Name: "ops", Type: "kubectl", KubeConfig: "/root/ops.yml"},
+			{Name: "named", Type: "kubectl", KubeConfig: "/root/obs.yml", Target: "deploy/api"},
+		},
+		[]config.Group{{Name: "both", Places: []string{"ops", "named"}}},
+	)
+
+	m := send(t, New(), size(), k("enter"))
+	m = typed(t, m, "deploy/worker")
+	m = send(t, m, k("enter"))
+
+	children := m.(Model).logs.cfg.Children()
+	require.Equal(t, []string{"deploy/worker", "deploy/api"},
+		[]string{children[0].Target, children[1].Target})
+}
+
+// TestGroupAskingUnwindsWithEsc: the prompt was reached from the list, so esc
+// goes back to it rather than into the manual flow.
+func TestGroupAskingUnwindsWithEsc(t *testing.T) {
+	withConfig(t,
+		[]config.Place{
+			{Name: "ops", Type: "kubectl", KubeConfig: "/root/ops.yml"},
+			{Name: "obs", Type: "kubectl", KubeConfig: "/root/obs.yml"},
+		},
+		[]config.Group{{Name: "both", Places: []string{"ops", "obs"}}},
+	)
+
+	m := send(t, New(), size(), k("enter"))
+	require.Equal(t, stepGroup, m.(Model).start.step)
+	m = send(t, m, k("esc"))
+	require.Equal(t, stepSaved, m.(Model).start.step)
+}
+
 func TestSavedSourcesOpenFirst(t *testing.T) {
 	withSaved(t, []config.Place{
 		{Name: "node1 pods", Via: "ssh://node1", Type: "kubectl", Target: "ns/pod", Sudo: true, Query: "error"},

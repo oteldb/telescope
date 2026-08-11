@@ -56,6 +56,16 @@ func (s saved) query(i int) string {
 	return ""
 }
 
+// asks is what the entry must be given before it can open, for a group whose
+// places name no target. A place asks for itself, through the manual flow.
+func (s saved) asks(i int) (source.Collector, bool) {
+	g, ok := s.group(i)
+	if !ok {
+		return "", false
+	}
+	return g.Asks()
+}
+
 // stream is the entry as a stream to open, and whether it says enough to open
 // without asking anything.
 func (s saved) stream(i int) (source.Config, bool, error) {

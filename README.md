@@ -106,14 +106,38 @@ rather than where its timestamp belongs. A place that fails to open is reported
 in place of its lines: a group of four environments is not as available as its
 worst one.
 
-A group cannot stop to ask, so every place it names has to open as it stands.
-Which places those are is per type, and is the API's rule rather than
-telescope's: `kubectl` cannot stream without a pod or a selector, `docker`
-without a container, and Loki without a stream selector, so those must name one.
-`journalctl` with no unit is the whole journal, and LogsQL has a match-all, so a
-VictoriaLogs place needs nothing at all — which is what lets a group of four
-regions be four lines with no query written anywhere. The query is then typed
-once, into the view.
+What a place must name is the API's rule rather than telescope's: `kubectl`
+cannot stream without a pod or a selector, `docker` without a container, and
+Loki without a stream selector. `journalctl` with no unit is the whole journal,
+and LogsQL has a match-all, so a VictoriaLogs place needs nothing at all — which
+is what lets a group of four regions be four lines with no query written
+anywhere. The query is then typed once, into the view.
+
+A group cannot stop to ask once per place, but it can ask once. When the places
+it names leave the same thing open — four clusters and no pod on any of them —
+picking the group stops on the prompt, and what is typed there is given to every
+one of them:
+
+```yaml
+places:
+  - {name: ops, type: kubectl, kubeconfig: ~/.kube/ops.yml}
+  - {name: obs, type: kubectl, kubeconfig: ~/.kube/obs.yml}
+groups:
+  - name: both
+    places: [ops, obs]      # neither names a pod
+```
+
+```
+both  ▸  merge ops + obs
+❯ flux-system/deploy/kustomize-controller
+```
+
+The same deployment usually has the same name on every cluster, which is the
+whole reason this is one question rather than four. A place that already names
+its own target keeps it and is not asked about, so a group may mix the two. What
+a group cannot do is ask for two different things at once: places that leave
+different kinds of thing open — a pod on one and a LogQL selector on another —
+are a mistake in the file, since one answer cannot be both.
 
 ### Labels
 

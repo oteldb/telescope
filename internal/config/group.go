@@ -29,7 +29,17 @@ type Group struct {
 	// is why one of their tokens could not be read.
 	members    []source.Config
 	resolveErr error
+	// asks is what the places that name no target read, when any of them do
+	// not. A group cannot ask once per place, but it can ask once: the same
+	// deployment usually has the same name on every cluster.
+	asks source.Collector
 }
+
+// Asks is what the group must be given before it can open, and whether it must
+// be given anything at all. It is a collector rather than a value because what
+// is typed means different things to different ones: a pod to kubectl, a
+// container to docker, a query to a log database.
+func (g Group) Asks() (source.Collector, bool) { return g.asks, g.asks != "" }
 
 // Stream converts a declared group into a stream config.
 func (g Group) Stream() (cfg source.Config, ready bool, err error) {
@@ -51,6 +61,11 @@ func (g Group) Stream() (cfg source.Config, ready bool, err error) {
 	}
 	if g.resolveErr != nil {
 		return cfg, false, g.resolveErr
+	}
+	if _, asks := g.Asks(); asks {
+		// Not ready, and not broken either: what is missing is what the prompt
+		// is for. The shape of the group was checked when it was read.
+		return cfg, false, nil
 	}
 	if err := cfg.Validate(); err != nil {
 		return cfg, false, err
@@ -85,25 +100,39 @@ func (c *Config) resolveGroups() error {
 			case err != nil:
 				return errors.Wrapf(err, "group %q names %q", g.Name, name)
 			case !ready:
-				return errors.Errorf(
-					"group %q names %q, which does not say enough to open: %s",
-					g.Name, name, missing(cfg))
+				// A group cannot ask once per place, so every place that does
+				// not say enough has to be asking for the same thing.
+				if asks := c.Groups[i].asks; asks != "" && asks != cfg.Collector {
+					return errors.Errorf(
+						"group %q names %q and a %s place, which do not ask for the same thing: "+
+							"one target cannot be both",
+						g.Name, name, asks)
+				}
+				c.Groups[i].asks = cfg.Collector
 			}
 			cfg.Name = name
 			c.Groups[i].members = append(c.Groups[i].members, cfg)
 		}
-		if _, _, err := c.Groups[i].Stream(); err != nil && c.Groups[i].resolveErr == nil {
+		if err := c.Groups[i].shape(); err != nil {
 			return errors.Wrapf(err, "group %q", g.Name)
 		}
 	}
 	return nil
 }
 
-// missing says what a place would have been asked for, which is the whole of
-// why it cannot be in a group.
-func missing(cfg source.Config) string {
-	if err := cfg.Validate(); err != nil {
-		return err.Error()
+// shape checks what is wrong with the group itself rather than with any place
+// it names, which is the only thing a place that is still being asked about
+// cannot excuse.
+func (g Group) shape() error {
+	if len(g.members) < 2 {
+		return errors.New("a group reads two or more places")
 	}
-	return "nothing"
+	if _, asks := g.Asks(); asks {
+		return nil
+	}
+	_, _, err := g.Stream()
+	if g.resolveErr != nil {
+		return nil
+	}
+	return err
 }

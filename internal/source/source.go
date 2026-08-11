@@ -189,6 +189,39 @@ func (c Config) WithFilter(f query.Expr) Config {
 	return c
 }
 
+// WithTarget writes what was typed at the prompt into the field the collector
+// reads it from.
+//
+// For a merge it answers every child that was still being asked, and only
+// those: a group of clusters running the same deployment is asked once, while a
+// place that already named a pod keeps it.
+func (c Config) WithTarget(target string) Config {
+	if c.Collector == CollectorMerge {
+		merged := make([]Config, 0, len(c.Merge))
+		for _, sub := range c.Merge {
+			if sub.Validate() != nil {
+				sub = sub.WithTarget(target)
+			}
+			merged = append(merged, sub)
+		}
+		c.Merge = merged
+		return c
+	}
+	switch c.Collector {
+	case CollectorJournal:
+		c.Unit, c.UserUnit = ParseJournalTarget(target)
+	case CollectorKubectl:
+		c.Namespace, c.Target, c.Container = ParseKubeTarget(target)
+	case CollectorDocker:
+		c.Container = target
+	case CollectorCommand:
+		c.Args = target
+	default:
+		c.Target = target
+	}
+	return c
+}
+
 // Pushed is the query each source is actually sent, one per stream and in the
 // order they are read, so a view can tell whether changing the filter would ask
 // anything different. A source that answers no query of its own contributes an
