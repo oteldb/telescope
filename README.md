@@ -12,11 +12,12 @@ through with timestamps, levels, numbers and paths highlighted.
 go run ./cmd/telescope
 ```
 
-## Sources
+## Places
 
-A source is a **collector** and where it reads from.
+A **place** is somewhere logs can be read from: what speaks there, how to get to
+it, and what it takes to be let in.
 
-| collector | reads |
+| type | reads |
 | --- | --- |
 | `journalctl` | a systemd unit, or the whole journal |
 | `kubectl` | a pod, a container, or a label selector |
@@ -24,19 +25,18 @@ A source is a **collector** and where it reads from.
 | `command` | anything writing to stdout |
 | `victorialogs` | a [VictoriaLogs](https://docs.victoriametrics.com/victorialogs/) query, over HTTP |
 | `loki` | a [Loki](https://grafana.com/oss/loki/) query, over HTTP |
-| `merge` | several of the above, read as one stream |
 
-The first four run a command, on this machine unless you name an ssh host
-(`ctrl+o`, or `host:` in the config file) — then every one of them runs through
-`ssh(1)` instead. Naming a host is what asks for ssh: there is no step that
-makes you say "local" first.
+The first four run a command, on this machine unless the place is reached over
+ssh (`ctrl+o`, or `via: ssh://host` in the config file) — then every one of them
+runs through `ssh(1)` instead. Naming a host is what asks for ssh: there is no
+step that makes you say "local" first.
 
 `victorialogs` and `loki` run no command at all. They query a log database over
-HTTP, so the host, `sudo` and the kubeconfig mean nothing to them; what they
-need instead is an **endpoint** (`ctrl+e`). See [Endpoints](#endpoints).
+HTTP, so `via:`, `sudo` and the kubeconfig mean nothing to them; what they need
+instead is a URL and, usually, a token. Such a place is dialed rather than
+entered, so it says `proxy:` where the others say `via:`.
 
-`merge` reads no logs of its own: it is the others, shown as one stream. See
-[Merging](#merging).
+A **group** is several places read as one stream. See [Merging](#merging).
 
 Targets use a compact syntax, the same in the prompt and in the config file:
 
@@ -57,9 +57,9 @@ one of its pods.
 
 ### Merging
 
-An incident rarely stays inside one source. A **merge** reads several at once
-and shows them as a single timeline, each line tagged in the gutter with where
-it came from:
+An incident rarely stays inside one place. A **group** reads several at once and
+shows them as a single timeline, each line tagged in the gutter with where it
+came from:
 
 ```
   api     10:29:09.660  POST /orders 201
@@ -67,42 +67,53 @@ it came from:
   api     10:29:09.671  GET /health 200
 ```
 
-Pick sources on the start screen with `ctrl+a` and open them together, or
-declare the combination you reach for daily:
+Pick places on the start screen with `ctrl+a` and open them together, or declare
+the combination you reach for daily:
 
 ```yaml
-sources:
+places:
   - name: api
-    collector: docker
+    type: docker
     container: api
   - name: worker
-    collector: docker
+    type: docker
     container: worker
+groups:
   - name: prod
-    merge: [api, worker]
+    places: [api, worker]
     range: 1h
 ```
 
-Naming sources is what makes a source a merge, so its `collector` does not have
-to say so. The window, tail and follow belong to the merge — it is one view, and
-a view has one timeline — so a `range:` on a source it names is not used.
+The window, tail and follow belong to the group — it is one view, and a view has
+one timeline — so a `range:` on a place it names is not used.
 
-Each source is already in order by itself, so ordering the whole is a merge over
-their heads: the oldest pending line is the next one out. Sources that report a
+A group is an environment more often than it is two containers, and the places
+in one need not be alike: `kubectl` on a cluster, `journalctl` over ssh on a
+node, and a VictoriaLogs instance in another region read as one timeline, each
+reached its own way.
+
+Each place is already in order by itself, so ordering the whole is a merge over
+their heads: the oldest pending line is the next one out. Places that report a
 time out of band are ordered by it, and merged `docker` and `kubectl` are asked
 for the timestamps they otherwise leave out; for the rest it is the time inside
 the line, and for a line with no time at all, the one before it from the same
 source. `journalctl` is read with `-o cat`, which is the message and nothing
 else, so a merged journal is ordered by when its lines arrive.
 
-A source that goes quiet is not waited on beyond 250 ms — one idle service must
+A place that goes quiet is not waited on beyond 250 ms — one idle service must
 not hold the view back — so a line arriving after that lands where it arrives
-rather than where its timestamp belongs. A source that fails to open is reported
-in place of its lines: a merge of four environments is not as available as its
+rather than where its timestamp belongs. A place that fails to open is reported
+in place of its lines: a group of four environments is not as available as its
 worst one.
 
-A merge cannot stop to ask, so every source it names has to open as it stands.
-It reads sources, not other merges.
+A group cannot stop to ask, so every place it names has to open as it stands.
+Which places those are is per type, and is the API's rule rather than
+telescope's: `kubectl` cannot stream without a pod or a selector, `docker`
+without a container, and Loki without a stream selector, so those must name one.
+`journalctl` with no unit is the whole journal, and LogsQL has a match-all, so a
+VictoriaLogs place needs nothing at all — which is what lets a group of four
+regions be four lines with no query written anywhere. The query is then typed
+once, into the view.
 
 ### Labels
 
@@ -164,7 +175,7 @@ prompt and at the query step, and shows what the window resolves to:
 | `2026-01-02 10:00..12:00` | a date and time, or RFC 3339 |
 | `all` | no bounds — the tail alone |
 
-The spec is kept as written and resolved when the source opens, so `1h` means
+The spec is kept as written and resolved when the place opens, so `1h` means
 the last hour on every run rather than the hour that had passed when it was
 typed. A range with an end is a window that has already happened, so nothing is
 followed however the toggle is set.
@@ -188,7 +199,7 @@ whatever was typed — bound it in the command itself.
 | `shift+tab` | previous collector |
 | `enter` | accept the highlighted suggestion, else go to the next step |
 | `esc` | drop the highlight, leave the editor, go back a step, then quit |
-| `ctrl+a` | pick a saved source to merge; opening more than one reads them together |
+| `ctrl+a` | pick a saved place to group; opening more than one reads them together |
 | `ctrl+r` | re-run the current listing, ignoring the cache |
 | `ctrl+s` | toggle `sudo -n` |
 | `ctrl+k` | edit the kubeconfig path (kubectl) |
@@ -213,7 +224,7 @@ whatever was typed — bound it in the command itself.
 | `/` | filter (`enter` applies, `esc` cancels) |
 | `f` | toggle follow |
 | `l` | cycle minimum level: all, info, warn, error |
-| `esc` | back to sources |
+| `esc` | back to the picker |
 | `q`, `ctrl+c` | quit |
 
 The filter is a small query:
@@ -325,46 +336,55 @@ first.
 
 ## Configuration
 
-Declared sources live in `$XDG_CONFIG_HOME/telescope/config.yaml`, by default
+Declared places live in `$XDG_CONFIG_HOME/telescope/config.yaml`, by default
 `~/.config/telescope/config.yaml`. When the file declares any, the start screen
 opens on a picker; `tab` leaves it for the manual flow.
 
 ```yaml
-sources:
+places:
   # Named in full: opens straight into the logs.
   - name: navidrome
-    collector: docker
+    type: docker
     container: navidrome
     tail: 50
 
   # A cluster reachable only as root on a node that refuses root logins.
   # No pod named, so picking it opens the prompt with the rest filled in.
   - name: k3s-ops
-    host: node1
-    collector: kubectl
+    type: kubectl
+    via: ssh://node1
     kubeconfig: /root/.kube/ops.kubeconfig
     context: admin@ops
     sudo: true
 
   - name: syncthing
-    collector: journalctl
+    type: journalctl
     unit: user/syncthing
     query: error
+
+  # A log database. See Endpoints for the token and the proxy.
+  - name: vl-eu
+    type: victorialogs
+    url: https://logs.eu.example.com
+    token:
+      env: VL_TOKEN
+
+groups:
+  - name: prod
+    places: [k3s-ops, vl-eu]
 ```
 
-A source does not have to be complete. One that pins a host, a kubeconfig and
+A place does not have to be complete. One that pins a host, a kubeconfig and
 `sudo` but no pod is valid: choosing it fills in what it knew and stops at the
 step still missing, with the pods already listing for that cluster. The picker
-marks those with what they will ask for.
+marks those with what they will ask for. A group can only name the ones that ask
+for nothing; see [Merging](#merging).
 
 | field | default | |
 | --- | --- | --- |
-| `name` | required | shown in the picker |
-| `collector` | required | `journalctl`, `kubectl`, `docker`, `command`, `victorialogs`, `loki`, `merge`; taken from the endpoint when one is named, or from `merge` |
-| `merge` | | other declared sources, read as one stream; see [Merging](#merging) |
-| `endpoint` | | a declared endpoint, required by `victorialogs` |
-| `host` | | ssh destination; unset reads this machine |
-| `transport` | `local` | `local` or `ssh`; naming a `host` is enough |
+| `name` | required | shown in the picker, and how a group names it |
+| `type` | required | `journalctl`, `kubectl`, `docker`, `command`, `victorialogs`, `loki` |
+| `via` | `local` | `local`, or `ssh://[user@]host` to run the collector over ssh |
 | `unit` | | systemd unit, `user/` prefix accepted |
 | `user_unit` | `false` | read the user journal |
 | `namespace` | | Kubernetes namespace |
@@ -372,31 +392,44 @@ marks those with what they will ask for.
 | `container` | | container, for kubectl or docker |
 | `kubeconfig` | | passed as `--kubeconfig` |
 | `context` | | passed as `--context` |
-| `args` | | command line, for `collector: command` |
+| `args` | | command line, for `type: command` |
 | `sudo` | `false` | run the collector under `sudo -n` |
+| `url` | required for a database | the base the API paths hang off |
+| `datasource` | | Grafana datasource uid, appended to `url` as a proxy path |
+| `token` | | where the bearer token is read from; see [Endpoints](#endpoints) |
+| `tenant` | | `AccountID:ProjectID` for VictoriaLogs, the org id for Loki |
+| `headers` | | anything else the database or its proxy needs |
+| `proxy` | | reach this database through `http://…` or `socks5h://…` |
+| `insecure` | `false` | skip TLS verification |
 | `range` | | the window read: `1h`, `today`, `6h..1h`; see [Time range](#time-range) |
 | `tail` | `1000` | lines of history, `0` for all |
 | `follow` | `true` | keep streaming |
 | `query` | | pre-fills the filter |
 
-A malformed file, or a source naming an unknown collector, is reported on the
-start screen rather than ignored.
+A group takes `name`, `places`, and the same `range`, `tail`, `follow` and
+`query` — which belong to the view it opens rather than to any place in it.
+
+The fields a place cannot use are an error rather than a shrug: a `command` with
+a `token`, or a `victorialogs` reached `via: ssh://…` instead of through a
+`proxy`, is a mistake in the file and is reported as one. So is a key that is not
+a key at all, since a config half understood opens half of what it names and
+says nothing about the rest.
+
+A malformed file, or a place naming an unknown type, is reported on the start
+screen rather than ignored.
 
 ### Endpoints
 
-**An endpoint is a place; a source is a thing to read there.** The endpoint
-carries what is the same for every query — the URL, the datasource, the tenant
-and the credential — so a second query costs three lines and no secret. It is
-the same split as `host:` for ssh, where the connection is not the pod.
+A place of type `victorialogs` or `loki` is a log database: a URL, whatever it
+takes to be let in, and optionally a query worth naming. What is the same for
+every query — the URL, the datasource, the tenant and the credential — is
+declared once, so a second query against it costs three lines and no secret.
 
-Most endpoints never need a source at all: telescope offers every declared one
-on the start screen, and picking it opens the query prompt with the place
-already chosen. Write a `sources:` entry only for a query worth naming.
-
-Endpoints are declared once and referred to by name:
+A VictoriaLogs place needs no query at all, since LogsQL has a match-all; give
+one only when it is worth a name of its own.
 
 ```yaml
-endpoints:
+places:
   # A Grafana datasource: the URL is the Grafana, and telescope resolves the
   # datasource proxy path against it.
   - name: prod
@@ -414,34 +447,15 @@ endpoints:
     token:
       exec: secret-tool lookup service telescope account staging
 
-  # The database itself, with no Grafana in front of it.
-  - name: local
+  # The database itself, with no Grafana in front of it, and a query worth
+  # keeping.
+  - name: prod api
     type: loki
     url: http://127.0.0.1:3100
-
-sources:
-  - name: prod api
-    endpoint: prod
-    target: 'kubernetes.namespace:oteldb level:error'
+    target: '{app="api"}'
 ```
 
-| field | | |
-| --- | --- | --- |
-| `name` | required | referred to by a source's `endpoint` |
-| `type` | required | `victorialogs` or `loki` |
-| `url` | required | the base the API paths hang off |
-| `datasource` | | Grafana datasource uid, appended to `url` as a proxy path |
-| `token` | | where the bearer token is read from; see below |
-| `tenant` | | `AccountID:ProjectID` for VictoriaLogs, the org id for Loki |
-| `headers` | | anything else the endpoint or its proxy needs |
-| `proxy` | | reach this endpoint through `http://…` or `socks5h://…` |
-| `insecure` | `false` | skip TLS verification |
-
-Queries are remembered per endpoint and offered back there.
-
-A source naming an endpoint does not need a `collector`: the endpoint already
-says which API it speaks, and saying otherwise is an error rather than a silent
-mistranslation.
+Queries are remembered per database and offered back there.
 
 `ctrl+e` picks the endpoint from all the declared ones that speak the chosen
 database — a list, filtered as you type, not a chip per endpoint, since a
@@ -453,10 +467,13 @@ missing scheme is filled in — `https://`, or `http://` for a loopback address.
 Anything needing a token belongs in the config file, since the prompt writes
 what it is given to the history in plain text.
 
-`proxy` is per endpoint on purpose: one database behind a corporate proxy should
+`proxy` is per place on purpose: one database behind a corporate proxy should
 not push every other request through it. Unset, the proxy comes from the
 environment (`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`), so a SOCKS setup that
-already works for everything else needs nothing here.
+already works for everything else needs nothing here. It is also how a database
+reachable only from a bastion is reached — `ssh -D 1080 bastion` and
+`proxy: socks5h://127.0.0.1:1080` — since `via:` runs a command and there is no
+command to run.
 
 **The token is named, never written.** The config file stays shareable, and the
 secret keeps the permissions it already has. One of three, at most:
@@ -480,12 +497,12 @@ list of arguments, which needs no quoting:
 That covers a keyring (`secret-tool lookup …`), `pass`, Bitwarden, 1Password,
 Proton Pass — anything with a CLI. The command inherits the terminal, and
 telescope reads its config before taking over the screen, so a manager that
-needs to ask for a passphrase can still ask. It runs once per run, per endpoint,
-and only for endpoints that are declared; what it writes to stderr is kept for
-the error, and it is given a minute to answer.
+needs to ask for a passphrase can still ask. It runs once per run, per place,
+and only for places that are declared; what it writes to stderr is kept for the
+error, and it is given a minute to answer.
 
-An endpoint whose token cannot be read marks its own sources invalid in the
-picker and leaves the rest working.
+A place whose token cannot be read says so where it is chosen, and takes down
+neither the config nor any group that does not name it.
 
 The proxy comes from the environment, so an endpoint reachable only through
 `HTTPS_PROXY` or `ALL_PROXY=socks5h://…` needs nothing further.

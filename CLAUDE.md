@@ -23,14 +23,17 @@ about a workspace, re-run it with `GOWORK=off`.
 | package | what lives there |
 | --- | --- |
 | `internal/source` | building and running collectors. `Config` describes a stream; `Command`/`Argv` turn it into a process; `Stream` yields `Line`s. `loki.go`/`victorialogs.go` query over HTTP instead, `merge.go` interleaves several streams, `endpoint.go` holds the HTTP endpoint and its token. |
-| `internal/logs` | what a line means and how it reads. `parse.go` turns JSON into a `Record`, `store.go` renders and retains entries, `filter.go` is the grep and level filter with its incremental `View`, `highlight.go`/`escape.go` decide what reaches the screen. |
-| `internal/ui` | the bubbletea models. `app.go` is the root, `start.go` picks a source, `logview.go` is the list, `entryview.go` one entry, `theme.go` the palette, `rows.go` the row backgrounds. |
-| `internal/config` | `config.yaml` and `history.yaml`: endpoints, sources, merges, tokens. |
+| `internal/logs` | what a line means and how it reads. `parse.go` turns JSON into a `Record`, `store.go` renders and retains entries, `filter.go` pairs a parsed query with the level the view cycles, and keeps its incremental `View`, `highlight.go`/`escape.go` decide what reaches the screen. |
+| `internal/ui` | the bubbletea models. `app.go` is the root, `start.go` picks a place or a group, `logview.go` is the list, `entryview.go` one entry, `theme.go` the palette, `rows.go` the row backgrounds. |
+| `internal/config` | `config.yaml` and `history.yaml`. A `Place` is where logs are read from and how it is reached (`via:` for a command, `proxy:` for a database); a `Group` is several places read as one. `Load` resolves both; `New` does the same for declarations that did not come from a file. |
+| `internal/query` | the filter language: `Parse` builds an `Expr`, `Match` evaluates it against one `Record`. It sits below `source` so a query can be compiled into one a database answers itself. |
 | `internal/complete` | the suggestions the start screen offers, fetched by shelling out. |
 
-The dependency order is `source` → `logs` → `ui`, and `config` feeds `ui`. It
-does not run the other way: when `source` needed to date a line by parsing it,
-the parser came in through `source.WithTimeFunc` rather than an import.
+The dependency order is `query` → `source` → `logs` → `ui`, and `config` feeds
+`ui`. It does not run the other way: when `source` needed to date a line by
+parsing it, the parser came in through `source.WithTimeFunc` rather than an
+import. `query` is below `source` for the same reason in reverse — a query has
+to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
 
 ## What the code assumes
 
@@ -41,6 +44,11 @@ the parser came in through `source.WithTimeFunc` rather than an import.
 - **A line's time is `Line.At` if the source reported one, else what the line
   says about itself, else when it arrived.** `Entry.HasTime` is the difference
   between the first two and the last, and only the first two are worth showing.
+- **What a place must name is the API's rule, not ours.** `kubectl` cannot
+  stream without a pod or a selector, `docker` without a container, Loki without
+  a stream selector; `journalctl` and VictoriaLogs need nothing. That is the
+  whole of what a `Group` may name, and why one can be four regions and no
+  query.
 - **A merge trusts its children to be ordered** and does a k-way merge over
   their heads. Each child may have exactly one line pending — the per-child ack
   channel is what enforces that, not the unbuffered item channel. A source that
