@@ -10,10 +10,10 @@ import (
 	"github.com/oteldb/telescope/internal/source"
 )
 
-func TestLoadEndpoints(t *testing.T) {
+func TestLoadHTTPPlace(t *testing.T) {
 	t.Setenv("TELESCOPE_TEST_TOKEN", "s3cret")
 	path := write(t, `
-endpoints:
+places:
   - name: prod
     type: victorialogs
     url: https://grafana.example.com
@@ -23,17 +23,12 @@ endpoints:
     tenant: "1:1"
     headers:
       X-Scope: logs
-
-sources:
-  - name: prod api
-    collector: victorialogs
-    endpoint: prod
     target: 'kubernetes.namespace:oteldb'
 `)
 	cfg, err := loadFrom(path)
 	require.NoError(t, err)
 
-	stream, ready, err := cfg.Sources[0].Stream()
+	stream, ready, err := cfg.Places[0].Stream()
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.Equal(t, source.CollectorVictoriaLogs, stream.Collector)
@@ -46,124 +41,89 @@ sources:
 	require.Equal(t, "kubernetes.namespace:oteldb", stream.Target)
 }
 
-func TestLoadEndpointTokenFile(t *testing.T) {
+// TestHTTPPlaceNeedsNoTarget: LogsQL has a match-all, so a VictoriaLogs place
+// opens as it stands and can be named by a group without a query anywhere.
+func TestHTTPPlaceNeedsNoTarget(t *testing.T) {
+	cfg, err := loadFrom(write(t, `
+places:
+  - name: prod
+    type: victorialogs
+    url: https://logs.example.com
+`))
+	require.NoError(t, err)
+	_, ready, err := cfg.Places[0].Stream()
+	require.NoError(t, err)
+	require.True(t, ready)
+}
+
+func TestLoadPlaceTokenFile(t *testing.T) {
 	dir := t.TempDir()
 	tokenPath := filepath.Join(dir, "token")
 	require.NoError(t, os.WriteFile(tokenPath, []byte("s3cret\n"), 0o600))
 
 	path := write(t, `
-endpoints:
+places:
   - name: prod
     type: victorialogs
     url: https://logs.example.com
     token:
       file: `+tokenPath+`
-sources:
-  - name: prod
-    collector: victorialogs
-    endpoint: prod
     target: 'error'
 `)
 	cfg, err := loadFrom(path)
 	require.NoError(t, err)
-	stream, _, err := cfg.Sources[0].Stream()
+	stream, _, err := cfg.Places[0].Stream()
 	require.NoError(t, err)
 	require.Equal(t, "s3cret", stream.Endpoint.Token, "the trailing newline is not part of the token")
 }
 
-// TestLoadEndpointMissingToken: an endpoint whose token is not exported is one
-// source that cannot open, not a config that cannot be read.
-func TestLoadEndpointMissingToken(t *testing.T) {
+// TestLoadPlaceMissingToken: a place whose token is not exported is one place
+// that cannot open, not a config that cannot be read.
+func TestLoadPlaceMissingToken(t *testing.T) {
 	path := write(t, `
-endpoints:
+places:
   - name: prod
     type: victorialogs
     url: https://logs.example.com
     token:
       env: TELESCOPE_TEST_UNSET_TOKEN
-sources:
-  - name: prod
-    collector: victorialogs
-    endpoint: prod
     target: 'error'
   - name: local docker
-    collector: docker
+    type: docker
     container: navidrome
 `)
 	cfg, err := loadFrom(path)
 	require.NoError(t, err)
-	require.Len(t, cfg.Sources, 2)
+	require.Len(t, cfg.Places, 2)
 
-	_, ready, err := cfg.Sources[0].Stream()
+	_, ready, err := cfg.Places[0].Stream()
 	require.False(t, ready)
 	require.ErrorContains(t, err, "TELESCOPE_TEST_UNSET_TOKEN")
 
-	_, ready, err = cfg.Sources[1].Stream()
-	require.NoError(t, err, "the other sources still open")
+	_, ready, err = cfg.Places[1].Stream()
+	require.NoError(t, err, "the other places still open")
 	require.True(t, ready)
 }
 
-func TestLoadEndpointErrors(t *testing.T) {
+func TestLoadHTTPPlaceErrors(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		content string
 		wantErr string
 	}{
-		{"undeclared", `
-sources:
-  - name: prod
-    collector: victorialogs
-    endpoint: nope
-    target: error
-`, "undeclared endpoint"},
-		{"no endpoint named", `
-sources:
-  - name: prod
-    collector: victorialogs
-    target: error
-`, "requires an endpoint"},
-		{"declared twice", `
-endpoints:
-  - name: prod
-    type: loki
-    url: https://logs.example.com
-  - name: prod
-    type: loki
-    url: https://other.example.com
-sources: []
-`, "declared twice"},
 		{"no url", `
-endpoints:
+places:
   - name: prod
     type: loki
-sources: []
-`, "url is required"},
-		{"no type", `
-endpoints:
-  - name: prod
-    url: https://logs.example.com
-sources: []
-`, "type must be victorialogs or loki"},
-		{"the endpoint speaks something else", `
-endpoints:
-  - name: prod
-    type: loki
-    url: https://logs.example.com
-sources:
-  - name: prod
-    collector: victorialogs
-    endpoint: prod
-    target: 'error'
-`, "speaks loki, not victorialogs"},
+`, "requires a url"},
 		{"two tokens", `
-endpoints:
+places:
   - name: prod
     type: victorialogs
     url: https://logs.example.com
     token:
       env: A
       file: /b
-sources: []
 `, "token names env and file"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -171,6 +131,22 @@ sources: []
 			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}
+}
+
+// TestLokiPlaceNeedsASelector: Loki selects streams by label and has no
+// match-all, so a place that names none opens the prompt rather than the logs.
+func TestLokiPlaceNeedsASelector(t *testing.T) {
+	cfg, err := loadFrom(write(t, `
+places:
+  - name: prod
+    type: loki
+    url: https://logs.example.com
+`))
+	require.NoError(t, err, "it is a place to write a query against, not a mistake")
+
+	_, ready, err := cfg.Places[0].Stream()
+	require.NoError(t, err)
+	require.False(t, ready)
 }
 
 // TestEndpointScope: a query written for one cluster means nothing against
@@ -212,50 +188,49 @@ func TestRememberTypedEndpoint(t *testing.T) {
 	require.Equal(t, []string{"https://logs.example.com"}, h.Endpoints)
 }
 
-// TestSourceTakesCollectorFromEndpoint: an endpoint already says which API it
-// speaks, so a source naming one need not repeat it.
-func TestSourceTakesCollectorFromEndpoint(t *testing.T) {
+// TestPlaceProxy: a corporate place may need a proxy of its own, and a mistyped
+// one is a mistake in the file rather than a silent direct connection.
+func TestPlaceProxy(t *testing.T) {
 	cfg, err := loadFrom(write(t, `
-endpoints:
-  - name: prod
-    type: loki
-    url: https://logs.example.com
-sources:
-  - name: prod api
-    endpoint: prod
-    target: '{app="api"}'
-`))
-	require.NoError(t, err)
-	stream, ready, err := cfg.Sources[0].Stream()
-	require.NoError(t, err)
-	require.True(t, ready)
-	require.Equal(t, source.CollectorLoki, stream.Collector)
-	require.Equal(t, `{app="api"}`, stream.Target)
-}
-
-// TestEndpointProxy: a corporate endpoint may need a proxy of its own, and a
-// mistyped one is a mistake in the file rather than a silent direct connection.
-func TestEndpointProxy(t *testing.T) {
-	cfg, err := loadFrom(write(t, `
-endpoints:
+places:
   - name: corp
     type: victorialogs
     url: https://logs.corp.example.com
     proxy: socks5h://127.0.0.1:1080
-sources: []
 `))
 	require.NoError(t, err)
-	endpoints, err := cfg.Resolved()
+	endpoints, err := cfg.Endpoints()
 	require.NoError(t, err)
 	require.Equal(t, "socks5h://127.0.0.1:1080", endpoints[0].Proxy)
 
 	_, err = loadFrom(write(t, `
-endpoints:
+places:
   - name: corp
     type: victorialogs
     url: https://logs.corp.example.com
     proxy: "://nonsense"
-sources: []
 `))
 	require.ErrorContains(t, err, "cannot use proxy")
+}
+
+// TestVia: one field says how a place is reached, whether that is this machine
+// or a host across an ssh connection.
+func TestVia(t *testing.T) {
+	for _, tt := range []struct {
+		via       string
+		transport source.Transport
+		host      string
+	}{
+		{"", source.TransportLocal, ""},
+		{"local", source.TransportLocal, ""},
+		{"ssh://node1", source.TransportSSH, "node1"},
+		{"ssh://ops@node1", source.TransportSSH, "ops@node1"},
+	} {
+		t.Run(tt.via, func(t *testing.T) {
+			transport, host, err := parseVia(tt.via)
+			require.NoError(t, err)
+			require.Equal(t, tt.transport, transport)
+			require.Equal(t, tt.host, host)
+		})
+	}
 }

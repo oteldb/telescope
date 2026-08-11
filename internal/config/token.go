@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -29,6 +30,20 @@ type Token struct {
 // tokenTimeout bounds a token command. It is generous because unlocking a
 // keyring may mean answering a prompt.
 const tokenTimeout = time.Minute
+
+// expandHome resolves a leading ~, which is what a path in a config file is
+// most likely to be written with.
+func expandHome(path string) (string, error) {
+	rest, ok := strings.CutPrefix(path, "~")
+	if !ok {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", errors.Wrap(err, "home directory")
+	}
+	return filepath.Join(home, rest), nil
+}
 
 // IsZero reports whether no token is named, which is what an endpoint that
 // needs no credentials looks like.

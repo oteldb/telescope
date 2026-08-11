@@ -82,7 +82,7 @@ func TestTokenExecTakesTheFirstLine(t *testing.T) {
 func TestTokenExecForms(t *testing.T) {
 	needsShell(t)
 	cfg, err := loadFrom(write(t, `
-endpoints:
+places:
   - name: shell
     type: victorialogs
     url: https://logs.example.com
@@ -91,13 +91,13 @@ endpoints:
   - name: argv
     type: loki
     url: https://logs.example.com
+    target: '{app="api"}'
     token:
       exec: ["sh", "-c", "printf 'argv token' | cut -d' ' -f1"]
-sources: []
 `))
 	require.NoError(t, err)
 
-	endpoints, err := cfg.Resolved()
+	endpoints, err := cfg.Endpoints()
 	require.NoError(t, err)
 	require.Len(t, endpoints, 2)
 	require.Equal(t, "sh3ll", endpoints[0].Token)
@@ -110,25 +110,22 @@ func TestTokenExecRunsOnce(t *testing.T) {
 	needsShell(t)
 	counter := filepath.Join(t.TempDir(), "runs")
 	cfg, err := loadFrom(write(t, `
-endpoints:
+places:
   - name: prod
     type: victorialogs
     url: https://logs.example.com
+    target: error
     token:
       exec: echo run >> `+counter+`; printf s3cret
-sources:
-  - name: prod
-    endpoint: prod
-    target: error
 `))
 	require.NoError(t, err)
 
 	for range 3 {
-		endpoints, err := cfg.Resolved()
+		endpoints, err := cfg.Endpoints()
 		require.NoError(t, err)
 		require.Equal(t, "s3cret", endpoints[0].Token)
 	}
-	stream, _, err := cfg.Sources[0].Stream()
+	stream, _, err := cfg.Places[0].Stream()
 	require.NoError(t, err)
 	require.Equal(t, "s3cret", stream.Endpoint.Token)
 
@@ -137,32 +134,29 @@ sources:
 	require.Equal(t, "run\n", string(runs))
 }
 
-// TestTokenExecFailureIsPerEndpoint: a keyring that will not answer is one
-// endpoint that cannot be reached, not a config that cannot be read.
-func TestTokenExecFailureIsPerEndpoint(t *testing.T) {
+// TestTokenExecFailureIsPerPlace: a keyring that will not answer is one place
+// that cannot be reached, not a config that cannot be read.
+func TestTokenExecFailureIsPerPlace(t *testing.T) {
 	needsShell(t)
 	cfg, err := loadFrom(write(t, `
-endpoints:
-  - name: prod
+places:
+  - name: prod logs
     type: victorialogs
     url: https://logs.example.com
+    target: error
     token:
       exec: echo 'the keyring is locked' >&2; exit 1
-sources:
-  - name: prod logs
-    endpoint: prod
-    target: error
   - name: local docker
-    collector: docker
+    type: docker
     container: api
 `))
 	require.NoError(t, err, "one unreachable secret is not a broken config")
 
-	_, ready, err := cfg.Sources[0].Stream()
+	_, ready, err := cfg.Places[0].Stream()
 	require.False(t, ready)
 	require.ErrorContains(t, err, "the keyring is locked")
 
-	_, ready, err = cfg.Sources[1].Stream()
+	_, ready, err = cfg.Places[1].Stream()
 	require.NoError(t, err)
 	require.True(t, ready)
 }
@@ -176,8 +170,8 @@ func TestTokenValidate(t *testing.T) {
 
 func TestTokenExecEmpty(t *testing.T) {
 	for _, content := range []string{
-		"endpoints:\n  - name: p\n    type: loki\n    url: http://x\n    token:\n      exec: \"\"\nsources: []\n",
-		"endpoints:\n  - name: p\n    type: loki\n    url: http://x\n    token:\n      exec: []\nsources: []\n",
+		"places:\n  - name: p\n    type: loki\n    url: http://x\n    target: '{a=\"b\"}'\n    token:\n      exec: \"\"\n",
+		"places:\n  - name: p\n    type: loki\n    url: http://x\n    target: '{a=\"b\"}'\n    token:\n      exec: []\n",
 	} {
 		_, err := loadFrom(write(t, content))
 		require.ErrorContains(t, err, "exec is empty")
