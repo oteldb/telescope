@@ -31,7 +31,10 @@ type Entry struct {
 	// up here, which is the difference between a time worth showing and one
 	// that only says the view is running.
 	HasTime bool
-	Record  Record
+	// Band alternates with the second an entry belongs to, so a view can shade
+	// the lines that happened together and leave a seam where time passed.
+	Band   bool
+	Record Record
 
 	// labelText is the label set as one string, so a filter can match it.
 	labelText string
@@ -57,6 +60,12 @@ type Store struct {
 
 	// dropped counts entries evicted by the cap.
 	dropped int
+
+	// band and bandAt alternate the shading of each second, worked out as
+	// entries arrive: which second a line belongs to is settled once, and a
+	// view that scrolled or filtered could not work it out again.
+	band   bool
+	bandAt time.Time
 }
 
 // NewStore returns a store retaining at most max entries.
@@ -127,6 +136,10 @@ func (s *Store) Append(l source.Line) *Entry {
 	if e.At.IsZero() {
 		e.At = time.Now()
 	}
+	if sec := e.At.Truncate(time.Second); !sec.Equal(s.bandAt) {
+		s.band, s.bandAt = !s.band, sec
+	}
+	e.Band = s.band
 	s.seq++
 
 	s.entries = append(s.entries, e)
@@ -152,4 +165,5 @@ func (s *Store) Reset() {
 	s.entries = nil
 	s.seq = 0
 	s.dropped = 0
+	s.band, s.bandAt = false, time.Time{}
 }

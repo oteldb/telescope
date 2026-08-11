@@ -187,3 +187,19 @@ func TestSourceTimeIsATime(t *testing.T) {
 	require.False(t, bare.HasTime)
 	require.False(t, bare.At.IsZero(), "it still has an arrival time to sort by")
 }
+
+// TestBandsFollowTheSecond: the lines of one second belong together, and the
+// seam between two seconds is what a reader is actually looking for.
+func TestBandsFollowTheSecond(t *testing.T) {
+	s := NewStore(10)
+	at := time.Date(2026, 8, 11, 15, 16, 36, 0, time.UTC)
+
+	first := s.Append(source.Line{Data: []byte("a"), At: at})
+	same := s.Append(source.Line{Data: []byte("b"), At: at.Add(400 * time.Millisecond)})
+	next := s.Append(source.Line{Data: []byte("c"), At: at.Add(time.Second)})
+	later := s.Append(source.Line{Data: []byte("d"), At: at.Add(90 * time.Second)})
+
+	require.Equal(t, first.Band, same.Band, "one second is one band")
+	require.NotEqual(t, same.Band, next.Band, "the next second is the next band")
+	require.NotEqual(t, next.Band, later.Band, "however long the gap")
+}
