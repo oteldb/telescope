@@ -32,6 +32,7 @@ const (
 	CollectorCommand      Collector = "command"
 	CollectorVictoriaLogs Collector = "victorialogs"
 	CollectorLoki         Collector = "loki"
+	CollectorMerge        Collector = "merge"
 )
 
 // IsRemoteAPI reports whether the collector reads from a log database over
@@ -43,6 +44,10 @@ func (c Collector) IsRemoteAPI() bool {
 
 // Config describes a log stream to open.
 type Config struct {
+	// Name is what the stream is called. It is what a merge tags this stream's
+	// lines with; elsewhere it is only a label.
+	Name string
+
 	Transport Transport
 	// Host is the ssh destination, [user@]host, used when Transport is [TransportSSH].
 	Host string
@@ -72,9 +77,19 @@ type Config struct {
 	KubeConfig  string
 	KubeContext string
 
+	// Merge is what [CollectorMerge] reads: several streams shown as one. The
+	// window, tail and follow of the merge apply to all of them, since a merge
+	// is a single view and has a single timeline.
+	Merge []Config
+
 	// Elevate runs the collector under sudo, for logs or configs a plain user
 	// cannot read.
 	Elevate bool
+
+	// Stamp asks the collector to report the time of each line out of band, in
+	// [Line.At]. It costs a flag the collector may not have, so it is only
+	// asked for where it is needed: ordering a merge.
+	Stamp bool
 
 	// Range bounds the window read. The zero value reads up to now, which is
 	// what a plain tail does.
@@ -82,6 +97,13 @@ type Config struct {
 
 	Tail   int
 	Follow bool
+}
+
+// Stamps reports whether the collector was asked to timestamp its lines and can
+// do it. journalctl is read with -o cat, which is the message and nothing else,
+// so a merged journal is ordered by when its lines arrive.
+func (c Config) Stamps() bool {
+	return c.Stamp && (c.Collector == CollectorDocker || c.Collector == CollectorKubectl)
 }
 
 // following reports whether the stream stays open. A range with an end is a
@@ -122,6 +144,19 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(c.Args) == "" {
 			return fmt.Errorf("command requires a command line")
 		}
+	case CollectorMerge:
+		if len(c.Merge) < 2 {
+			return fmt.Errorf("a merge reads two or more sources")
+		}
+		for _, sub := range c.Children() {
+			if sub.Collector == CollectorMerge {
+				return fmt.Errorf("merged %s: a merge cannot contain a merge", sub.Label())
+			}
+			if err := sub.Validate(); err != nil {
+				return fmt.Errorf("merged %s: %w", sub.Label(), err)
+			}
+		}
+		return nil
 	case CollectorJournal:
 	default:
 		return fmt.Errorf("unknown collector %q", c.Collector)
@@ -145,6 +180,8 @@ func (c Config) Validate() error {
 // result only describes the query; it is never executed.
 func (c Config) Command() string {
 	switch c.Collector {
+	case CollectorMerge:
+		return "merge " + strings.Join(mergeLabels(c.Children()), " + ")
 	case CollectorVictoriaLogs:
 		return "logsql " + Quote(c.vlogsQuery())
 	case CollectorLoki:
@@ -197,6 +234,9 @@ func (c Config) Command() string {
 		if ct := strings.TrimSpace(c.Container); ct != "" {
 			args = append(args, "-c", Quote(ct))
 		}
+		if c.Stamps() {
+			args = append(args, "--timestamps")
+		}
 		if t := c.Range.Since; !t.IsZero() {
 			args = append(args, "--since-time="+t.Format(time.RFC3339))
 		}
@@ -209,6 +249,9 @@ func (c Config) Command() string {
 		return c.elevated(args)
 	case CollectorDocker:
 		args := []string{"docker", "logs"}
+		if c.Stamps() {
+			args = append(args, "--timestamps")
+		}
 		if t := c.Range.Since; !t.IsZero() {
 			args = append(args, "--since", t.Format(time.RFC3339))
 		}
@@ -250,7 +293,8 @@ func (c Config) elevated(args []string) string {
 // Shelling out to ssh(1) rather than dialing ourselves keeps ~/.ssh/config,
 // ProxyJump, the agent and known_hosts working without reimplementing them.
 func (c Config) Argv() []string {
-	if c.Collector.IsRemoteAPI() {
+	if c.Collector.IsRemoteAPI() || c.Collector == CollectorMerge {
+		// Neither runs a command: one is HTTP, the other is several streams.
 		return nil
 	}
 	cmd := c.Command()
@@ -281,6 +325,15 @@ func (c Config) Argv() []string {
 // Title is a short human-readable description of the stream.
 func (c Config) Title() string {
 	where := "local"
+	if c.Collector == CollectorMerge {
+		// A merge has no single where: each source carries its own, and the
+		// labels naming them are the whole of it.
+		title := c.Command()
+		if !c.Range.IsZero() {
+			title += " · " + c.Range.Label()
+		}
+		return title
+	}
 	if c.Collector.IsRemoteAPI() {
 		// The endpoint stands in for the host, and carries a token that must not
 		// reach the screen. The range is not in the query either, since it is

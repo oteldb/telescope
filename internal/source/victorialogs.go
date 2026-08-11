@@ -77,19 +77,23 @@ func (c Config) vlogsBackfill(ctx context.Context, client *http.Client, out func
 	if t := c.Range.Until; !t.IsZero() {
 		params.Set("end", t.Format(time.RFC3339Nano))
 	}
-	var lines [][]byte
+	var lines []Line
 	if err := c.vlogsRequest(ctx, client, vlogsQueryPath, params, func(entry []byte) bool {
-		if t, ok := vlogsTime(entry); ok && t.After(last) {
-			last = t
+		line := Line{Data: vlogsNormalize(entry)}
+		if t, ok := vlogsTime(entry); ok {
+			line.At = t
+			if t.After(last) {
+				last = t
+			}
 		}
-		lines = append(lines, vlogsNormalize(entry))
+		lines = append(lines, line)
 		return true
 	}); err != nil {
 		return last, err
 	}
 	slices.Reverse(lines)
 	for _, line := range lines {
-		if !out(Line{Data: line}) {
+		if !out(line) {
 			break
 		}
 	}
@@ -103,10 +107,14 @@ func (c Config) vlogsTail(ctx context.Context, client *http.Client, last time.Ti
 		"start_offset": {vlogsStartOffset.String()},
 	}
 	return c.vlogsRequest(ctx, client, vlogsTailPath, params, func(entry []byte) bool {
-		if t, ok := vlogsTime(entry); ok && !t.After(last) {
-			return true
+		line := Line{Data: vlogsNormalize(entry)}
+		if t, ok := vlogsTime(entry); ok {
+			if !t.After(last) {
+				return true
+			}
+			line.At = t
 		}
-		return out(Line{Data: vlogsNormalize(entry)})
+		return out(line)
 	})
 }
 

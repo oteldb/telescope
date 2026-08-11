@@ -23,6 +23,25 @@ type Line struct {
 	// band. Zero when the line is all there is, which is the usual case: a
 	// timestamp inside the line is the parser's business, not the source's.
 	At time.Time
+	// Source names which stream the line came from, for a merge. Empty when
+	// there is only one, since a label nobody can be confused with says nothing.
+	Source string
+}
+
+// options are the knobs [Start] takes.
+type options struct {
+	timeFunc func(Line) time.Time
+}
+
+// Option adjusts how a stream is opened.
+type Option func(*options)
+
+// WithTimeFunc says how to date a line whose source does not report a time out
+// of band, which is what a merge orders by. Extracting it means parsing the
+// line, and what a log line looks like is not this package's business, so the
+// caller that does the parsing brings it.
+func WithTimeFunc(f func(Line) time.Time) Option {
+	return func(o *options) { o.timeFunc = f }
 }
 
 // Stream is a running collector command.
@@ -35,14 +54,22 @@ type Stream struct {
 
 // Start opens the stream described by cfg, spawning a command or, for a
 // [Collector.IsRemoteAPI] collector, querying the endpoint over HTTP.
-func Start(ctx context.Context, cfg Config) (*Stream, error) {
+func Start(ctx context.Context, cfg Config, opts ...Option) (*Stream, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if cfg.Collector.IsRemoteAPI() {
-		return startAPI(ctx, cfg)
+	var opt options
+	for _, o := range opts {
+		o(&opt)
 	}
-	return startCommand(ctx, cfg)
+	switch {
+	case cfg.Collector == CollectorMerge:
+		return startMerge(ctx, cfg, opt)
+	case cfg.Collector.IsRemoteAPI():
+		return startAPI(ctx, cfg)
+	default:
+		return startCommand(ctx, cfg)
+	}
 }
 
 func startCommand(ctx context.Context, cfg Config) (*Stream, error) {
@@ -107,6 +134,21 @@ func (s *Stream) Done() <-chan error { return s.done }
 // Close terminates the command.
 func (s *Stream) Close() { s.cancel() }
 
+// unstamp takes off the RFC3339 timestamp docker and kubectl prefix their lines
+// with when asked to, so the time is carried beside the line rather than
+// rendered in front of it. A line without one is returned as it came.
+func unstamp(data []byte) ([]byte, time.Time) {
+	stamp, rest, ok := bytes.Cut(data, []byte(" "))
+	if !ok {
+		return data, time.Time{}
+	}
+	at, err := time.Parse(time.RFC3339Nano, string(stamp))
+	if err != nil {
+		return data, time.Time{}
+	}
+	return rest, at
+}
+
 func (s *Stream) scan(ctx context.Context, r io.Reader, isErr bool, wg *sync.WaitGroup) {
 	defer wg.Done()
 	sc := bufio.NewScanner(r)
@@ -116,6 +158,9 @@ func (s *Stream) scan(ctx context.Context, r io.Reader, isErr bool, wg *sync.Wai
 		// comes from the pty forced for ssh follow mode.
 		data := bytes.TrimSuffix(sc.Bytes(), []byte("\r"))
 		line := Line{Data: append([]byte(nil), data...), Stderr: isErr}
+		if s.cfg.Stamps() {
+			line.Data, line.At = unstamp(line.Data)
+		}
 		select {
 		case s.lines <- line:
 		case <-ctx.Done():
