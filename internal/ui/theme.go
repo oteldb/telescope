@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"go.uber.org/zap/zapcore"
 )
 
 // screenPad is the horizontal breathing room kept around every view.
@@ -83,6 +84,34 @@ var tagColors = []lipgloss.AdaptiveColor{
 // tagStyle is how the i-th source of a merge is marked.
 func tagStyle(i int) lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(tagColors[i%len(tagColors)])
+}
+
+// levelStyles colors a severity in the log list gutter.
+var levelStyles = map[zapcore.Level]lipgloss.Style{
+	zapcore.DebugLevel:  lipgloss.NewStyle().Foreground(colorMuted),
+	zapcore.InfoLevel:   lipgloss.NewStyle().Foreground(colorWhere),
+	zapcore.WarnLevel:   lipgloss.NewStyle().Foreground(colorWarn),
+	zapcore.ErrorLevel:  lipgloss.NewStyle().Foreground(colorErr),
+	zapcore.DPanicLevel: lipgloss.NewStyle().Foreground(colorErr).Bold(true),
+	zapcore.PanicLevel:  lipgloss.NewStyle().Foreground(colorErr).Bold(true),
+	zapcore.FatalLevel:  lipgloss.NewStyle().Foreground(colorErr).Bold(true),
+}
+
+// levelWidth is the gutter column a severity is rendered in, wide enough for
+// the longest word zap spells and no wider.
+const levelWidth = 5
+
+// renderLevel renders a severity for the gutter, padded to [levelWidth].
+func renderLevel(l zapcore.Level) string {
+	word := l.CapitalString()
+	if len(word) > levelWidth {
+		word = word[:levelWidth]
+	}
+	word += strings.Repeat(" ", levelWidth-len(word))
+	if style, ok := levelStyles[l]; ok {
+		return style.Render(word)
+	}
+	return styleDim.Render(word)
 }
 
 // stateStyles colors the lifecycle words collectors report. Only states that

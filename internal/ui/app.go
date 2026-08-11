@@ -87,7 +87,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case linesMsg:
 		for _, l := range msg.lines {
-			m.logs.store.Append(l)
+			m.logs.append(l)
 		}
 		m.logs.syncFollow()
 		if msg.closed {
@@ -101,7 +101,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case openEntryMsg:
-		m.entry = newEntry(msg.entry)
+		m.entry = newEntry(m.logs.cfg, msg.entry)
 		m.entry.resize(m.w, m.h)
 		m.state = stateEntry
 		return m, nil

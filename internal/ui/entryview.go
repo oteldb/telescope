@@ -12,15 +12,21 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/oteldb/telescope/internal/logs"
+	"github.com/oteldb/telescope/internal/source"
 )
 
 type entryModel struct {
-	w, h  int
+	w, h int
+	// cfg is the stream the entry was read from, which is what says where its
+	// lines come from.
+	cfg   source.Config
 	entry *logs.Entry
 	off   int
 }
 
-func newEntry(e *logs.Entry) entryModel { return entryModel{entry: e} }
+func newEntry(cfg source.Config, e *logs.Entry) entryModel {
+	return entryModel{cfg: cfg, entry: e}
+}
 
 func (m *entryModel) resize(w, h int) { m.w, m.h = w, h }
 
@@ -94,6 +100,13 @@ func (m entryModel) lines(width int) []string {
 	for _, f := range e.Record.Fields {
 		labels = append(labels, f.Key)
 	}
+	origin := m.cfg.SourceLabels(e.Source)
+	for _, l := range origin {
+		labels = append(labels, l.Key)
+	}
+	for _, l := range e.Labels {
+		labels = append(labels, l.Key)
+	}
 	indent := labelColumn(labels, width)
 
 	add := func(label, value string) {
@@ -111,20 +124,37 @@ func (m entryModel) lines(width int) []string {
 		styleDim.Render("  "+stream))
 	out = append(out, "")
 
-	if e.Record.HasTime() {
-		t := e.Record.Time.Local()
+	// A time the line was written with, whether it said so itself or the source
+	// said it for the line; failing both, when it turned up here.
+	if e.HasTime {
+		t := e.At.Local()
 		add("time", t.Format(time.RFC3339Nano)+styleDim.Render("  "+humanSince(t)))
 	} else {
 		add("received", e.At.Local().Format(time.RFC3339Nano))
 	}
 	// Which source a line came from, for a merge of several.
 	add("source", e.Source)
-	if e.Record.Structured {
+	if e.Record.HasLevel {
 		add("level", e.Record.Level.CapitalString())
 	}
 	add("trace", e.Record.TraceID)
 	add("span", e.Record.SpanID)
 	add("body", e.Record.Body)
+
+	// Where the whole stream comes from, then what this line brought with it.
+	// A log database says more about a line than the line does, and none of it
+	// fits in the list.
+	section := func(title string, labels []source.Label) {
+		if len(labels) == 0 {
+			return
+		}
+		out = append(out, "", styleTitle.Render(title))
+		for _, l := range labels {
+			out = append(out, wrapField(l.Key, l.Value, indent, width))
+		}
+	}
+	section("source", origin)
+	section("labels", e.Labels)
 
 	out = append(out, "")
 	out = append(out, styleTitle.Render("rendered"))

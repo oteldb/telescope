@@ -1574,3 +1574,77 @@ func TestMergedLinesSayWhereTheyCameFrom(t *testing.T) {
 	lg.hoff = 3
 	require.Contains(t, ansi.Strip(lg.View()), "worker ond", "which source is not scrolled away")
 }
+
+// TestGutterCarriesTimeAndLevel: a line from a log database is often a bare
+// sentence, and everything that makes it a log entry is beside it. Without the
+// columns the list is a wall of prose in arrival order.
+func TestGutterCarriesTimeAndLevel(t *testing.T) {
+	cfg := source.Config{Collector: source.CollectorLoki, Target: `{app="api"}`}
+	lg := newLogs(cfg, logs.NewStore(10), "")
+	lg.resize(100, 30)
+	at := time.Date(2026, 8, 11, 15, 16, 36, 357_000_000, time.Local)
+	lg.append(source.Line{
+		Data:   []byte("read_request_line: client closed socket"),
+		At:     at,
+		Labels: []source.Label{{Key: "detected_level", Value: "ERROR"}},
+	})
+
+	out := ansi.Strip(lg.View())
+	require.Contains(t, out, "15:16:36.357 ERROR read_request_line: client closed socket")
+
+	lg.hoff = 5
+	require.Contains(t, ansi.Strip(lg.View()), "15:16:36.357 ERROR request_line",
+		"when and how bad do not scroll away with the text")
+}
+
+// TestGutterKeepsStructuredLinesAligned: a structured line is rendered with its
+// own time and level, so the columns are left empty rather than doubled — but
+// they stay reserved, or the two kinds of line would not line up.
+func TestGutterKeepsStructuredLinesAligned(t *testing.T) {
+	lg := newLogs(source.Config{Collector: source.CollectorLoki, Target: "*"}, logs.NewStore(10), "")
+	lg.resize(120, 30)
+	at := time.Date(2026, 8, 11, 15, 16, 36, 0, time.Local)
+	lg.append(source.Line{Data: []byte("bare"), At: at, Labels: []source.Label{{Key: "level", Value: "WARN"}}})
+	lg.append(source.Line{Data: []byte(`{"level":"info","msg":"structured"}`), At: at})
+
+	rows := map[string]int{}
+	for line := range strings.SplitSeq(ansi.Strip(lg.View()), "\n") {
+		for _, word := range []string{"bare", "structured"} {
+			if strings.Contains(line, word) {
+				rows[word] = strings.Index(line, word)
+			}
+		}
+	}
+	require.NotZero(t, rows["bare"])
+	require.Equal(t, rows["bare"], rows["structured"], "both kinds start in the same column")
+}
+
+// TestEntryViewShowsLabels: everything the list has no room for lands here,
+// split into what the whole stream shares and what this line brought.
+func TestEntryViewShowsLabels(t *testing.T) {
+	cfg := source.Config{
+		Collector: source.CollectorLoki,
+		Endpoint:  source.Endpoint{Name: "homelab", URL: "https://logs.example.com"},
+		Target:    `{k8s_namespace_name="flux-system"}`,
+	}
+	e := logs.NewStore(10).Append(source.Line{
+		Data: []byte("artifact up-to-date with remote revision"),
+		At:   time.Now(),
+		Labels: []source.Label{
+			{Key: "k8s_container_name", Value: "manager"},
+			{Key: "k8s_pod_name", Value: "source-controller-7f56dddc9d"},
+		},
+	})
+
+	m := newEntry(cfg, e)
+	m.resize(100, 40)
+	out := ansi.Strip(m.View())
+
+	require.Contains(t, out, "source")
+	require.Contains(t, out, "endpoint")
+	require.Contains(t, out, "homelab")
+	require.Contains(t, out, `{k8s_namespace_name="flux-system"}`)
+	require.Contains(t, out, "labels")
+	require.Contains(t, out, "k8s_pod_name")
+	require.Contains(t, out, "source-controller-7f56dddc9d")
+}

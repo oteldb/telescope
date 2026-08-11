@@ -34,6 +34,8 @@ type logModel struct {
 	// tags is how each source of a merge is marked in the gutter, keyed by the
 	// label its lines carry. Empty when there is only one source.
 	tags map[string]string
+	// cols are the gutter columns this stream has turned out to need.
+	cols columns
 
 	search    textinput.Model
 	searching bool
@@ -59,6 +61,59 @@ func newLogs(cfg source.Config, store *logs.Store, query string) logModel {
 		status: "connecting",
 	}
 }
+
+// columns are the fields drawn to the left of a line, as opposed to inside it.
+//
+// A structured line is rendered with its own time and level by the formatter,
+// so the columns are only for lines that carry neither: what a log database
+// reports beside a bare message. They are turned on by the first line that
+// needs them and stay on, so the text does not shift left and right as lines of
+// both kinds arrive.
+type columns struct {
+	time  bool
+	level bool
+}
+
+// append stores a line and notes what rendering it will need.
+func (m *logModel) append(l source.Line) { m.observe(m.store.Append(l)) }
+
+// observe turns on the columns e needs.
+func (m *logModel) observe(e *logs.Entry) {
+	if e == nil || e.Record.Structured {
+		return
+	}
+	m.cols.time = m.cols.time || e.HasTime
+	m.cols.level = m.cols.level || e.Record.HasLevel
+}
+
+// gutter renders the columns of one entry, blank where it has nothing to say
+// and blank throughout for a structured line, which brings its own.
+func (m logModel) gutter(e *logs.Entry) string {
+	var b strings.Builder
+	if m.cols.time {
+		switch {
+		case e.HasTime && !e.Record.Structured:
+			b.WriteString(styleDim.Render(e.At.Local().Format(gutterTime)))
+		default:
+			b.WriteString(strings.Repeat(" ", len(gutterTime)))
+		}
+		b.WriteByte(' ')
+	}
+	if m.cols.level {
+		switch {
+		case e.Record.HasLevel && !e.Record.Structured:
+			b.WriteString(renderLevel(e.Record.Level))
+		default:
+			b.WriteString(strings.Repeat(" ", levelWidth))
+		}
+		b.WriteByte(' ')
+	}
+	return b.String()
+}
+
+// gutterTime is how the time column is written: the date is in the header, and
+// what a log list is read for is the order of things within a second.
+const gutterTime = "15:04:05.000"
 
 // mergeTags marks each source of a merge, padded to a single column so the
 // lines beside them line up whatever they came from.
@@ -227,7 +282,7 @@ func (m logModel) View() string {
 	inner := max(m.width()-2, 10)
 	body := make([]string, 0, height)
 	for i := top; i < len(entries) && i < top+height; i++ {
-		body = append(body, renderLine(entries[i], m.tags, i == m.cursor, m.hoff, inner))
+		body = append(body, renderLine(entries[i], m.tags[entries[i].Source], m.gutter(entries[i]), i == m.cursor, m.hoff, inner))
 	}
 	for len(body) < height {
 		body = append(body, "")
@@ -273,16 +328,19 @@ func (m logModel) filterBar() string {
 
 // renderLine renders one entry, ANSI colors intact, honoring the horizontal
 // offset and available width.
-func renderLine(e *logs.Entry, tags map[string]string, selected bool, hoff, width int) string {
+//
+// The tag and the gutter are drawn outside the horizontal offset: where a line
+// came from and when it was written are the last things that should scroll away
+// from it.
+func renderLine(e *logs.Entry, tag, gutter string, selected bool, hoff, width int) string {
 	marker := "  "
 	if selected {
 		marker = styleSelected.Render("▎ ")
 	}
-	if tag, ok := tags[e.Source]; ok {
-		// Outside the horizontal offset: which source a line came from is the
-		// one thing that must not scroll away from it.
+	if tag != "" {
 		marker += tag + " "
 	}
+	marker += gutter
 	text := e.Head
 	if e.Stderr {
 		text = styleErr.Render("!") + " " + text
@@ -294,7 +352,7 @@ func renderLine(e *logs.Entry, tags map[string]string, selected bool, hoff, widt
 	if hoff > 0 {
 		text = ansi.TruncateLeft(text, hoff, "")
 	}
-	return marker + ansi.Truncate(text, max(width-2, 1), styleDim.Render("→"))
+	return marker + ansi.Truncate(text, max(width-lipgloss.Width(marker), 1), styleDim.Render("→"))
 }
 
 func (m logModel) topBar(entries []*logs.Entry) string {
