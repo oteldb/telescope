@@ -213,7 +213,9 @@ func labelColumn(labels []string, width int) int {
 // A label too long for the column takes a line of its own rather than being
 // folded into a narrow ribbon beside its value: an OTEL resource attribute is
 // forty characters of prose, and reading it a syllable at a time is worse than
-// reading it whole.
+// reading it whole. One that fits keeps its value beside it even when the gap
+// comes to a single space — what makes the rows readable is that the values
+// line up, and a label a column short of the widest is not a long label.
 func wrapField(label, value string, indent, width int) string {
 	wrapped := ansi.Wrap(value, max(width-indent, minLabelColumn), "")
 	parts := strings.Split(wrapped, "\n")
@@ -221,7 +223,7 @@ func wrapField(label, value string, indent, width int) string {
 	b := &strings.Builder{}
 	pad := indent - lipgloss.Width(label)
 	b.WriteString(styleLabel.Render(label))
-	if pad < 2 {
+	if pad < 1 {
 		b.WriteString("\n")
 		b.WriteString(strings.Repeat(" ", indent))
 	} else {

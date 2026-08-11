@@ -1695,3 +1695,35 @@ func TestEntryViewRecognizesLabels(t *testing.T) {
 	require.Contains(t, out, trace, "the id is colored as one")
 	require.Contains(t, out, renderLevelWord(zapcore.DebugLevel), "and the level as a level")
 }
+
+// TestLongKeyKeepsItsValue: a key one column short of the widest is not a long
+// key, and pushing its value onto the next row breaks the alignment that makes
+// a list of attributes readable in the first place.
+func TestLongKeyKeepsItsValue(t *testing.T) {
+	e := logs.NewStore(10).Append(source.Line{
+		Data: []byte("Query Clickhouse"),
+		Labels: []source.Label{
+			// 27 columns, against a label column of 28.
+			{Key: "process_runtime_description", Value: "go version go1.26.5 linux/amd64"},
+			{Key: "process_runtime_name", Value: "go"},
+		},
+	})
+
+	m := newEntry(source.Config{Collector: source.CollectorLoki, Target: "*"}, e)
+	m.resize(150, 40)
+	out := ansi.Strip(m.View())
+
+	require.Contains(t, out, "process_runtime_description go version go1.26.5 linux/amd64")
+
+	var long, short int
+	for line := range strings.SplitSeq(out, "\n") {
+		switch {
+		case strings.Contains(line, "process_runtime_description"):
+			long = strings.Index(line, "go version")
+		case strings.Contains(line, "process_runtime_name"):
+			short = strings.LastIndex(line, "go")
+		}
+	}
+	require.NotZero(t, long)
+	require.Equal(t, short, long, "both values start in the shared column")
+}
