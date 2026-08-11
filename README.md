@@ -24,15 +24,19 @@ A source is a **collector** and where it reads from.
 | `command` | anything writing to stdout |
 | `victorialogs` | a [VictoriaLogs](https://docs.victoriametrics.com/victorialogs/) query, over HTTP |
 | `loki` | a [Loki](https://grafana.com/oss/loki/) query, over HTTP |
+| `merge` | several of the above, read as one stream |
 
 The first four run a command, on this machine unless you name an ssh host
 (`ctrl+o`, or `host:` in the config file) — then every one of them runs through
 `ssh(1)` instead. Naming a host is what asks for ssh: there is no step that
 makes you say "local" first.
 
-The last two run no command at all. They query a log database over HTTP, so the
-host, `sudo` and the kubeconfig mean nothing to them; what they need instead is
-an **endpoint** (`ctrl+e`). See [Endpoints](#endpoints).
+`victorialogs` and `loki` run no command at all. They query a log database over
+HTTP, so the host, `sudo` and the kubeconfig mean nothing to them; what they
+need instead is an **endpoint** (`ctrl+e`). See [Endpoints](#endpoints).
+
+`merge` reads no logs of its own: it is the others, shown as one stream. See
+[Merging](#merging).
 
 Targets use a compact syntax, the same in the prompt and in the config file:
 
@@ -50,6 +54,55 @@ A leading segment naming a resource kind is read as a kind, not a namespace,
 so `deploy/api` and `oteldb/deploy/api` both mean what they look like. Naming a
 workload rather than a pod survives a restart, at the cost of `kubectl` picking
 one of its pods.
+
+### Merging
+
+An incident rarely stays inside one source. A **merge** reads several at once
+and shows them as a single timeline, each line tagged in the gutter with where
+it came from:
+
+```
+  api     10:29:09.660  POST /orders 201
+  worker  10:29:09.662  job started id=91
+  api     10:29:09.671  GET /health 200
+```
+
+Pick sources on the start screen with `ctrl+a` and open them together, or
+declare the combination you reach for daily:
+
+```yaml
+sources:
+  - name: api
+    collector: docker
+    container: api
+  - name: worker
+    collector: docker
+    container: worker
+  - name: prod
+    merge: [api, worker]
+    range: 1h
+```
+
+Naming sources is what makes a source a merge, so its `collector` does not have
+to say so. The window, tail and follow belong to the merge — it is one view, and
+a view has one timeline — so a `range:` on a source it names is not used.
+
+Each source is already in order by itself, so ordering the whole is a merge over
+their heads: the oldest pending line is the next one out. Sources that report a
+time out of band are ordered by it, and merged `docker` and `kubectl` are asked
+for the timestamps they otherwise leave out; for the rest it is the time inside
+the line, and for a line with no time at all, the one before it from the same
+source. `journalctl` is read with `-o cat`, which is the message and nothing
+else, so a merged journal is ordered by when its lines arrive.
+
+A source that goes quiet is not waited on beyond 250 ms — one idle service must
+not hold the view back — so a line arriving after that lands where it arrives
+rather than where its timestamp belongs. A source that fails to open is reported
+in place of its lines: a merge of four environments is not as available as its
+worst one.
+
+A merge cannot stop to ask, so every source it names has to open as it stands.
+It reads sources, not other merges.
 
 ### Time range
 
@@ -89,6 +142,7 @@ whatever was typed — bound it in the command itself.
 | `shift+tab` | previous collector |
 | `enter` | accept the highlighted suggestion, else go to the next step |
 | `esc` | drop the highlight, leave the editor, go back a step, then quit |
+| `ctrl+a` | pick a saved source to merge; opening more than one reads them together |
 | `ctrl+r` | re-run the current listing, ignoring the cache |
 | `ctrl+s` | toggle `sudo -n` |
 | `ctrl+k` | edit the kubeconfig path (kubectl) |
@@ -221,7 +275,8 @@ marks those with what they will ask for.
 | field | default | |
 | --- | --- | --- |
 | `name` | required | shown in the picker |
-| `collector` | required | `journalctl`, `kubectl`, `docker`, `command`, `victorialogs`, `loki`; taken from the endpoint when one is named |
+| `collector` | required | `journalctl`, `kubectl`, `docker`, `command`, `victorialogs`, `loki`, `merge`; taken from the endpoint when one is named, or from `merge` |
+| `merge` | | other declared sources, read as one stream; see [Merging](#merging) |
 | `endpoint` | | a declared endpoint, required by `victorialogs` |
 | `host` | | ssh destination; unset reads this machine |
 | `transport` | `local` | `local` or `ssh`; naming a `host` is enough |
