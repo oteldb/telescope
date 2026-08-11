@@ -26,6 +26,7 @@ var collectorNames = []string{
 	string(source.CollectorCommand),
 	string(source.CollectorVictoriaLogs),
 	string(source.CollectorLoki),
+	string(source.CollectorMerge),
 }
 
 // Defaults applied to a declared source that does not say otherwise.
@@ -41,6 +42,13 @@ type Source struct {
 	Transport string `yaml:"transport,omitempty"`
 	Host      string `yaml:"host,omitempty"`
 	Collector string `yaml:"collector"`
+
+	// Merge names the other declared sources this one reads as a single
+	// stream. Naming any is what makes the source a merge, so its collector
+	// does not have to say so.
+	Merge []string `yaml:"merge,omitempty"`
+	// Merged is what Merge names, filled in by [Load].
+	Merged []source.Config `yaml:"-"`
 
 	// Endpoint names one of the declared endpoints, for a collector that reads
 	// from a log database rather than a host.
@@ -132,6 +140,9 @@ func loadFrom(path string) (Config, error) {
 	if err := c.resolveEndpoints(); err != nil {
 		return Config{}, err
 	}
+	if err := c.resolveMerges(); err != nil {
+		return Config{}, err
+	}
 	for i, s := range c.Sources {
 		if err := s.Validate(); err != nil {
 			// Named rather than numbered wherever possible: counting entries in
@@ -176,6 +187,50 @@ func (c *Config) resolveEndpoints() error {
 	return nil
 }
 
+// resolveMerges attaches to each merge the sources it names. They are resolved
+// here rather than when the merge is opened so that naming a source that was
+// never declared, or one that cannot open on its own, is reported as what it
+// is: a mistake in the file.
+func (c *Config) resolveMerges() error {
+	byName := make(map[string]int, len(c.Sources))
+	for i, s := range c.Sources {
+		if s.Name == "" {
+			continue
+		}
+		if _, ok := byName[s.Name]; ok {
+			return errors.Errorf("source %q is declared twice", s.Name)
+		}
+		byName[s.Name] = i
+	}
+	for i, s := range c.Sources {
+		for _, name := range s.Merge {
+			j, ok := byName[name]
+			if !ok {
+				return errors.Errorf("source %q merges undeclared source %q", s.Name, name)
+			}
+			if j == i || len(c.Sources[j].Merge) > 0 {
+				return errors.Errorf("source %q merges %q, which is itself a merge", s.Name, name)
+			}
+			cfg, ready, err := c.Sources[j].Stream()
+			switch {
+			case err != nil && c.Sources[j].resolveErr != nil:
+				// Whether a token can be read is environment, not declaration.
+				// The merge carries the reason and reports it when opened.
+				c.Sources[i].resolveErr = errors.Wrapf(err, "merged %q", name)
+			case err != nil:
+				return errors.Wrapf(err, "source %q merges %q", s.Name, name)
+			case !ready:
+				// A merge cannot stop to ask: every source it names has to be
+				// openable as it stands.
+				return errors.Errorf("source %q merges %q, which does not say enough to open", s.Name, name)
+			}
+			cfg.Name = name
+			c.Sources[i].Merged = append(c.Sources[i].Merged, cfg)
+		}
+	}
+	return nil
+}
+
 // Validate reports whether the declared source is usable. A source that names
 // a cluster but no pod is valid: it pre-fills the prompt rather than opening
 // straight away.
@@ -197,6 +252,7 @@ func (s Source) Validate() error {
 // source that pins a host and a kubeconfig but leaves the pod open behaves.
 func (s Source) Stream() (cfg source.Config, ready bool, err error) {
 	cfg = source.Config{
+		Name:        s.Name,
 		Transport:   source.Transport(or(s.Transport, string(source.TransportLocal))),
 		Host:        s.Host,
 		Collector:   source.Collector(s.Collector),
@@ -209,6 +265,7 @@ func (s Source) Stream() (cfg source.Config, ready bool, err error) {
 		KubeConfig:  s.KubeConfig,
 		KubeContext: s.Context,
 		Endpoint:    s.Resolved,
+		Merge:       s.Merged,
 		Elevate:     s.Sudo,
 		Tail:        defaultTail,
 		Follow:      defaultFollow,
@@ -228,14 +285,19 @@ func (s Source) Stream() (cfg source.Config, ready bool, err error) {
 	default:
 		return source.Config{}, false, errors.Errorf("unknown transport %q", s.Transport)
 	}
-	// An endpoint says which API it speaks, so a source naming one does not
-	// have to repeat it.
-	if s.Collector == "" && s.Endpoint != "" {
+	// An endpoint says which API it speaks, and merging sources is what a merge
+	// is, so a source doing either does not have to repeat it.
+	switch {
+	case s.Collector != "":
+	case len(s.Merge) > 0:
+		cfg.Collector = source.CollectorMerge
+	case s.Endpoint != "":
 		cfg.Collector = s.Resolved.Collector
 	}
 	switch cfg.Collector {
 	case source.CollectorJournal, source.CollectorKubectl, source.CollectorDocker,
-		source.CollectorCommand, source.CollectorVictoriaLogs, source.CollectorLoki:
+		source.CollectorCommand, source.CollectorVictoriaLogs, source.CollectorLoki,
+		source.CollectorMerge:
 	case "":
 		return source.Config{}, false, errors.Errorf(
 			"collector is required: one of %s — or name an endpoint, which says which it is",
@@ -243,6 +305,9 @@ func (s Source) Stream() (cfg source.Config, ready bool, err error) {
 	default:
 		return source.Config{}, false, errors.Errorf(
 			"unknown collector %q: want one of %s", s.Collector, strings.Join(collectorNames, ", "))
+	}
+	if cfg.Collector == source.CollectorMerge && s.resolveErr != nil {
+		return cfg, false, s.resolveErr
 	}
 	if cfg.Collector.IsRemoteAPI() {
 		if s.Endpoint == "" {
@@ -270,6 +335,14 @@ func (s Source) Stream() (cfg source.Config, ready bool, err error) {
 		if ns, target, container := source.ParseKubeTarget(cfg.Target); ns != "" || container != "" {
 			cfg.Namespace, cfg.Target, cfg.Container = ns, target, container
 		}
+	}
+	if cfg.Collector == source.CollectorMerge {
+		// Everything else can be filled in at the prompt; a merge cannot, since
+		// the prompt reads one thing at a time.
+		if err := cfg.Validate(); err != nil {
+			return cfg, false, err
+		}
+		return cfg, true, nil
 	}
 	// Anything still missing is something the prompt can ask for.
 	return cfg, cfg.Validate() == nil, nil
