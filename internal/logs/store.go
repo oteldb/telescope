@@ -22,8 +22,20 @@ type Entry struct {
 	Head   string
 	Extra  int
 	Stderr bool
+	// Source names which stream the line came from, for a merge of several.
+	Source string
 	At     time.Time // Record time, falling back to arrival time
 	Record Record
+}
+
+// LineTime is when a line was written, as far as anything here can tell: what
+// the source reported, else what the line itself says. It is what a merge of
+// several sources orders by.
+func LineTime(l source.Line) time.Time {
+	if !l.At.IsZero() {
+		return l.At
+	}
+	return Parse(l.Data).Time
 }
 
 // Store keeps the received lines, capped at a maximum, and renders them once
@@ -74,6 +86,7 @@ func (s *Store) Append(l source.Line) *Entry {
 		Head:   head,
 		Extra:  extra,
 		Stderr: l.Stderr,
+		Source: l.Source,
 		At:     rec.Time,
 		Record: rec,
 	}

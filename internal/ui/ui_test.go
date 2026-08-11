@@ -17,6 +17,7 @@ import (
 
 	"github.com/oteldb/telescope/internal/complete"
 	"github.com/oteldb/telescope/internal/config"
+	"github.com/oteldb/telescope/internal/logs"
 	"github.com/oteldb/telescope/internal/source"
 )
 
@@ -1502,4 +1503,74 @@ func TestEntryViewAlignsOnItsOwnKeys(t *testing.T) {
 		alone = alone || strings.Trim(line, "│ ") == key
 	}
 	require.True(t, alone, "and one that does not takes the line alone, its value under it")
+}
+
+// TestPickSourcesToMerge: several saved sources marked with ctrl+a open as one
+// stream, tagged with where each line came from.
+func TestPickSourcesToMerge(t *testing.T) {
+	withSaved(t, []config.Source{
+		{Name: "api", Collector: "docker", Container: "api"},
+		{Name: "worker", Collector: "docker", Container: "worker"},
+	}, config.History{})
+
+	m := send(t, New(), size())
+	// The first down enters the list, which is already on the first source.
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlA}, k("down"), k("down"), tea.KeyMsg{Type: tea.KeyCtrlA})
+	out := screen(t, m)
+	require.Contains(t, out, "✓api", "what is picked says so")
+	require.Contains(t, out, "✓worker")
+	require.Contains(t, out, "enter open 2 merged")
+
+	m = send(t, m, k("enter"))
+	cfg := m.(Model).logs.cfg
+	require.Equal(t, source.CollectorMerge, cfg.Collector)
+	require.Equal(t, []string{"api", "worker"}, cfg.Labels())
+	require.Contains(t, screen(t, m), "merge api + worker")
+}
+
+// TestPickOneOpensItAlone: marking a single source is not a merge of one.
+func TestPickOneOpensItAlone(t *testing.T) {
+	withSaved(t, []config.Source{
+		{Name: "api", Collector: "docker", Container: "api"},
+		{Name: "worker", Collector: "docker", Container: "worker"},
+	}, config.History{})
+
+	m := send(t, New(), size())
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlA}, k("enter"))
+	require.Equal(t, source.CollectorDocker, m.(Model).logs.cfg.Collector)
+	require.Equal(t, "api", m.(Model).logs.cfg.Container)
+}
+
+// TestPickRefusesWhatWouldHaveToAsk: a merge reads everything at once, so a
+// source that still needs a pod cannot be part of one.
+func TestPickRefusesWhatWouldHaveToAsk(t *testing.T) {
+	withSaved(t, []config.Source{
+		{Name: "pods", Collector: "kubectl"},
+		{Name: "api", Collector: "docker", Container: "api"},
+	}, config.History{})
+
+	m := send(t, New(), size())
+	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlA})
+	require.Empty(t, m.(Model).start.picked)
+	require.Contains(t, screen(t, m), "does not say enough to open on its own")
+}
+
+// TestMergedLinesSayWhereTheyCameFrom: a merged view is only readable if each
+// line names its source, and the tag stays put when the view scrolls sideways.
+func TestMergedLinesSayWhereTheyCameFrom(t *testing.T) {
+	cfg := source.Config{Collector: source.CollectorMerge, Merge: []source.Config{
+		{Name: "api", Collector: source.CollectorDocker, Container: "api"},
+		{Name: "worker", Collector: source.CollectorDocker, Container: "worker"},
+	}}
+	lg := newLogs(cfg, logs.NewStore(10), "")
+	lg.resize(100, 30)
+	lg.store.Append(source.Line{Data: []byte("first"), Source: "api"})
+	lg.store.Append(source.Line{Data: []byte("second"), Source: "worker"})
+
+	out := ansi.Strip(lg.View())
+	require.Contains(t, out, "api    first", "the tags are one column, whatever their length")
+	require.Contains(t, out, "worker second")
+
+	lg.hoff = 3
+	require.Contains(t, ansi.Strip(lg.View()), "worker ond", "which source is not scrolled away")
 }

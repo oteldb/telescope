@@ -181,7 +181,7 @@ func (c Config) Validate() error {
 func (c Config) Command() string {
 	switch c.Collector {
 	case CollectorMerge:
-		return "merge " + strings.Join(mergeLabels(c.Children()), " + ")
+		return "merge " + strings.Join(c.Labels(), " + ")
 	case CollectorVictoriaLogs:
 		return "logsql " + Quote(c.vlogsQuery())
 	case CollectorLoki:

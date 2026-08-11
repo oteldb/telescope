@@ -90,7 +90,7 @@ func (m entryModel) lines(width int) []string {
 
 	// The header labels are fixed; the fields bring their own, and the widest
 	// of all of them is what everything lines up on.
-	labels := []string{"received", "level", "trace", "span", "body"}
+	labels := []string{"received", "source", "level", "trace", "span", "body"}
 	for _, f := range e.Record.Fields {
 		labels = append(labels, f.Key)
 	}
@@ -117,6 +117,8 @@ func (m entryModel) lines(width int) []string {
 	} else {
 		add("received", e.At.Local().Format(time.RFC3339Nano))
 	}
+	// Which source a line came from, for a merge of several.
+	add("source", e.Source)
 	if e.Record.Structured {
 		add("level", e.Record.Level.CapitalString())
 	}

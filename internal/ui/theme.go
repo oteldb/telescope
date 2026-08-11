@@ -69,6 +69,22 @@ var (
 	styleLabel    = lipgloss.NewStyle().Foreground(colorMuted)
 )
 
+// tagColors tell the sources of a merge apart. Which color a source gets is
+// only its position, so a stream keeps the same one for as long as it is open.
+var tagColors = []lipgloss.AdaptiveColor{
+	{Light: "#0969da", Dark: "#38bdf8"},
+	{Light: "#1a7f37", Dark: "#4ade80"},
+	{Light: "#9a6700", Dark: "#fbbf24"},
+	{Light: "#bf3989", Dark: "#f472b6"},
+	{Light: "#8250df", Dark: "#a78bfa"},
+	{Light: "#0e7490", Dark: "#22d3ee"},
+}
+
+// tagStyle is how the i-th source of a merge is marked.
+func tagStyle(i int) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(tagColors[i%len(tagColors)])
+}
+
 // stateStyles colors the lifecycle words collectors report. Only states that
 // mean something is wrong, or is on its way somewhere, are colored; the
 // resting states stay dim so a list of mostly-stopped units is not a wall of

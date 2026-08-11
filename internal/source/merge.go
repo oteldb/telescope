@@ -82,6 +82,10 @@ func mergeLabels(children []Config) []string {
 	return out
 }
 
+// Labels names each merged source, in the order they were given, which is what
+// this stream's lines are tagged with.
+func (c Config) Labels() []string { return mergeLabels(c.Children()) }
+
 // mergeItem carries one line, or the end of one source, to the merge loop.
 type mergeItem struct {
 	idx  int
@@ -104,7 +108,7 @@ func startMerge(ctx context.Context, cfg Config, opt options) (*Stream, error) {
 	}
 
 	children := cfg.Children()
-	labels := mergeLabels(children)
+	labels := cfg.Labels()
 
 	items := make(chan mergeItem)
 

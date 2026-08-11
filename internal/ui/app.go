@@ -182,7 +182,9 @@ func saveHistory(h config.History) tea.Cmd {
 
 func startStream(cfg source.Config) tea.Cmd {
 	return func() tea.Msg {
-		s, err := source.Start(context.Background(), cfg)
+		// A merge orders lines by time, and for a source that does not report
+		// one, the time is inside the line: reading it is the parser's job.
+		s, err := source.Start(context.Background(), cfg, source.WithTimeFunc(logs.LineTime))
 		if err != nil {
 			return streamErrMsg{err: err}
 		}

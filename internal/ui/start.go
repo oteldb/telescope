@@ -3,6 +3,7 @@ package ui
 import (
 	"cmp"
 	"context"
+	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/go-faster/errors"
 
 	"github.com/oteldb/telescope/internal/complete"
 	"github.com/oteldb/telescope/internal/config"
@@ -150,7 +152,10 @@ type startModel struct {
 	// savedIdx maps each filtered suggestion back to its source, since two
 	// sources may share a name and filtering reorders them.
 	savedIdx []int
-	history  config.History
+	// picked are the saved sources marked to be read together, by their index
+	// in saved. Opening more than one merges them.
+	picked  map[int]bool
+	history config.History
 
 	// endpoints are the log APIs declared in the config file, offered on the
 	// start screen and in the endpoint prompt.
@@ -190,6 +195,7 @@ func newStart() startModel {
 		tail:        1000,
 		follow:      true,
 		sel:         -1,
+		picked:      map[int]bool{},
 		cache:       map[string]cacheEntry{},
 		inflight:    map[string]bool{},
 	}
@@ -229,7 +235,7 @@ var (
 // it opens the prompt rather than the logs.
 func (m startModel) savedCandidates() []complete.Candidate {
 	out := make([]complete.Candidate, 0, len(m.saved)+len(m.endpoints))
-	for _, s := range m.saved {
+	for i, s := range m.saved {
 		cfg, ready, err := s.Stream()
 		if err != nil {
 			out = append(out, complete.Candidate{Value: s.Name, State: "invalid", Detail: err.Error()})
@@ -246,15 +252,80 @@ func (m startModel) savedCandidates() []complete.Candidate {
 		if !ready {
 			detail += " · " + missingLabel(cfg.Collector)
 		}
-		out = append(out, complete.Candidate{Value: s.Name, Detail: detail})
+		out = append(out, complete.Candidate{Value: m.mark(i) + s.Name, Detail: detail})
 	}
 	for _, e := range m.endpoints {
 		out = append(out, complete.Candidate{
-			Value:  e.Name,
+			Value:  " " + e.Name,
 			Detail: string(e.Collector) + " · " + endpointWhere(e) + " · " + missingLabel(e.Collector),
 		})
 	}
 	return out
+}
+
+// mark shows whether a saved source is picked to be read with others. The
+// column is there either way, so marking one does not shift the whole list.
+func (m startModel) mark(i int) string {
+	if m.picked[i] {
+		return "✓"
+	}
+	return " "
+}
+
+// pick marks a saved source to be read alongside the others picked, or unmarks
+// it. Only a source that opens as it stands can be picked: a merge reads
+// everything at once and cannot stop to ask for a pod.
+func (m startModel) pick(i int) (startModel, tea.Cmd) {
+	if i < 0 || i >= len(m.saved) {
+		return m.refuse("an endpoint has no query yet — open it and write one")
+	}
+	if m.picked[i] {
+		delete(m.picked, i)
+	} else {
+		_, ready, err := m.saved[i].Stream()
+		switch {
+		case err != nil:
+			return m.refuse(err.Error())
+		case !ready:
+			return m.refuse(m.saved[i].Name + " does not say enough to open on its own")
+		}
+		m.picked[i] = true
+	}
+	m.err = nil
+	m.candidates = m.savedCandidates()
+	m.refilter()
+	return m, nil
+}
+
+// refuse reports why something could not be picked, leaving the list as it was.
+func (m startModel) refuse(msg string) (startModel, tea.Cmd) {
+	m.err = errors.New(msg)
+	return m, nil
+}
+
+// openPicked reads every picked source as one stream. The window, tail and
+// follow are the merge's own: it is a single view, and a view has one timeline.
+func (m startModel) openPicked() (startModel, tea.Cmd) {
+	merge := make([]source.Config, 0, len(m.picked))
+	for _, i := range slices.Sorted(maps.Keys(m.picked)) {
+		cfg, _, err := m.saved[i].Stream()
+		if err != nil {
+			return m.refuse(err.Error())
+		}
+		cfg.Name = m.saved[i].Name
+		merge = append(merge, cfg)
+	}
+	cfg := source.Config{
+		Collector: source.CollectorMerge,
+		Merge:     merge,
+		Range:     m.timeRange(),
+		Tail:      m.tail,
+		Follow:    m.follow,
+	}
+	if err := cfg.Validate(); err != nil {
+		return m.refuse(err.Error())
+	}
+	return m, func() tea.Msg { return connectMsg{cfg: cfg} }
 }
 
 // endpointWhere names where an endpoint points, short enough for a list. A
@@ -934,6 +1005,12 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 			if n := m.choices(); n > 0 && (msg.String() == "shift+tab" || !m.active()) {
 				return m, m.cycle(-1)
 			}
+		case "ctrl+a":
+			// Only on the saved list, where the filter is a name and its own
+			// ctrl+a is not worth the key.
+			if m.step == stepSaved && len(m.filtered) > 0 {
+				return m.pick(m.savedIdx[max(m.sel, 0)])
+			}
 		case "ctrl+r":
 			return m, m.refresh()
 		case "ctrl+s":
@@ -980,6 +1057,9 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 			return m, nil
 		case "enter":
 			if m.step == stepSaved {
+				if len(m.picked) > 1 {
+					return m.openPicked()
+				}
 				if len(m.filtered) == 0 {
 					return m, nil
 				}
@@ -1276,9 +1356,14 @@ func (m startModel) chips() string {
 
 func (m startModel) help() string {
 	if m.step == stepSaved {
+		open := "open"
+		if len(m.picked) > 1 {
+			open = "open " + strconv.Itoa(len(m.picked)) + " merged"
+		}
 		return strings.Join([]string{
-			key("↑↓", "pick"),
-			key("enter", "open"),
+			key("↑↓", "move"),
+			key("enter", open),
+			key("ctrl+a", "add to merge"),
 			key("tab", "new source"),
 			key("esc", "quit"),
 		}, styleHint.Render(" · "))

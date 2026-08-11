@@ -31,6 +31,10 @@ type logModel struct {
 	hoff   int
 	follow bool
 
+	// tags is how each source of a merge is marked in the gutter, keyed by the
+	// label its lines carry. Empty when there is only one source.
+	tags map[string]string
+
 	search    textinput.Model
 	searching bool
 
@@ -47,12 +51,31 @@ func newLogs(cfg source.Config, store *logs.Store, query string) logModel {
 
 	return logModel{
 		cfg:    cfg,
+		tags:   mergeTags(cfg),
 		store:  store,
 		view:   logs.NewView(logs.Filter{Query: query}),
 		follow: true,
 		search: ti,
 		status: "connecting",
 	}
+}
+
+// mergeTags marks each source of a merge, padded to a single column so the
+// lines beside them line up whatever they came from.
+func mergeTags(cfg source.Config) map[string]string {
+	if cfg.Collector != source.CollectorMerge {
+		return nil
+	}
+	labels := cfg.Labels()
+	width := 0
+	for _, l := range labels {
+		width = max(width, lipgloss.Width(l))
+	}
+	out := make(map[string]string, len(labels))
+	for i, l := range labels {
+		out[l] = tagStyle(i).Render(l + strings.Repeat(" ", width-lipgloss.Width(l)))
+	}
+	return out
 }
 
 func (m *logModel) resize(w, h int) { m.w, m.h = w, h }
@@ -204,7 +227,7 @@ func (m logModel) View() string {
 	inner := max(m.width()-2, 10)
 	body := make([]string, 0, height)
 	for i := top; i < len(entries) && i < top+height; i++ {
-		body = append(body, renderLine(entries[i], i == m.cursor, m.hoff, inner))
+		body = append(body, renderLine(entries[i], m.tags, i == m.cursor, m.hoff, inner))
 	}
 	for len(body) < height {
 		body = append(body, "")
@@ -221,11 +244,20 @@ func (m logModel) View() string {
 // filterBar shows where the stream comes from and what it reads as colored
 // chips, followed by the grep filter.
 func (m logModel) filterBar() string {
-	where := "local"
-	if m.cfg.Transport == source.TransportSSH {
-		where = strings.TrimSpace(m.cfg.Host)
+	var chips string
+	if m.cfg.Collector == source.CollectorMerge {
+		// The sources are the legend for the tags down the gutter, so they are
+		// colored to match rather than by what they are.
+		for i, l := range m.cfg.Labels() {
+			chips += tagStyle(i).Render(" " + l + " ")
+		}
+	} else {
+		where := "local"
+		if m.cfg.Transport == source.TransportSSH {
+			where = strings.TrimSpace(m.cfg.Host)
+		}
+		chips = styleChipWhere.Render(where) + styleChipActive.Render(string(m.cfg.Collector))
 	}
-	chips := styleChipWhere.Render(where) + styleChipActive.Render(string(m.cfg.Collector))
 
 	var input string
 	switch {
@@ -241,10 +273,15 @@ func (m logModel) filterBar() string {
 
 // renderLine renders one entry, ANSI colors intact, honoring the horizontal
 // offset and available width.
-func renderLine(e *logs.Entry, selected bool, hoff, width int) string {
+func renderLine(e *logs.Entry, tags map[string]string, selected bool, hoff, width int) string {
 	marker := "  "
 	if selected {
 		marker = styleSelected.Render("▎ ")
+	}
+	if tag, ok := tags[e.Source]; ok {
+		// Outside the horizontal offset: which source a line came from is the
+		// one thing that must not scroll away from it.
+		marker += tag + " "
 	}
 	text := e.Head
 	if e.Stderr {
