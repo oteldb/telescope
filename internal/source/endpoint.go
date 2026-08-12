@@ -162,19 +162,37 @@ func (e Endpoint) ProxyError() error {
 // maxErrorBody bounds how much of a failed response is quoted back.
 const maxErrorBody = 4 * 1024
 
-// checkResponse turns a non-2xx response into an error carrying what the server
-// said. A proxy in front of the database answers in its own format, so the body
-// is quoted rather than parsed.
+// apiError is what a log API refused with. The code is kept beside the text
+// because the two mean different things to a caller: a 400 is a query this
+// server will not read, which is worth asking differently, and anything else is
+// a question it could not answer at all.
+type apiError struct {
+	Code   int
+	Status string
+	// Text is the body the server sent, collapsed onto one line and bounded by
+	// [maxErrorBody]. It is quoted rather than parsed, since a proxy in front of
+	// the database answers in its own format.
+	Text string
+}
+
+func (e *apiError) Error() string {
+	if e.Text == "" {
+		return e.Status
+	}
+	return e.Status + ": " + e.Text
+}
+
+// checkResponse turns a non-2xx response into an [apiError].
 func checkResponse(resp *http.Response) error {
 	if resp.StatusCode/100 == 2 {
 		return nil
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-	msg := strings.TrimSpace(string(body))
-	if msg == "" {
-		return errors.New(resp.Status)
+	return &apiError{
+		Code:   resp.StatusCode,
+		Status: resp.Status,
+		Text:   oneLine(strings.TrimSpace(string(body))),
 	}
-	return errors.Errorf("%s: %s", resp.Status, oneLine(msg))
 }
 
 // oneLine collapses a multi-line error body so it fits the status bar.

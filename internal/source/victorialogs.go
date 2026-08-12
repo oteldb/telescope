@@ -35,38 +35,66 @@ const vlogsStartOffset = 30 * time.Second
 // have not written yet.
 const vlogsMatchAll = "*"
 
-// vlogsQuery is the LogsQL to run, which is the target as typed. Nothing typed
-// is a tail of the whole database, the way running a collector with no unit or
-// container named is.
 // vlogsQuery is what is sent: the query the place names, narrowed by as much of
-// the view's filter as LogsQL can be asked. What it cannot be asked the view
-// still applies to every line that comes back, so this only ever saves work.
+// the view's filter as LogsQL can be asked. Nothing typed is a tail of the whole
+// database, the way running a collector with no unit or container named is. What
+// LogsQL cannot be asked the view still applies to every line that comes back,
+// so this only ever saves work.
+//
+// An endpoint that has already refused a compiled filter is asked for the place
+// alone; see [Config.retryUnpushed].
 func (c Config) vlogsQuery() string {
-	selector := strings.TrimSpace(c.Target)
+	selector := c.vlogsSelector()
 	pushed, ok := query.LogsQL(c.Filter)
 	switch {
-	case selector == "" && !ok:
-		return vlogsMatchAll
-	case selector == "":
-		return pushed
-	case !ok:
+	case !ok || refusesPushdown(c.Endpoint):
 		return selector
+	case selector == vlogsMatchAll:
+		return pushed
 	default:
 		return "(" + selector + ") " + pushed
 	}
 }
 
+// vlogsSelector is the place with no filter on it, which is what is left to ask
+// when the filter turns out to be unaskable.
+func (c Config) vlogsSelector() string {
+	if selector := strings.TrimSpace(c.Target); selector != "" {
+		return selector
+	}
+	return vlogsMatchAll
+}
+
 // streamVictoriaLogs reads the backfill, then follows.
+//
+// Both halves ask the same query, and a server that will not read it is asked
+// for the place alone instead. Neither half can have emitted a line by then: the
+// backfill collects before it emits, and a tail that is refused is refused
+// before its first line.
 func (c Config) streamVictoriaLogs(ctx context.Context, out func(Line) bool) error {
 	client := httpClient(c.Endpoint)
-	last, err := c.vlogsBackfill(ctx, client, out)
+	q, plain := c.vlogsQuery(), c.vlogsSelector()
+
+	last, err := c.vlogsBackfill(ctx, client, q, out)
 	if err != nil {
-		return err
+		if q, err = c.retryUnpushed(q, plain, err); err != nil {
+			return err
+		}
+		if last, err = c.vlogsBackfill(ctx, client, q, out); err != nil {
+			return err
+		}
 	}
 	if !c.following() {
 		return nil
 	}
-	return c.vlogsTail(ctx, client, last, out)
+	if err := c.vlogsTail(ctx, client, q, last, out); err != nil {
+		q, rerr := c.retryUnpushed(q, plain, err)
+		if rerr != nil {
+			return rerr
+		}
+		return c.vlogsTail(ctx, client, q, last, out)
+	}
+	return nil
 }
 
 // vlogsBackfill emits the last Tail entries and returns the newest timestamp it
@@ -74,12 +102,12 @@ func (c Config) streamVictoriaLogs(ctx context.Context, out func(Line) bool) err
 //
 // The query endpoint answers newest first when a limit is given, so the entries
 // are collected before being emitted rather than streamed.
-func (c Config) vlogsBackfill(ctx context.Context, client *http.Client, out func(Line) bool) (last time.Time, err error) {
+func (c Config) vlogsBackfill(ctx context.Context, client *http.Client, q string, out func(Line) bool) (last time.Time, err error) {
 	if c.Tail <= 0 {
 		return time.Time{}, nil
 	}
 	params := url.Values{
-		"query": {c.vlogsQuery()},
+		"query": {q},
 		"limit": {strconv.Itoa(c.Tail)},
 	}
 	// A range narrows the query itself, so the limit applies within the window
@@ -114,9 +142,9 @@ func (c Config) vlogsBackfill(ctx context.Context, client *http.Client, out func
 }
 
 // vlogsTail follows the query, dropping what the backfill already showed.
-func (c Config) vlogsTail(ctx context.Context, client *http.Client, last time.Time, out func(Line) bool) error {
+func (c Config) vlogsTail(ctx context.Context, client *http.Client, q string, last time.Time, out func(Line) bool) error {
 	params := url.Values{
-		"query":        {c.vlogsQuery()},
+		"query":        {q},
 		"start_offset": {vlogsStartOffset.String()},
 	}
 	return c.vlogsRequest(ctx, client, vlogsTailPath, params, func(entry []byte) bool {
