@@ -2026,3 +2026,21 @@ func TestBandsAndCursorReachTheList(t *testing.T) {
 	require.Equal(t, painted("first"), painted("third"), "every other second is washed")
 	require.NotEqual(t, painted("first"), painted("second"), "and the one between is not")
 }
+
+// TestBouncingOffValidationKeepsTheListing pins the listing to the step it
+// belongs to. Walking on from a kubectl source that names no pod fails at the
+// query, which lands back on the collector — where the pods have to be.
+func TestBouncingOffValidationKeepsTheListing(t *testing.T) {
+	m := send(t, New(), size(), k("tab")) // kubectl
+	m = send(t, m, candidates(m, "api-0", "api-1"))
+	require.Contains(t, screen(t, m), "api-0")
+
+	// Nothing picked: enter walks on to the query, and enter there cannot
+	// connect a source that names no pod.
+	m = send(t, m, k("enter"), k("enter"))
+
+	out := screen(t, m)
+	require.Contains(t, out, "✗", "the source is still incomplete, and says so")
+	require.Contains(t, out, "api-0", "the pods come back with the step")
+	require.Contains(t, out, "api-1")
+}

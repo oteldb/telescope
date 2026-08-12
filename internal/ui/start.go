@@ -1212,7 +1212,9 @@ func (m startModel) advance() (startModel, tea.Cmd) {
 		m.err = err
 		m.step = stepCollector
 		m.focus()
-		return m, nil
+		// The listing belongs to the step, so stepping back has to ask for it
+		// again: what is on screen is the query step's nothing.
+		return m, m.fetch()
 	}
 	query := strings.TrimSpace(m.query.Value())
 	return m, func() tea.Msg { return connectMsg{cfg: cfg, query: query} }
