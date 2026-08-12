@@ -218,6 +218,39 @@ func TestGroupAsksOnceForTheTarget(t *testing.T) {
 		"each cluster is still its own")
 }
 
+// TestGroupListsEveryPlaceItAsks: a workload does not have to run on every
+// cluster of a group, so what one of them knows and the others do not is still
+// offered, and a value both of them have is offered once.
+func TestGroupListsEveryPlaceItAsks(t *testing.T) {
+	withConfig(t,
+		[]config.Place{
+			{Name: "ops", Type: "kubectl", KubeConfig: "/root/ops.yml"},
+			{Name: "obs", Type: "kubectl", KubeConfig: "/root/obs.yml"},
+		},
+		[]config.Group{{Name: "both", Places: []string{"ops", "obs"}}},
+	)
+	prev := fetcher
+	fetcher = func(_ context.Context, r complete.Request) ([]complete.Candidate, error) {
+		if r.KubeConfig == "/root/ops.yml" {
+			return []complete.Candidate{{Value: "octo/api"}, {Value: "kube-system/coredns"}}, nil
+		}
+		return []complete.Candidate{{Value: "kube-system/coredns"}, {Value: "octo/worker"}}, nil
+	}
+	t.Cleanup(func() { fetcher = prev })
+
+	m, _ := New().Update(size())
+	m, cmd := m.Update(k("enter"))
+	m = runCmds(m, cmd)
+
+	values := make([]string, 0, 3)
+	for _, c := range m.(Model).start.filtered {
+		values = append(values, c.Value)
+	}
+	require.Equal(t, stepGroup, m.(Model).start.step)
+	require.ElementsMatch(t, []string{"octo/api", "kube-system/coredns", "octo/worker"}, values)
+	require.False(t, m.(Model).start.loading, "both clusters answered")
+}
+
 // TestGroupAskingKeepsWhatAPlaceAlreadyNamed: a place that names its own target
 // is not asked about, so a group may mix the two.
 func TestGroupAskingKeepsWhatAPlaceAlreadyNamed(t *testing.T) {
@@ -306,7 +339,7 @@ func TestPartialSavedSourceUnwinds(t *testing.T) {
 		Collector:  source.CollectorKubectl,
 		Elevate:    true,
 		KubeConfig: "/root/.kube/ops.kubeconfig",
-	}.Key(), start.candKey)
+	}.Key(), start.candKey())
 
 	// Picking a pod completes it.
 	m = send(t, m, candidates(m, "oteldb/oteldb-0"))
@@ -336,7 +369,7 @@ func TestKubeContextEditor(t *testing.T) {
 		Transport:  source.TransportLocal,
 		Collector:  source.CollectorKubectl,
 		KubeConfig: "/root/.kube/reader.kubeconfig",
-	}.Key(), m.(Model).start.candKey, "contexts are listed from the chosen file")
+	}.Key(), m.(Model).start.candKey(), "contexts are listed from the chosen file")
 
 	m = send(t, m, candidates(m, "reader"))
 	// enter accepts the highlighted context, a second one leaves the editor.
@@ -346,7 +379,7 @@ func TestKubeContextEditor(t *testing.T) {
 	require.Equal(t, detailNone, m.(Model).start.detail, "enter returns to the target")
 
 	// Pods are now listed through that context.
-	require.Contains(t, m.(Model).start.candKey, "reader")
+	require.Contains(t, m.(Model).start.candKey(), "reader")
 
 	for _, r := range "ns/pod" {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -514,7 +547,18 @@ func candidates(m tea.Model, values ...string) tea.Msg {
 	for _, v := range values {
 		items = append(items, complete.Candidate{Value: v, Detail: "running"})
 	}
-	return candidatesMsg{key: m.(Model).start.candKey, items: items}
+	return candidatesMsg{key: m.(Model).start.candKey(), items: items}
+}
+
+// offer puts suggestions in front of the user at a step that lists nothing of
+// its own, and so has no reply for [candidates] to fake.
+func offer(m tea.Model, values ...string) tea.Model {
+	mm := m.(Model)
+	for _, v := range values {
+		mm.start.candidates = append(mm.start.candidates, complete.Candidate{Value: v})
+	}
+	mm.start.refilter()
+	return mm
 }
 
 func TestCompletionListsAndFilters(t *testing.T) {
@@ -629,7 +673,7 @@ func TestCompletionEnterAcceptsHighlighted(t *testing.T) {
 // previously selected collector overwriting the current one.
 func TestCompletionIgnoresStaleReply(t *testing.T) {
 	m := send(t, New(), size())
-	stale := candidatesMsg{key: m.(Model).start.candKey, items: []complete.Candidate{{Value: "stale-unit"}}}
+	stale := candidatesMsg{key: m.(Model).start.candKey(), items: []complete.Candidate{{Value: "stale-unit"}}}
 
 	m = send(t, m, k("tab")) // move to kubectl, invalidating the request
 	m = send(t, m, stale)
@@ -648,7 +692,7 @@ func TestCompletionTabCyclesChipsWhenNothingHighlighted(t *testing.T) {
 func TestCompletionErrorIsShown(t *testing.T) {
 	m := send(t, New(), size(), k("tab"), k("tab"))
 	m = send(t, m, candidatesMsg{
-		key: m.(Model).start.candKey,
+		key: m.(Model).start.candKey(),
 		err: errors.New("docker: command not found"),
 	})
 	require.Contains(t, screen(t, m), "docker: command not found")
@@ -662,7 +706,7 @@ func TestHostIsADetail(t *testing.T) {
 
 	m = send(t, m, tea.KeyMsg{Type: tea.KeyCtrlO})
 	require.Equal(t, detailHost, m.(Model).start.detail)
-	require.Equal(t, "host", m.(Model).start.candKey, "ssh_config is where the hosts come from")
+	require.Equal(t, "host", m.(Model).start.candKey(), "ssh_config is where the hosts come from")
 
 	m = typeIn(t, m, "node1")
 	m = send(t, m, k("enter"))
@@ -1253,7 +1297,7 @@ func TestEscQuitsFromTheFirstStep(t *testing.T) {
 	require.Contains(t, screen(t, m), "esc back")
 
 	// A highlighted suggestion is dropped first.
-	m = send(t, m, candidates(m, "kubelet"))
+	m = offer(m, "kubelet")
 	m = send(t, m, k("down"))
 	require.Equal(t, 0, m.(Model).start.sel)
 	require.False(t, quits(m))

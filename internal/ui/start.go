@@ -135,8 +135,9 @@ type startModel struct {
 	follow bool
 	err    error
 
-	// Completion state for the current step.
-	candKey    string
+	// Completion state for the current step. A group lists every place it is
+	// asking, so there may be more than one key behind one set of suggestions.
+	candKeys   []string
 	candidates []complete.Candidate
 	filtered   []complete.Candidate
 	// sel is the highlighted suggestion, or -1 when the input has focus.
@@ -213,6 +214,9 @@ func newStart() startModel {
 	m.history = loadHistory()
 	if m.saved.len() == 0 {
 		m.step = stepCollector
+		// What the first step lists is known before anything is asked for; the
+		// commands come from [Model.Init].
+		m.candKeys = requestKeys(m.requests())
 	} else {
 		m.candidates = m.savedCandidates()
 		m.refilter()
@@ -550,16 +554,18 @@ func (m startModel) askGroup(cfg source.Config, asks source.Collector, query str
 	return m, m.fetch()
 }
 
-// groupAsking is the first place of the pending group that is still being asked
-// about. Its cluster is what the suggestions are listed from: the places differ
-// in where they are, and the answer is the same for all of them.
-func (m startModel) groupAsking() (source.Config, bool) {
+// groupAsking is every place of the pending group that is still being asked
+// about, which is exactly the set [source.Config.WithTarget] will answer for.
+// A workload does not have to live on all of them — one cluster runs what
+// another does not — so each is listed and the suggestions are their union.
+func (m startModel) groupAsking() []source.Config {
+	var out []source.Config
 	for _, sub := range m.group.Merge {
 		if sub.Validate() != nil {
-			return sub, true
+			out = append(out, sub)
 		}
 	}
-	return source.Config{}, false
+	return out
 }
 
 // prefill seeds the manual flow from a config and stops at the step that still
@@ -587,18 +593,23 @@ func (m startModel) prefill(cfg source.Config, query string) (startModel, tea.Cm
 	return m, m.fetch()
 }
 
-// request describes what the current step can complete.
-func (m startModel) request() (complete.Request, bool) {
-	switch m.step {
-	case stepSaved:
-		// Declared sources are already in memory; nothing to look up.
-		return complete.Request{}, false
-	case stepGroup:
-		sub, ok := m.groupAsking()
-		if !ok || sub.Collector.IsRemoteAPI() {
-			return complete.Request{}, false
+// requests describes every listing the current step draws its suggestions from.
+// Only a group has more than one: it asks once for what its places do not name,
+// and each of them knows a different part of the answer.
+func (m startModel) requests() []complete.Request {
+	if m.step != stepGroup {
+		if req, ok := m.request(); ok {
+			return []complete.Request{req}
 		}
-		return complete.Request{
+		return nil
+	}
+	var out []complete.Request
+	seen := map[string]bool{}
+	for _, sub := range m.groupAsking() {
+		if sub.Collector.IsRemoteAPI() {
+			continue
+		}
+		req := complete.Request{
 			Field:       complete.FieldTarget,
 			Transport:   sub.Transport,
 			Host:        sub.Host,
@@ -606,7 +617,31 @@ func (m startModel) request() (complete.Request, bool) {
 			Elevate:     sub.Elevate,
 			KubeConfig:  sub.KubeConfig,
 			KubeContext: sub.KubeContext,
-		}, true
+		}
+		// Two places on the same cluster answer the same listing once.
+		if key := req.Key(); !seen[key] {
+			seen[key] = true
+			out = append(out, req)
+		}
+	}
+	return out
+}
+
+// request describes one listing the current step can complete, and is what
+// names the step in the view. A group is listed from several places at once;
+// the first of them stands for the rest, which agree on what is being asked
+// for.
+func (m startModel) request() (complete.Request, bool) {
+	switch m.step {
+	case stepSaved:
+		// Declared sources are already in memory; nothing to look up.
+		return complete.Request{}, false
+	case stepGroup:
+		reqs := m.requests()
+		if len(reqs) == 0 {
+			return complete.Request{}, false
+		}
+		return reqs[0], true
 	case stepCollector:
 		switch m.detail {
 		case detailRange, detailEndpoint:
@@ -648,18 +683,18 @@ func (m *startModel) fetch() tea.Cmd {
 	m.candidates, m.filtered, m.candErr, m.sel = nil, nil, nil, -1
 
 	if m.step == stepSaved {
-		m.candKey, m.loading = "", false
+		m.candKeys, m.loading = nil, false
 		m.candidates = m.savedCandidates()
 		m.refilter()
 		return nil
 	}
 
-	req, ok := m.request()
-	if !ok {
+	reqs := m.requests()
+	if len(reqs) == 0 {
 		// Nothing to list, which is not the same as nothing to show: a step
 		// with no listing still offers what was used here before, and the
 		// range offers the windows worth reaching for.
-		m.candKey, m.loading = "", false
+		m.candKeys, m.loading = nil, false
 		switch m.detail {
 		case detailRange:
 			m.candidates = rangePresets
@@ -669,16 +704,71 @@ func (m *startModel) fetch() tea.Cmd {
 		m.refilter()
 		return m.preload()
 	}
-	m.candKey = req.Key()
 
-	if e, cached := m.cache[m.candKey]; cached {
-		m.loading = false
-		m.candidates, m.candErr = e.items, e.err
-		m.refilter()
-		return m.preload()
+	m.candKeys = requestKeys(reqs)
+	cmds := []tea.Cmd{m.preload()}
+	for _, req := range reqs {
+		if _, cached := m.cache[req.Key()]; cached {
+			continue
+		}
+		if cmd := m.requestCmd(req); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
-	m.loading = true
-	return tea.Batch(m.requestCmd(req), m.preload())
+	m.collect()
+	return tea.Batch(cmds...)
+}
+
+// collect shows what has come back for the current step. Several listings read
+// as one set: a value known to two of them is one suggestion, and what has
+// already arrived is shown while the rest are still running.
+func (m *startModel) collect() {
+	var (
+		items    []complete.Candidate
+		firstErr error
+		pending  bool
+	)
+	seen := make(map[string]bool)
+	for _, key := range m.candKeys {
+		e, done := m.cache[key]
+		if !done {
+			pending = true
+			continue
+		}
+		if e.err != nil && firstErr == nil {
+			firstErr = e.err
+		}
+		for _, c := range e.items {
+			if !seen[c.Value] {
+				seen[c.Value] = true
+				items = append(items, c)
+			}
+		}
+	}
+	m.loading, m.candidates, m.candErr = pending, items, nil
+	// One cluster being unreachable is worth saying only when it leaves nothing
+	// to choose from; otherwise the suggestions are the answer.
+	if len(items) == 0 {
+		m.candErr = firstErr
+	}
+	m.refilter()
+}
+
+func requestKeys(reqs []complete.Request) []string {
+	keys := make([]string, 0, len(reqs))
+	for _, req := range reqs {
+		keys = append(keys, req.Key())
+	}
+	return keys
+}
+
+// candKey is the listing the visible suggestions came from, or the first of
+// them when a group is asking several places at once.
+func (m startModel) candKey() string {
+	if len(m.candKeys) == 0 {
+		return ""
+	}
+	return m.candKeys[0]
 }
 
 // requestCmd asks for one result set, unless it is already on its way.
@@ -732,15 +822,21 @@ func (m *startModel) preload() tea.Cmd {
 
 // refresh drops the cached result for the current step and asks again.
 func (m *startModel) refresh() tea.Cmd {
-	req, ok := m.request()
-	if !ok {
+	reqs := m.requests()
+	if len(reqs) == 0 {
 		return nil
 	}
-	delete(m.cache, req.Key())
-	delete(m.inflight, req.Key())
+	var cmds []tea.Cmd
+	for _, req := range reqs {
+		delete(m.cache, req.Key())
+		delete(m.inflight, req.Key())
+		if cmd := m.requestCmd(req); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	m.candidates, m.filtered, m.candErr, m.sel = nil, nil, nil, -1
 	m.loading = true
-	return m.requestCmd(req)
+	return tea.Batch(cmds...)
 }
 
 // fetcher resolves completions. It is a variable so tests can avoid running
@@ -974,12 +1070,10 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 		// Every reply is cached, including preloads for steps not yet visited.
 		m.cache[msg.key] = cacheEntry{items: msg.items, err: msg.err}
 		delete(m.inflight, msg.key)
-		if msg.key != m.candKey {
+		if !slices.Contains(m.candKeys, msg.key) {
 			return m, nil
 		}
-		m.loading = false
-		m.candidates, m.candErr = msg.items, msg.err
-		m.refilter()
+		m.collect()
 		return m, nil
 
 	case tea.KeyMsg:
