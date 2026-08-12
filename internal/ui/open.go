@@ -52,11 +52,23 @@ func (l locator) linkOf(e *logs.Entry, it item) (target, bool) {
 		}
 	}
 
-	found, ok := l.locate(s)
-	if !ok {
-		return target{}, false
+	if found, ok := l.locate(s); ok {
+		return target{file: found}, true
 	}
-	return target{file: found}, true
+
+	// Failing that, a stacktrace: a frame is a place in a file the way a caller
+	// is, and the row the cursor is on need not be the one holding it — an entry
+	// that came with a trace has a file to open from any of its rows.
+	traces := []string{it.value}
+	if v, ok := fieldOf(e, stackKeys); ok && v != it.value {
+		traces = append(traces, v)
+	}
+	for _, trace := range traces {
+		if found, ok := l.stackSite(trace); ok {
+			return target{file: found}, true
+		}
+	}
+	return target{}, false
 }
 
 // isHTTP reports whether a value is a URL worth handing to a browser.

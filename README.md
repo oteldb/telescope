@@ -393,6 +393,15 @@ machine. The line comes from the value when a logger wrote `file.go:42`, and
 from `code.line.number` beside `code.file.path` when it followed OTEL and kept
 them apart; either way `o` on either row opens the same place.
 
+A stacktrace is read the same way. Where the value the cursor is on names no
+file, `o` reads it as a trace and opens the innermost frame that is a file in
+the checkout — the runtime and the libraries above your own code are skipped
+rather than opened. Go, zap, the JVM, CPython and V8 all write frames
+differently and all of them are read. An entry that carries a trace under
+`stacktrace`, `stack_trace`, `stack`, `exception.stacktrace` or `error.stack`
+opens it from any of its rows, so `o` on a pod name still lands where the panic
+came from.
+
 `f` takes the selected value back to the list as a filter term, anded onto
 whatever is already there — so reading one entry, spotting the pod it came from
 and pressing `f` leaves the list showing that pod and nothing else. The term is
