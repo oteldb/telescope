@@ -9,13 +9,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// styled renders s the way the banner paints a run of one colour.
+// styled renders s the way the banner paints a run of one color.
 func styled(c lipgloss.TerminalColor, s string) string {
 	return lipgloss.NewStyle().Foreground(c).Render(s)
 }
 
 // TestBannerRowsAreOneBlock pins the rows to a single width. The start screen
-// centres each line on its own, so a row that ends early is pushed right and
+// centers each line on its own, so a row that ends early is pushed right and
 // its stems no longer meet the bars above them.
 func TestBannerRowsAreOneBlock(t *testing.T) {
 	for i, line := range strings.Split(renderLogo(maxContentWidth), "\n") {
@@ -27,12 +27,12 @@ func TestBannerWearsTheMarkOnItsEs(t *testing.T) {
 	out := renderLogo(maxContentWidth)
 
 	var rows []string
-	for _, line := range strings.Split(ansi.Strip(out), "\n") {
+	for line := range strings.SplitSeq(ansi.Strip(out), "\n") {
 		rows = append(rows, strings.TrimRight(line, " "))
 	}
-	require.Equal(t, logoWide, strings.Join(rows, "\n"), "colour and padding are all the art gains")
+	require.Equal(t, logoWide, strings.Join(rows, "\n"), "color and padding are all the art gains")
 
-	// An E opens on the first colour of the mark's gradient; the foot of the
+	// An E opens on the first color of the mark's gradient; the foot of the
 	// T stands outside every E and stays ours.
 	require.Contains(t, out, styled(markColor(0), ""))
 	require.Contains(t, out, styled(colorAccent, ""))

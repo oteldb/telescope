@@ -2,6 +2,7 @@ package query
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 
 	"go.uber.org/zap/zapcore"
@@ -76,12 +77,7 @@ func (e Text) match(c *ctx) bool {
 }
 
 func (e Regexp) match(c *ctx) bool {
-	for _, part := range c.text() {
-		if e.re.Match(part) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(c.text(), e.re.Match)
 }
 
 // match compares one field. A record that does not carry the field fails every

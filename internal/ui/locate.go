@@ -130,7 +130,7 @@ func (l locator) locate(s site) (site, bool) {
 // about which file it is.
 func components(p string) []string {
 	var out []string
-	for _, c := range strings.Split(filepath.ToSlash(p), "/") {
+	for c := range strings.SplitSeq(filepath.ToSlash(p), "/") {
 		if c != "" && c != "." {
 			out = append(out, c)
 		}

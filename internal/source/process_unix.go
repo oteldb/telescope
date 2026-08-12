@@ -8,7 +8,7 @@ import (
 )
 
 // isolate puts the command in its own process group so the whole pipeline can
-// be signalled, not just the shell that spawned it.
+// be signaled, not just the shell that spawned it.
 func isolate(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }

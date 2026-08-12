@@ -291,4 +291,3 @@ func TestOpenSuspendsForAnEditor(t *testing.T) {
 	m2, _ = m2.Update(cmd())
 	require.Contains(t, ansi.Strip(m2.View()), "EDITOR")
 }
-

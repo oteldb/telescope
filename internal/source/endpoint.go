@@ -80,7 +80,7 @@ func (e Endpoint) request(ctx context.Context, path string, params url.Values) (
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, http.NoBody)
 	if err != nil {
 		return nil, errors.Wrap(err, "build request")
 	}

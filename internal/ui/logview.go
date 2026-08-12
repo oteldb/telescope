@@ -325,9 +325,7 @@ func (m *logModel) clamp() {
 
 	m.cursor = min(max(m.cursor, 0), max(n-1, 0))
 	m.top = min(max(m.top, 0), max(n-h, 0))
-	if m.cursor < m.top {
-		m.top = m.cursor
-	}
+	m.top = min(m.top, m.cursor)
 	if m.cursor >= m.top+h {
 		m.top = m.cursor - h + 1
 	}

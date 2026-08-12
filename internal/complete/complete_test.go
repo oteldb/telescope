@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -55,11 +56,11 @@ func TestRankTiers(t *testing.T) {
 func TestRankReportsMatchPositions(t *testing.T) {
 	got := Rank([]Candidate{{Value: "oteldb-0"}}, "otdb0", nil)
 	require.Len(t, got, 1)
-	matched := ""
+	var matched strings.Builder
 	for _, i := range got[0].Matched {
-		matched += string([]rune(got[0].Value)[i])
+		matched.WriteString(string([]rune(got[0].Value)[i]))
 	}
-	require.Equal(t, "otdb0", matched, "the offsets point at the query characters")
+	require.Equal(t, "otdb0", matched.String(), "the offsets point at the query characters")
 
 	// An empty query matches everything and marks nothing.
 	require.Empty(t, Rank([]Candidate{{Value: "oteldb-0"}}, "", nil)[0].Matched)

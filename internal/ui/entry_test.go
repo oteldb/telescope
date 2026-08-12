@@ -90,7 +90,7 @@ func TestEntryMarksWhatIsSelected(t *testing.T) {
 
 	painted := func(m entryModel) []string {
 		var out []string
-		for _, l := range strings.Split(m.View(), "\n") {
+		for l := range strings.SplitSeq(m.View(), "\n") {
 			if len(bgSeqs(l, -1)) > 0 {
 				out = append(out, ansi.Strip(l))
 			}

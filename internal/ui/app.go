@@ -5,6 +5,7 @@ import (
 	"context"
 
 	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/oteldb/telescope/internal/config"
 	"github.com/oteldb/telescope/internal/logs"
 	"github.com/oteldb/telescope/internal/query"

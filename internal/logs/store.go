@@ -68,10 +68,10 @@ type Store struct {
 	bandAt time.Time
 }
 
-// NewStore returns a store retaining at most max entries.
-func NewStore(max int) *Store {
+// NewStore returns a store retaining at most limit entries.
+func NewStore(limit int) *Store {
 	return &Store{
-		max: max,
+		max: limit,
 		fmt: &pl.Formatter{Color: true},
 	}
 }

@@ -42,8 +42,10 @@ var parseTests = []struct {
 	{"level names are normalized", "level>=WARNING", "level>=warn"},
 	{"a level may be a severity number", "level>=17", "level>=error"},
 	{"a keyword may be searched for quoted", `"not"`, `"not"`},
-	{"everything at once", `level>=warn (pod=api or pod=worker) -/health/`,
-		`level>=warn (pod=api or pod=worker) not /health/`},
+	{
+		"everything at once", `level>=warn (pod=api or pod=worker) -/health/`,
+		`level>=warn (pod=api or pod=worker) not /health/`,
+	},
 }
 
 func TestParse(t *testing.T) {

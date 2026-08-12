@@ -28,14 +28,14 @@ const logoSmall = "" +
 	" ╹ ┗━╸┗━╸┗━╸┗━┛┗━╸┗━┛╹  ┗━╸"
 
 // markSpans are the columns of logoWide each E covers. An E is the go-faster
-// mark itself rather than a letter we drew, so it keeps the mark's colours
+// mark itself rather than a letter we drew, so it keeps the mark's colors
 // instead of taking the palette's accent.
 var markSpans = [3][2]int{{8, 17}, {27, 36}, {70, 79}}
 
 // The mark is a gradient across its own width, left to right.
 var markLeft, markRight = [3]int{0x01, 0xad, 0xd6}, [3]int{0x00, 0xa2, 0x9d}
 
-// markColor is the mark's colour a fraction of the way across it.
+// markColor is the mark's color a fraction of the way across it.
 func markColor(at float64) lipgloss.Color {
 	var c [3]int
 	for i := range c {
@@ -55,7 +55,7 @@ func logoColor(col int) lipgloss.TerminalColor {
 }
 
 // renderLogo paints the banner for a block width columns wide. The wide one is
-// not bold: the slabs are already solid, and bold brightens a colour in enough
+// not bold: the slabs are already solid, and bold brightens a color in enough
 // terminals to pull the E's off the mark's gradient.
 func renderLogo(width int) string {
 	if width < lipgloss.Width(logoWide) {
@@ -91,7 +91,7 @@ func renderLogo(width int) string {
 			run = append(run, r)
 		}
 		flush()
-		// The screen centres every line on its own width, so a row that ends
+		// The screen centers every line on its own width, so a row that ends
 		// early slides out from under the row above it and the slabs stop
 		// meeting. The rows without bars are the short ones.
 		b.WriteString(strings.Repeat(" ", block-lipgloss.Width(line)))

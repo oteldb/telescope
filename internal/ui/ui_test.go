@@ -146,8 +146,10 @@ func TestGroupOfEndpointsOpensWithNothingNamed(t *testing.T) {
 	withConfig(t,
 		[]config.Place{
 			{Name: "vl-eu", Type: "victorialogs", URL: "https://eu.example.com"},
-			{Name: "vl-us", Type: "victorialogs", URL: "https://us.example.com",
-				Proxy: "socks5h://127.0.0.1:1080"},
+			{
+				Name: "vl-us", Type: "victorialogs", URL: "https://us.example.com",
+				Proxy: "socks5h://127.0.0.1:1080",
+			},
 		},
 		[]config.Group{{Name: "prod", Places: []string{"vl-eu", "vl-us"}}},
 	)
@@ -1612,8 +1614,10 @@ func TestVictoriaLogsOpensWithoutAQuery(t *testing.T) {
 // to says so where it is chosen.
 func TestEndpointTokenFailureIsReported(t *testing.T) {
 	withEndpoints(t, []config.Place{
-		{Name: "prod", Type: "victorialogs", URL: "https://logs.example.com",
-			Token: config.Token{Env: "TELESCOPE_TEST_UNSET"}},
+		{
+			Name: "prod", Type: "victorialogs", URL: "https://logs.example.com",
+			Token: config.Token{Env: "TELESCOPE_TEST_UNSET"},
+		},
 	})
 
 	m := send(t, New(), size())

@@ -23,10 +23,14 @@ func TestLogsQL(t *testing.T) {
 		{"a denied field is a negated filter", "pod!=api-7", `-pod:~"(?i)^api-7$"`},
 		{"a dotted key is a key", "k8s.pod.name=api", `k8s.pod.name:~"(?i)^api$"`},
 		{"nesting is kept", "a (b or c)", `*:~"(?i)a" (*:~"(?i)b" OR *:~"(?i)c")`},
-		{"one field or another", "pod=api-7 or pod=api-8",
-			`(pod:~"(?i)^api-7$" OR pod:~"(?i)^api-8$")`},
-		{"a dropped conjunct leaves the or whole", "level>=warn (pod=api-7 or pod=api-8)",
-			`(pod:~"(?i)^api-7$" OR pod:~"(?i)^api-8$")`},
+		{
+			"one field or another", "pod=api-7 or pod=api-8",
+			`(pod:~"(?i)^api-7$" OR pod:~"(?i)^api-8$")`,
+		},
+		{
+			"a dropped conjunct leaves the or whole", "level>=warn (pod=api-7 or pod=api-8)",
+			`(pod:~"(?i)^api-7$" OR pod:~"(?i)^api-8$")`,
+		},
 
 		// What is dropped is dropped from a conjunction only, and the filter
 		// still runs here over whatever comes back.

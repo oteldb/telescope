@@ -59,7 +59,7 @@ func TestEndpointProxyErrors(t *testing.T) {
 // asking the environment — net/http reads that once per process, so a test that
 // set it would depend on which tests ran before it.
 func TestEndpointProxyIsResolved(t *testing.T) {
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://logs.example.com", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://logs.example.com", http.NoBody)
 	require.NoError(t, err)
 
 	e := Endpoint{URL: "https://logs.example.com", Proxy: "socks5h://127.0.0.1:1080"}
