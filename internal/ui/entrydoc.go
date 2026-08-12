@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/oteldb/telescope/internal/logs"
+	"github.com/oteldb/telescope/internal/query"
 	"github.com/oteldb/telescope/internal/source"
 )
 
@@ -150,6 +151,25 @@ func block(s string, width int, render func(string) string) []string {
 		out = append(out, "  "+ansi.Truncate(render(l), max(width-2, 1), "…"))
 	}
 	return out
+}
+
+// term is the query that picks out the lines sharing this row's value, or nil
+// where narrowing by it would mean nothing. A timestamp selects the one line it
+// came from, and a rendering or a raw line selects itself; what is worth
+// narrowing by is what a line has in common with others.
+func (it item) term() query.Expr {
+	switch it.key {
+	case "", "time", "received", "body", "rendered", "raw":
+		return nil
+	case "level":
+		l, ok := query.ParseLevel(it.value)
+		if !ok {
+			return nil
+		}
+		return query.Level{Op: query.OpEq, Level: l}
+	default:
+		return query.Field{Key: it.key, Op: query.OpEq, Value: it.value}
+	}
 }
 
 // starts is the screen line each item begins on.

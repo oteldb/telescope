@@ -336,6 +336,7 @@ laid under them without disturbing them.
 | `↑` `k`, `↓` `j`, `pgup` `pgdown`, `home` `g`, `end` `G` | select |
 | `y` | copy the selected value |
 | `Y` | copy the whole entry as it arrived |
+| `f` | narrow the list by the selected value |
 | `esc`, `enter`, `backspace` | back |
 | `q`, `ctrl+c` | quit |
 
@@ -350,6 +351,19 @@ is escaped, wrapped and colored, and none of that is wanted anywhere the value
 is going next — a path drawn with `\e` in it opens in no editor. `Y` copies the
 whole entry from wherever the cursor is standing, which is the same value as `y`
 on the `raw` row.
+
+`f` takes the selected value back to the list as a filter term, anded onto
+whatever is already there — so reading one entry, spotting the pod it came from
+and pressing `f` leaves the list showing that pod and nothing else. The term is
+written as you would have typed it, quoting where the prompt needs it, and a
+query already in force is parenthesized if it is an `or`: a jump narrows, and
+`timeout or refused` picking up a term in one branch would widen. Where the
+place is a log database, the term is pushed down and the lines are fetched
+again rather than filtered out of what had already arrived.
+
+Only rows worth narrowing by offer it. A timestamp belongs to one line and a
+body usually carries an id, so `f` on those says there is nothing to do rather
+than filtering the list down to the entry you are already reading.
 
 The clipboard is the one on the machine telescope runs on, reached through
 `wl-copy`, `xclip` or `pbcopy` as the session's display calls for. Where there

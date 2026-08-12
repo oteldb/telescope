@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/oteldb/telescope/internal/logs"
+	"github.com/oteldb/telescope/internal/query"
 	"github.com/oteldb/telescope/internal/source"
 )
 
@@ -230,18 +231,9 @@ func (m logModel) updateSearch(km tea.KeyMsg) (logModel, tea.Cmd) {
 			return m, nil
 		}
 		m.queryErr = nil
-		f = f.Compile()
 		m.searching = false
 		m.search.Blur()
-		// A source that can answer part of the query is asked it again, and the
-		// view is rebuilt from what comes back: the same lines, fetched rather
-		// than filtered out of everything else.
-		if cfg, ok := m.requery(f); ok {
-			return m, func() tea.Msg { return requeryMsg{cfg: cfg, query: f.Query} }
-		}
-		m.view.SetFilter(f)
-		m.cursor, m.top = 0, 0
-		return m, nil
+		return m.apply(f.Query)
 	case "esc":
 		m.searching = false
 		m.queryErr = nil
@@ -252,6 +244,45 @@ func (m logModel) updateSearch(km tea.KeyMsg) (logModel, tea.Cmd) {
 	var cmd tea.Cmd
 	m.search, cmd = m.search.Update(km)
 	return m, cmd
+}
+
+// apply puts q in force, as the prompt and as the filter, and asks the sources
+// again if it is something they can answer.
+func (m logModel) apply(q string) (logModel, tea.Cmd) {
+	f := m.view.Filter()
+	f.Query = q
+	f = f.Compile()
+	m.search.SetValue(q)
+
+	// A source that can answer part of the query is asked it again, and the view
+	// is rebuilt from what comes back: the same lines, fetched rather than
+	// filtered out of everything else.
+	if cfg, ok := m.requery(f); ok {
+		return m, func() tea.Msg { return requeryMsg{cfg: cfg, query: f.Query} }
+	}
+	m.view.SetFilter(f)
+	m.cursor, m.top = 0, 0
+	return m, nil
+}
+
+// narrow ands term onto the filter, which is what a jump out of an entry does.
+// The query already in force is parenthesized where it has to be, since a term
+// picked up by one branch of an or would widen the filter rather than narrow
+// it; And.String is what knows when that is.
+func (m logModel) narrow(term query.Expr) (logModel, tea.Cmd) {
+	next := term
+	// The query in force is one that parsed, so a failure here is not a state
+	// the view can be in; narrowing by the term alone is still an answer.
+	if cur, err := query.Parse(m.view.Filter().Query); err == nil && cur != nil {
+		if and, ok := cur.(query.And); ok {
+			// Flattened rather than nested, so a filter built by jumping twice
+			// reads as the three terms it is and not as brackets around them.
+			next = append(slices.Clone(and), term)
+		} else {
+			next = query.And{cur, term}
+		}
+	}
+	return m.apply(next.String())
 }
 
 // requery reports whether f asks the sources themselves something other than

@@ -93,6 +93,17 @@ func (m entryModel) Update(msg tea.Msg) (entryModel, tea.Cmd) {
 	case "Y":
 		// The whole entry as it arrived, from wherever the cursor happens to be.
 		return m, copyCmd("entry", string(m.entry.Raw))
+	case "f":
+		if len(sel) == 0 {
+			return m, nil
+		}
+		it := doc[sel[m.clamp(sel)]]
+		term := it.term()
+		if term == nil {
+			m.note = "nothing to narrow by on this row"
+			return m, nil
+		}
+		return m, func() tea.Msg { return filterMsg{term: term} }
 	default:
 		return m, nil
 	}
@@ -205,6 +216,7 @@ func (m entryModel) help() string {
 		key("↑↓", "select"),
 		key("y", "copy"),
 		key("Y", "entry"),
+		key("f", "filter"),
 		key("esc", "back"),
 		key("q", "quit"),
 	}, styleHint.Render(" · "))

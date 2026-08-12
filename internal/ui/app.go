@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/oteldb/telescope/internal/config"
 	"github.com/oteldb/telescope/internal/logs"
+	"github.com/oteldb/telescope/internal/query"
 	"github.com/oteldb/telescope/internal/source"
 )
 
@@ -116,6 +117,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = stateEntry
 		return m, nil
 
+	case filterMsg:
+		// Narrowing is done to the list, so the list is where it lands: reading
+		// one entry is how you find the thing worth narrowing by, and staying on
+		// it would hide what the narrowing did.
+		m.state = stateLogs
+		var cmd tea.Cmd
+		m.logs, cmd = m.logs.narrow(msg.term)
+		return m, cmd
+
 	case backMsg:
 		switch m.state {
 		case stateEntry:
@@ -181,6 +191,9 @@ type (
 		cfg   source.Config
 		query string
 	}
+	// filterMsg narrows the list by what an entry had under the cursor.
+	filterMsg struct{ term query.Expr }
+
 	initMsg      struct{}
 	openEntryMsg struct{ entry *logs.Entry }
 	backMsg      struct{}
