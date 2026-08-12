@@ -4,7 +4,9 @@ A terminal log viewer. It opens one stream — a systemd unit, a Kubernetes
 workload, a container, any command, or a query against VictoriaLogs or Loki,
 locally or over ssh — and renders it as a filterable list. A `merge` reads
 several of them as one timeline. `README.md` is written for users and is the
-best description of what the thing does; read it before changing behavior.
+best description of what the thing does; read it before changing behavior, and
+keep it that way — it says what a feature is and how to configure it, never how
+it works inside. Why the code is the way it is belongs here.
 
 ## Commands
 
