@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,9 +55,12 @@ func (m entryModel) docWidth() int {
 }
 
 func (m entryModel) Update(msg tea.Msg) (entryModel, tea.Cmd) {
-	if c, ok := msg.(copiedMsg); ok {
-		m.note = c.note()
+	switch msg := msg.(type) {
+	case noteMsg:
+		m.note = msg.text
 		return m, nil
+	case openMsg:
+		return m.open(msg.target)
 	}
 	km, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -93,6 +99,11 @@ func (m entryModel) Update(msg tea.Msg) (entryModel, tea.Cmd) {
 	case "Y":
 		// The whole entry as it arrived, from wherever the cursor happens to be.
 		return m, copyCmd("entry", string(m.entry.Raw))
+	case "o":
+		if len(sel) == 0 {
+			return m, nil
+		}
+		return m, openCmd(m.entry, doc[sel[m.clamp(sel)]])
 	case "f":
 		if len(sel) == 0 {
 			return m, nil
@@ -216,29 +227,56 @@ func (m entryModel) help() string {
 		key("↑↓", "select"),
 		key("y", "copy"),
 		key("Y", "entry"),
+		key("o", "open"),
 		key("f", "filter"),
 		key("esc", "back"),
 		key("q", "quit"),
 	}, styleHint.Render(" · "))
 }
 
-// copiedMsg reports what a copy did. It is a message rather than a return value
-// because writing to the terminal is not the model's work to do inline.
-type copiedMsg struct {
-	what string
-	err  error
+// noteMsg is what a key just did, or why it could not. Reaching the screen
+// through a message rather than a return value is what lets the work happen off
+// the update: a copy writes to the terminal, an open reads the disk.
+type noteMsg struct{ text string }
+
+func note(format string, args ...any) tea.Cmd {
+	return func() tea.Msg { return noteMsg{fmt.Sprintf(format, args...)} }
 }
 
-func (c copiedMsg) note() string {
-	if c.err != nil {
-		return fmt.Sprintf("could not copy: %v", c.err)
+// open hands a target to whatever opens it. A browser is let go of; an editor
+// takes the terminal, so the program is suspended for as long as it holds it.
+func (m entryModel) open(t target) (entryModel, tea.Cmd) {
+	if t.url != "" {
+		return m, func() tea.Msg {
+			if err := openBrowser(t.url); err != nil {
+				return noteMsg{fmt.Sprintf("could not open: %v", err)}
+			}
+			return noteMsg{"opened " + t.url}
+		}
 	}
-	return "copied " + c.what
+
+	argv, err := editorArgv(os.Getenv, t.file)
+	if err != nil {
+		return m, note("%v", err)
+	}
+	where := t.file.path
+	if t.file.line > 0 {
+		where += ":" + strconv.Itoa(t.file.line)
+	}
+	return m, tea.ExecProcess(exec.Command(argv[0], argv[1:]...), func(err error) tea.Msg {
+		if err != nil {
+			return noteMsg{fmt.Sprintf("could not open: %v", err)}
+		}
+		return noteMsg{"opened " + where}
+	})
 }
 
 func copyCmd(what, value string) tea.Cmd {
 	return func() tea.Msg {
-		return copiedMsg{what: what, err: copyValue(value)}
+		if err := copyValue(value); err != nil {
+			return noteMsg{fmt.Sprintf("could not copy: %v", err)}
+		}
+		return noteMsg{"copied " + what}
 	}
 }
 

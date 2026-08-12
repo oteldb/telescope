@@ -336,6 +336,7 @@ laid under them without disturbing them.
 | `↑` `k`, `↓` `j`, `pgup` `pgdown`, `home` `g`, `end` `G` | select |
 | `y` | copy the selected value |
 | `Y` | copy the whole entry as it arrived |
+| `o` | open the selected value: a URL in a browser, a file in `$EDITOR` |
 | `f` | narrow the list by the selected value |
 | `esc`, `enter`, `backspace` | back |
 | `q`, `ctrl+c` | quit |
@@ -351,6 +352,22 @@ is escaped, wrapped and colored, and none of that is wanted anywhere the value
 is going next — a path drawn with `\e` in it opens in no editor. `Y` copies the
 whole entry from wherever the cursor is standing, which is the same value as `y`
 on the `raw` row.
+
+`o` opens what the selected value points at. An `http` or `https` URL goes to
+the desktop browser; a file goes to `$VISUAL` or `$EDITOR`, at the right line,
+with telescope standing aside until the editor exits. Only those two schemes
+are opened — a log line is somebody else's bytes, and the desktop opener runs
+whatever program a scheme happens to be registered to.
+
+The path a logger writes is rarely the path the file is at. zap writes the
+package-relative `ui/start.go`, a binary built on a CI runner writes that
+machine's absolute path, and a container writes the path it had inside the
+image. So `o` tries the path as written, then relative to the repository, and
+failing both looks for a tracked file that path is the tail of — which is why
+`caller` opens the right file in a checkout that has never seen the build
+machine. The line comes from the value when a logger wrote `file.go:42`, and
+from `code.line.number` beside `code.file.path` when it followed OTEL and kept
+them apart; either way `o` on either row opens the same place.
 
 `f` takes the selected value back to the list as a filter term, anded onto
 whatever is already there — so reading one entry, spotting the pod it came from

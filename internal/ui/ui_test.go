@@ -36,6 +36,10 @@ func TestMain(m *testing.M) {
 	// whatever a test needs.
 	loadConfig = func() (config.Config, error) { return config.Config{}, nil }
 	loadHistory = func() config.History { return config.History{} }
+	// Nor the developer's checkout or their browser: a test that opens things
+	// says which ones itself.
+	newLocator = func() locator { return locator{} }
+	openBrowser = func(string) error { return errors.New("no browser here") }
 	os.Exit(m.Run())
 }
 

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 
@@ -45,7 +44,7 @@ func press(t *testing.T, m entryModel, key string) entryModel {
 		return m
 	}
 	msg := cmd()
-	if _, ok := msg.(copiedMsg); !ok {
+	if _, ok := msg.(noteMsg); !ok {
 		return m
 	}
 	m, _ = m.Update(msg)
@@ -242,5 +241,3 @@ func TestEntryTallValueShowsItsHead(t *testing.T) {
 
 	require.Contains(t, ansi.Strip(m.View()), "boom", "the head of the value, not its tail")
 }
-
-var _ tea.Msg = copiedMsg{}
