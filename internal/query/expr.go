@@ -137,6 +137,11 @@ func quote(s string) string {
 	return quoteValue(s)
 }
 
+// QuoteValue writes a value as it would have to be typed after a comparison,
+// which is what anything putting one into the prompt has to do with it: a pod
+// called "web (old)" is a term only with the quotes around it.
+func QuoteValue(s string) string { return quoteValue(s) }
+
 // quoteValue is quote where a value is expected, which is everywhere a dash
 // cannot have been a negation.
 func quoteValue(s string) string {

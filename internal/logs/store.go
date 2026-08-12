@@ -66,6 +66,10 @@ type Store struct {
 	// view that scrolled or filtered could not work it out again.
 	band   bool
 	bandAt time.Time
+
+	// index is what the prompt completes by, built here for the same reason the
+	// band is: on arrival, once.
+	index fieldIndex
 }
 
 // NewStore returns a store retaining at most limit entries.
@@ -141,6 +145,7 @@ func (s *Store) Append(l source.Line) *Entry {
 	}
 	e.Band = s.band
 	s.seq++
+	s.index.index(e)
 
 	s.entries = append(s.entries, e)
 	if len(s.entries) > s.max {
@@ -166,4 +171,5 @@ func (s *Store) Reset() {
 	s.seq = 0
 	s.dropped = 0
 	s.band, s.bandAt = false, time.Time{}
+	s.index = fieldIndex{}
 }

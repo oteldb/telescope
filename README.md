@@ -253,6 +253,7 @@ whatever was typed — bound it in the command itself.
 | `←` `→` | scroll sideways, `0` resets |
 | `enter` | open the entry |
 | `/` | filter (`enter` applies, `esc` cancels) |
+| `tab` | complete the field or value being typed, `↑` `↓` pick |
 | `?` | the filter language, written out (`f1` from inside the prompt) |
 | `f` | toggle follow |
 | `l` | cycle minimum level: all, info, warn, error |
@@ -285,6 +286,13 @@ the shipper called them; `source` is the merge tag and `stream` is `stdout` or
 are compared without case, because a pod name typed in a hurry is still that
 pod. A line that never reported a level passes no `level` comparison at all: an
 unlevelled line is not quietly an info one.
+
+`tab` finishes what is being typed: a field name where a bare word is, and the
+values under it once one is named. What has already been read is offered first —
+those are what this stream is actually saying — and a log database is asked what
+else it holds, so `pod=` completes to a pod no line has mentioned yet. Anything
+only on record is marked as such, since it may match nothing here. A name is
+inserted with its `=`, because a name on its own is not a term.
 
 Every term asks about one line and nothing else, which is what lets one query
 mean the same thing across a group of several places — and what lets a place

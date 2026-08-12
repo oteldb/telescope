@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/oteldb/telescope/internal/complete"
 	"github.com/oteldb/telescope/internal/logs"
 	"github.com/oteldb/telescope/internal/query"
 	"github.com/oteldb/telescope/internal/source"
@@ -45,6 +46,14 @@ type logModel struct {
 	// prompt rather than to the view, which is still showing the last one that
 	// was.
 	queryErr error
+	// sel is the highlighted suggestion, counted from the top of what is
+	// currently offered.
+	sel int
+	// fields is what the source said it is labeled with, keyed by the field
+	// whose values were asked for and by "" for the names themselves. asked is
+	// what has already been requested, answered or not.
+	fields map[string][]string
+	asked  map[string]bool
 
 	status string
 	err    error
@@ -139,16 +148,44 @@ func mergeTags(cfg source.Config) map[string]string {
 	return out
 }
 
-func (m *logModel) resize(w, h int) { m.w, m.h = w, h }
+func (m *logModel) resize(w, h int) {
+	m.w, m.h = w, h
+	// bubbles draws a placeholder only as far as its Width, and a Width of zero
+	// draws one rune of it — the prompt would advertise the language it takes
+	// and then show a lone "w". It is also what scrolls a long query, so it is
+	// the room left beside the chips and not the whole screen.
+	//
+	// The one column beyond the prompt and the gap is bubbles' own: it pads a
+	// placeholder to Width and then adds a column for the cursor sitting past
+	// the end of it.
+	m.search.Width = max(m.width()-lipgloss.Width(m.chips())-lipgloss.Width(m.search.Prompt)-3, 10)
+}
 
 // bodyHeight is the number of log lines that fit in the framed view.
+//
+// The suggestions come out of it rather than out of the terminal, so the frame
+// stays where it is while a filter is typed: a list that jumped every time the
+// prompt offered something would be unreadable.
 func (m logModel) bodyHeight() int {
 	// 4 lines of top bar (2 borders, 2 rows), 2 lines of log frame border,
 	// 1 filter bar, 1 help line.
-	if h := m.h - 8; h > 0 {
+	if h := m.h - 8 - len(m.promptRows()); h > 0 {
 		return h
 	}
 	return 1
+}
+
+// suggestions are the rows the prompt is currently offering, at most
+// [suggestRows] of them.
+func (m logModel) suggestions() []complete.Candidate {
+	if !m.searching || m.queryErr != nil {
+		return nil
+	}
+	_, items := m.suggest()
+	if len(items) > suggestRows {
+		items = items[:suggestRows]
+	}
+	return items
 }
 
 // width is the usable width once the screen padding is taken out.
@@ -171,9 +208,15 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 		return m, func() tea.Msg { return backMsg{} }
 	case "/":
 		m.searching = true
+		m.sel = 0
 		m.search.Focus()
 		m.search.CursorEnd()
-		return m, textinput.Blink
+		// The names are asked for as the prompt opens rather than when a
+		// suggestion is first wanted: a listing is a round trip, and the moment
+		// it is wanted is the moment it is too late to start. Sequenced through
+		// a variable because wantFields records what it asked on m.
+		ask := m.wantFields("")
+		return m, tea.Batch(textinput.Blink, ask)
 	case "?":
 		return m, openHelp
 	case "enter":
@@ -222,11 +265,21 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 }
 
 func (m logModel) updateSearch(km tea.KeyMsg) (logModel, tea.Cmd) {
+	_, items := m.suggest()
+
 	switch km.String() {
 	// A "?" typed into the prompt is a regexp quantifier, so the reference is
 	// reached by a key that could not have been part of a query.
 	case "f1":
 		return m, openHelp
+	case "tab":
+		return m.accept(items)
+	case "down", "ctrl+n":
+		m.sel = min(m.sel+1, max(len(items)-1, 0))
+		return m, nil
+	case "up", "ctrl+p":
+		m.sel = max(m.sel-1, 0)
+		return m, nil
 	case "enter":
 		f := m.view.Filter()
 		f.Query = strings.TrimSpace(m.search.Value())
@@ -247,9 +300,40 @@ func (m logModel) updateSearch(km tea.KeyMsg) (logModel, tea.Cmd) {
 		m.search.SetValue(m.view.Filter().Query)
 		return m, nil
 	}
+
 	var cmd tea.Cmd
 	m.search, cmd = m.search.Update(km)
-	return m, cmd
+	// A keystroke moves what is being completed, so the highlight starts over
+	// rather than pointing into a list that has changed under it.
+	m.sel = 0
+	ask := m.askAtCursor()
+	return m, tea.Batch(cmd, ask)
+}
+
+// accept writes the highlighted suggestion into the prompt.
+func (m logModel) accept(items []complete.Candidate) (logModel, tea.Cmd) {
+	at, _ := m.suggest()
+	if len(items) == 0 || !at.OK {
+		return m, nil
+	}
+	value, pos := at.apply(m.search.Value(), items[min(m.sel, len(items)-1)].Value, at.Key == "")
+	m.search.SetValue(value)
+	m.search.SetCursor(pos)
+	m.sel = 0
+	// Accepting a name leaves the cursor after the comparison, where the values
+	// under it are what is wanted next.
+	ask := m.askAtCursor()
+	return m, ask
+}
+
+// askAtCursor asks the source about whatever the cursor has moved into, which is
+// the values of a field the first time one is named.
+func (m *logModel) askAtCursor() tea.Cmd {
+	at := completeAt(m.search.Value(), m.search.Position())
+	if !at.OK || at.Key == "" {
+		return nil
+	}
+	return m.wantFields(at.Key)
 }
 
 // apply puts q in force, as the prompt and as the filter, and asks the sources
@@ -361,36 +445,82 @@ func (m logModel) View() string {
 		body = append(body, "")
 	}
 
-	return padScreen(strings.Join([]string{
+	screen := []string{
 		m.topBar(entries),
 		styleBox.Width(m.width()).Render(strings.Join(body, "\n")),
 		m.filterBar(),
-		m.footer(entries),
-	}, "\n"))
+	}
+	screen = append(screen, m.promptRows()...)
+	return padScreen(strings.Join(append(screen, m.footer(entries)), "\n"))
+}
+
+// promptRows are what is drawn under the prompt: why what is being typed is not
+// a query yet, or, when it could still become one, what it might be finished
+// with.
+//
+// They sit on their own rows rather than beside the prompt because both are as
+// long as they need to be — a parse error naming what it expected does not fit
+// after a query long enough to have gone wrong.
+func (m logModel) promptRows() []string {
+	if !m.searching {
+		return nil
+	}
+	if m.queryErr != nil {
+		return []string{ansi.Truncate("  "+styleErr.Render(m.queryErr.Error()), m.width(), "…")}
+	}
+	return m.suggestRows()
+}
+
+// suggestRows draws what the prompt is offering. The value is shown as it would
+// be typed and the detail says where it came from, since a name the database
+// knows and one this stream has already used are worth telling apart: the first
+// may match nothing here.
+func (m logModel) suggestRows() []string {
+	items := m.suggestions()
+	if len(items) == 0 {
+		return nil
+	}
+	sel := min(m.sel, len(items)-1)
+	rows := make([]string, 0, len(items))
+	for i, c := range items {
+		marker := "  "
+		if i == sel {
+			marker = styleSelected.Render("▎ ")
+		}
+		row := marker + highlightMatch(c.Value, c.Matched, i == sel)
+		if c.Detail != "" {
+			row += "  " + styleDim.Render(c.Detail)
+		}
+		rows = append(rows, ansi.Truncate(row, m.width(), "…"))
+	}
+	return rows
 }
 
 // filterBar shows where the stream comes from and what it reads as colored
 // chips, followed by the grep filter.
-func (m logModel) filterBar() string {
-	var chips string
+// chips label where the stream comes from and what it reads.
+func (m logModel) chips() string {
 	if m.cfg.Collector == source.CollectorMerge {
 		// The sources are the legend for the tags down the gutter, so they are
 		// colored to match rather than by what they are.
+		var out strings.Builder
 		for i, l := range m.cfg.Labels() {
-			chips += tagStyle(i).Render(" " + l + " ")
+			out.WriteString(tagStyle(i).Render(" " + l + " "))
 		}
-	} else {
-		where := "local"
-		if m.cfg.Transport == source.TransportSSH {
-			where = strings.TrimSpace(m.cfg.Host)
-		}
-		chips = styleChipWhere.Render(where) + styleChipActive.Render(string(m.cfg.Collector))
+		return out.String()
 	}
+	where := "local"
+	if m.cfg.Transport == source.TransportSSH {
+		where = strings.TrimSpace(m.cfg.Host)
+	}
+	return styleChipWhere.Render(where) + styleChipActive.Render(string(m.cfg.Collector))
+}
+
+func (m logModel) filterBar() string {
+	chips := m.chips()
 
 	var input string
 	switch {
-	case m.searching && m.queryErr != nil:
-		input = m.search.View() + "  " + styleErr.Render(m.queryErr.Error())
 	case m.searching:
 		input = m.search.View()
 	case m.view.Filter().Query != "":
@@ -469,11 +599,12 @@ func (m logModel) statusText() string {
 
 func (m logModel) footer(entries []*logs.Entry) string {
 	if m.searching {
-		return ansi.Truncate(strings.Join([]string{
-			key("enter", "apply"),
-			key("f1", "syntax"),
-			key("esc", "cancel"),
-		}, styleHint.Render(" · ")), m.width(), "")
+		keys := []string{key("enter", "apply")}
+		if len(m.suggestions()) > 0 {
+			keys = append(keys, key("tab", "complete"), key("↑↓", "pick"))
+		}
+		keys = append(keys, key("f1", "syntax"), key("esc", "cancel"))
+		return ansi.Truncate(strings.Join(keys, styleHint.Render(" · ")), m.width(), "")
 	}
 	help := strings.Join([]string{
 		key("↑↓", "move"),

@@ -133,6 +133,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logs, cmd = m.logs.narrow(msg.term)
 		return m, cmd
 
+	case fieldsMsg:
+		m.logs.takeFields(msg)
+		return m, nil
+
 	case openHelpMsg:
 		m.help = newHelp(m.w, m.h)
 		m.back = m.state
