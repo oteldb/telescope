@@ -23,8 +23,8 @@ about a workspace, re-run it with `GOWORK=off`.
 | package | what lives there |
 | --- | --- |
 | `internal/source` | building and running collectors. `Config` describes a stream; `Command`/`Argv` turn it into a process; `Stream` yields `Line`s. `loki.go`/`victorialogs.go` query over HTTP instead, `merge.go` interleaves several streams, `endpoint.go` holds the HTTP endpoint and its token. |
-| `internal/logs` | what a line means and how it reads. `parse.go` turns JSON into a `Record`, `store.go` renders and retains entries, `filter.go` pairs a parsed query with the level the view cycles, and keeps its incremental `View`, `highlight.go`/`escape.go` decide what reaches the screen. |
-| `internal/ui` | the bubbletea models. `app.go` is the root, `start.go` picks a place or a group, `logview.go` is the list, `entryview.go` one entry, `theme.go` the palette, `rows.go` the row backgrounds. |
+| `internal/logs` | what a line means and how it reads. `parse.go` turns JSON into a `Record`, `record.go`/`labels.go` say what a record and its labels are, `store.go` renders and retains entries, `filter.go` pairs a parsed query with the level the view cycles, and keeps its incremental `View`, `highlight.go`/`escape.go` decide what reaches the screen. |
+| `internal/ui` | the bubbletea models. `app.go` is the root, `start.go` picks a place or a group and `saved.go` is what the config offers it, `logview.go` is the list, `entryview.go` one entry and `entrydoc.go` the rows its cursor walks, `clipboard.go` copies a row and `locate.go`/`open.go` open what one points at, `theme.go` the palette, `rows.go` the row backgrounds, `logo.go` the banner. |
 | `internal/config` | `config.yaml` and `history.yaml`. A `Place` is where logs are read from and how it is reached (`via:` for a command, `proxy:` for a database); a `Group` is several places read as one. `Load` resolves both; `New` does the same for declarations that did not come from a file. |
 | `internal/query` | the filter language: `Parse` builds an `Expr`, `Match` evaluates it against one `Record`. It sits below `source` so a query can be compiled into one a database answers itself. |
 | `internal/complete` | the suggestions the start screen offers, fetched by shelling out. |
@@ -63,6 +63,11 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   through `logs.Sanitize`, attribute values through `logs.Escape`. A background
   laid under a line has to be re-armed after every reset the line contains; see
   `ui.paint`.
+- **What a row draws as and what it carries are two values.** An entry row keeps
+  its rendered form — escaped, wrapped, colored — apart from the key and value
+  as received, because the escaping is for the screen and nowhere else: a path
+  with an escape drawn as `\e` is not a path any editor will open, and a wrapped
+  trace id is not a trace id. Copy, open and narrow all take the raw side.
 - **The gutter is drawn outside the horizontal offset.** The merge tag, the time
   and the level must not scroll away from the line they belong to.
 - **Ordering-sensitive state is computed once, on arrival.** `Entry.Band` is
