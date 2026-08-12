@@ -22,6 +22,14 @@ type entryModel struct {
 	cfg   source.Config
 	entry *logs.Entry
 	off   int
+	// sel is which of the document's pickable items the cursor is on. It counts
+	// items rather than lines so it survives a resize, which rewraps every value
+	// but reorders nothing.
+	sel int
+	// note is what the last copy did, shown until the next key. It is the only
+	// evidence a copy leaves: the clipboard is the terminal's, not ours, and
+	// cannot be read back to confirm.
+	note string
 }
 
 func newEntry(cfg source.Config, e *logs.Entry) entryModel {
@@ -38,31 +46,120 @@ func (m entryModel) bodyHeight() int {
 	return 1
 }
 
+// docWidth is the width a value is wrapped to, inside the frame.
+func (m entryModel) docWidth() int {
+	return max(m.w-2*screenPad-2, 18)
+}
+
 func (m entryModel) Update(msg tea.Msg) (entryModel, tea.Cmd) {
+	if c, ok := msg.(copiedMsg); ok {
+		m.note = c.note()
+		return m, nil
+	}
 	km, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
 	}
+
+	doc := m.document(m.docWidth())
+	sel := picks(doc)
+	m.note = ""
+
 	switch km.String() {
 	case "q":
 		return m, func() tea.Msg { return quitMsg{} }
 	case "esc", "enter", "backspace":
 		return m, func() tea.Msg { return backMsg{} }
 	case "up", "k":
-		m.off = max(0, m.off-1)
+		m.sel = max(0, m.clamp(sel)-1)
 	case "down", "j":
-		m.off++
+		m.sel = min(len(sel)-1, m.clamp(sel)+1)
 	case "pgup":
-		m.off = max(0, m.off-m.bodyHeight())
+		m.sel = m.page(doc, sel, -m.bodyHeight())
 	case "pgdown":
-		m.off += m.bodyHeight()
+		m.sel = m.page(doc, sel, m.bodyHeight())
 	case "home", "g":
-		m.off = 0
+		// To the top of the document, not to the first thing on it that can be
+		// picked: the heading above it is part of what "the top" means.
+		m.sel, m.off = 0, 0
 	case "end", "G":
-		// Clamped against the rendered length in View.
-		m.off = len(m.lines(max(m.w-2*screenPad-2, 18)))
+		m.sel = max(len(sel)-1, 0)
+	case "y":
+		if len(sel) == 0 {
+			return m, nil
+		}
+		it := doc[sel[m.clamp(sel)]]
+		return m, copyCmd(it.key, it.value)
+	case "Y":
+		// The whole entry as it arrived, from wherever the cursor happens to be.
+		return m, copyCmd("entry", string(m.entry.Raw))
+	default:
+		return m, nil
 	}
+	m.off = m.follow(doc, sel)
 	return m, nil
+}
+
+// follow scrolls the frame as little as it can to bring the cursor into it.
+// The frame remembers where it was because the cursor does not travel far: a
+// key that moved it one row should not restack the document around it.
+func (m entryModel) follow(doc []item, sel []int) int {
+	if len(sel) == 0 || len(doc) == 0 {
+		return 0
+	}
+	line := starts(doc)
+	i := sel[m.clamp(sel)]
+	first, last := line[i], line[i]+len(doc[i].lines)-1
+
+	height := m.bodyHeight()
+	total := line[len(doc)-1] + len(doc[len(doc)-1].lines)
+	off := min(m.off, max(total-height, 0))
+	switch {
+	case first < off:
+		off = first
+	case last >= off+height:
+		// A value taller than the frame shows its head, not its tail.
+		off = min(last-height+1, first)
+	}
+	return max(off, 0)
+}
+
+// clamp keeps the cursor on an item that exists. The document is rebuilt on
+// every key, and an entry whose fields arrived late is a shorter document than
+// the one the cursor was last placed in.
+func (m entryModel) clamp(sel []int) int {
+	if len(sel) == 0 {
+		return 0
+	}
+	return min(max(m.sel, 0), len(sel)-1)
+}
+
+// page moves the cursor a screenful, measured in the lines the items draw as
+// rather than in items: a stacktrace is one item and most of a screen, and
+// stepping over it by one would skip a page at a time.
+func (m entryModel) page(doc []item, sel []int, delta int) int {
+	if len(sel) == 0 {
+		return 0
+	}
+	at := m.clamp(sel)
+	line := starts(doc)
+	target := line[sel[at]] + delta
+
+	best := at
+	for i, idx := range sel {
+		if abs(line[idx]-target) < abs(line[sel[best]]-target) {
+			best = i
+		}
+	}
+	// A page that lands nowhere new still has to move, or the key does nothing
+	// at the top and bottom of a document of very tall items.
+	if best == at {
+		if delta < 0 {
+			return max(at-1, 0)
+		}
+		return min(at+1, len(sel)-1)
+	}
+	return best
 }
 
 func (m entryModel) View() string {
@@ -70,122 +167,67 @@ func (m entryModel) View() string {
 		return ""
 	}
 	width := max(m.w-2*screenPad, 20)
-	lines := m.lines(max(width-2, 18))
+	inner := m.docWidth()
 
+	doc := m.document(inner)
+	sel := picks(doc)
+	at := m.clamp(sel)
+
+	var lines []string
+	for i, it := range doc {
+		if len(sel) > 0 && i == sel[at] {
+			for _, l := range it.lines {
+				lines = append(lines, cursorRow(l, inner))
+			}
+			continue
+		}
+		lines = append(lines, it.lines...)
+	}
+
+	// The frame is worked out from the cursor the same way here as it is on a
+	// key, so that a resize that rewraps a value still shows what is selected.
 	height := m.bodyHeight()
-	off := min(m.off, max(len(lines)-height, 0))
+	off := min(m.follow(doc, sel), max(len(lines)-height, 0))
 	window := lines[off:min(off+height, len(lines))]
 	for len(window) < height {
 		window = append(window, "")
 	}
 
-	help := strings.Join([]string{
-		key("↑↓", "scroll"),
+	return padScreen(styleBoxFocus.Width(width).Render(strings.Join(window, "\n")) + "\n" +
+		ansi.Truncate(m.help(), width, ""))
+}
+
+func (m entryModel) help() string {
+	if m.note != "" {
+		return styleOK.Render(m.note)
+	}
+	return strings.Join([]string{
+		key("↑↓", "select"),
+		key("y", "copy"),
+		key("Y", "entry"),
 		key("esc", "back"),
 		key("q", "quit"),
 	}, styleHint.Render(" · "))
-
-	return padScreen(styleBoxFocus.Width(width).Render(strings.Join(window, "\n")) + "\n" +
-		ansi.Truncate(help, width, ""))
 }
 
-// lines renders the entry as a scrollable document.
-func (m entryModel) lines(width int) []string {
-	e := m.entry
-	var out []string
+// copiedMsg reports what a copy did. It is a message rather than a return value
+// because writing to the terminal is not the model's work to do inline.
+type copiedMsg struct {
+	what string
+	err  error
+}
 
-	// The header labels are fixed; the fields bring their own, and the widest
-	// of all of them is what everything lines up on.
-	labels := []string{"received", "source", "level", "trace_id", "span_id", "body"}
-	for _, f := range e.Record.Fields {
-		labels = append(labels, f.Key)
+func (c copiedMsg) note() string {
+	if c.err != nil {
+		return fmt.Sprintf("could not copy: %v", c.err)
 	}
-	origin := m.cfg.SourceLabels(e.Source)
-	for _, l := range origin {
-		labels = append(labels, l.Key)
-	}
-	for _, l := range e.Labels {
-		labels = append(labels, l.Key)
-	}
-	indent := labelColumn(labels, width)
+	return "copied " + c.what
+}
 
-	add := func(label, value string) {
-		if value == "" {
-			return
-		}
-		out = append(out, wrapField(label, value, indent, width))
+func copyCmd(what, value string) tea.Cmd {
+	return func() tea.Msg {
+		return copiedMsg{what: what, err: copyValue(value)}
 	}
-	// A key says what its value is, and a value that is somebody else's bytes
-	// says nothing about how it should be drawn.
-	field := func(key, value string) {
-		add(key, renderValue(key, value))
-	}
-
-	stream := "stdout"
-	if e.Stderr {
-		stream = "stderr"
-	}
-	out = append(out, styleTitle.Render(fmt.Sprintf("entry #%d", e.Seq))+
-		styleDim.Render("  "+stream))
-	out = append(out, "")
-
-	// A time the line was written with, whether it said so itself or the source
-	// said it for the line; failing both, when it turned up here.
-	if e.HasTime {
-		t := e.At.Local()
-		add("time", t.Format(time.RFC3339Nano)+styleDim.Render("  "+humanSince(t)))
-	} else {
-		add("received", e.At.Local().Format(time.RFC3339Nano))
-	}
-	// Which source a line came from, for a merge of several.
-	add("source", e.Source)
-	if e.Record.HasLevel {
-		add("level", renderLevelWord(e.Record.Level))
-	}
-	field("trace_id", e.Record.TraceID)
-	field("span_id", e.Record.SpanID)
-	add("body", logs.Escape(e.Record.Body))
-
-	// Where the whole stream comes from, then what this line brought with it.
-	// A log database says more about a line than the line does, and none of it
-	// fits in the list.
-	section := func(title string, labels []source.Label) {
-		if len(labels) == 0 {
-			return
-		}
-		out = append(out, "", styleTitle.Render(title))
-		for _, l := range labels {
-			out = append(out, wrapField(logs.Escape(l.Key), renderValue(l.Key, l.Value), indent, width))
-		}
-	}
-	section("source", origin)
-	section("labels", e.Labels)
-
-	out = append(out, "")
-	out = append(out, styleTitle.Render("rendered"))
-	// The full rendering, stacktrace and all: this is where it belongs.
-	for l := range strings.SplitSeq(e.Text, "\n") {
-		out = append(out, "  "+ansi.Truncate(l, max(width-2, 1), "…"))
-	}
-
-	if len(e.Record.Fields) > 0 {
-		out = append(out, "", styleTitle.Render("fields"))
-		for _, f := range e.Record.Fields {
-			out = append(out, wrapField(logs.Escape(f.Key), renderValue(f.Key, f.String()), indent, width))
-		}
-	}
-
-	out = append(out, "", styleTitle.Render("raw"))
-	for l := range strings.SplitSeq(prettyJSON(e.Raw), "\n") {
-		// Escaping brings its own color, and dimming it over would put the
-		// escapes back at the mercy of what they escaped.
-		if escaped := logs.Escape(l); escaped != l {
-			out = append(out, "  "+escaped)
-			continue
-		}
-		out = append(out, "  "+styleDim.Render(l))
-	}
-	return out
 }
 
 // Bounds on the label column. It follows the keys an entry actually has, but a
@@ -260,4 +302,11 @@ func humanSince(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }

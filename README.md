@@ -333,13 +333,28 @@ laid under them without disturbing them.
 
 | key | |
 | --- | --- |
-| `↑` `k`, `↓` `j`, `pgup` `pgdown`, `home` `g`, `end` `G` | scroll |
+| `↑` `k`, `↓` `j`, `pgup` `pgdown`, `home` `g`, `end` `G` | select |
+| `y` | copy the selected value |
+| `Y` | copy the whole entry as it arrived |
 | `esc`, `enter`, `backspace` | back |
 | `q`, `ctrl+c` | quit |
 
 The entry is shown whole: its time, level, trace and body, then `source` and
 `labels` (see [Labels](#labels)), the full rendering with its stacktrace, the
 structured fields of the line, and the raw bytes it arrived as.
+
+The cursor moves between those rows rather than between lines, so a value that
+wraps across the frame, and a stacktrace that fills it, are each one thing to
+land on. `y` copies the selected value as it was received: what the screen shows
+is escaped, wrapped and colored, and none of that is wanted anywhere the value
+is going next — a path drawn with `\e` in it opens in no editor. `Y` copies the
+whole entry from wherever the cursor is standing, which is the same value as `y`
+on the `raw` row.
+
+The clipboard is the one on the machine telescope runs on, reached through
+`wl-copy`, `xclip` or `pbcopy` as the session's display calls for. Where there
+is no display — telescope run over ssh on the far side — the value goes to the
+terminal itself with OSC 52, which under tmux needs `set -g set-clipboard on`.
 
 ## Completion
 
