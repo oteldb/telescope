@@ -1,0 +1,44 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+/telescope
+
+# The config and the history telescope itself writes, if a run is pointed at
+# the repo instead of the user's own directories.
+config.yaml
+history.yaml
+
+# goreleaser
+dist
+coverage.txt
+.task
+
+# Editors and agents.
+.idea
+.vscode
+.claude
+.mcp.json
+
+# The sandbox this is developed in overlays a shell profile and its own git and
+# ripgrep config on the working directory. None of it is the project's.
+.bashrc
+.bash_profile
+.profile
+.zshrc
+.zprofile
+.gitconfig
+.ripgreprc
+.gitmodules

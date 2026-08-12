@@ -1,0 +1,113 @@
+version: "2"
+linters:
+  default: standard
+  enable:
+    - dogsled
+    - errcheck
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - nakedret
+    - revive
+    - staticcheck
+    - unconvert
+    - unparam
+    - whitespace
+    - modernize
+  settings:
+    gocritic:
+      disabled-checks:
+        - hugeParam # We don't care about huge parameters much. Too many false positives.
+        - rangeValCopy # We don't care about range copies much. Too many false positives.
+        - unnecessaryBlock # Sometimes we need to use blocks for readability.
+        - ptrToRefParam # Too many false positives.
+        - exitAfterDefer # Too many false positives.
+        # `return m, m.fetch()` is how a bubbletea model returns itself and the
+        # command it wants run. The model is a value, so the order the check
+        # asks for is the one that would be wrong.
+        - evalOrder
+        # A status line built up item by item reads as the list it is; the
+        # separator is the point, not the number of appends.
+        - appendCombine
+        - stringConcatSimplify
+        - unnamedResult
+        # `query`, `logs` and `url` name what the variable holds, which is what
+        # the package they shadow is called. Renaming them says less.
+        - importShadow
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+    gosec: # gosec is annoying and have a lot of false-positive results.
+      excludes:
+        - G115
+        - G117
+        - G118
+        - G703
+        - G704
+        - G705
+        # Opening a path the config names is what a config that names a
+        # kubeconfig or an ssh_config is for.
+        - G304
+        # Running a command the user chose is the whole program: a collector is
+        # a child process, and copy and open hand a row to the tool that takes
+        # it. What may reach an argv is decided in source.Argv and tested there.
+        - G204
+    lll:
+      line-length: 140
+    misspell:
+      locale: US
+    staticcheck:
+      checks:
+        - "*"
+        - "-QF1001" # Suggested simplification via De Morgan's law is not always better.
+        - "-QF1008" # Too much false positives, embedding is fine.
+  exclusions:
+    generated: lax
+    rules:
+      # Disable linters that are annoying in tests.
+      - linters:
+          - dupl
+          - errcheck
+          - funlen
+          - gocognit
+          - goconst
+          - gocyclo
+          - gosec
+          - lll
+          - scopelint
+        path: _test\.go
+      - linters:
+          - revive
+        path: _test\.go
+        text: unused-parameter
+      - linters:
+          - unparam
+        path: _test\.go
+      # A loop that only advances an index over a byte class is the scan; its
+      # body is empty because the condition is the whole of it.
+      - linters:
+          - revive
+        text: empty-block
+      # exported and package-comments are for public library APIs; not required for internal app code.
+      - linters:
+          - revive
+        path: ^(cmd|internal)/
+        text: "exported: "
+      - linters:
+          - revive
+        path: ^(cmd|internal)/
+        text: "package-comments: should have a package comment"
+
+formatters:
+  enable:
+    - goimports
+    - gofumpt
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/oteldb/telescope
