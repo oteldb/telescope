@@ -22,9 +22,9 @@ about a workspace, re-run it with `GOWORK=off`.
 
 | package | what lives there |
 | --- | --- |
-| `internal/source` | building and running collectors. `Config` describes a stream; `Command`/`Argv` turn it into a process; `Stream` yields `Line`s. `loki.go`/`victorialogs.go` query over HTTP instead, `merge.go` interleaves several streams, `endpoint.go` holds the HTTP endpoint and its token. |
-| `internal/logs` | what a line means and how it reads. `parse.go` turns JSON into a `Record`, `record.go`/`labels.go` say what a record and its labels are, `store.go` renders and retains entries, `filter.go` pairs a parsed query with the level the view cycles, and keeps its incremental `View`, `highlight.go`/`escape.go` decide what reaches the screen. |
-| `internal/ui` | the bubbletea models. `app.go` is the root, `start.go` picks a place or a group and `saved.go` is what the config offers it, `logview.go` is the list, `entryview.go` one entry and `entrydoc.go` the rows its cursor walks, `clipboard.go` copies a row and `locate.go`/`open.go` open what one points at, `theme.go` the palette, `rows.go` the row backgrounds, `logo.go` the banner. |
+| `internal/source` | building and running collectors. `Config` describes a stream; `Command`/`Argv` turn it into a process; `Stream` yields `Line`s. `loki.go`/`victorialogs.go` query over HTTP instead, `merge.go` interleaves several streams, `endpoint.go` holds the HTTP endpoint and its token, `fields.go` asks a database what its lines are labeled with, `pushdown.go` is what to ask instead when it will not read the compiled filter. |
+| `internal/logs` | what a line means and how it reads. `parse.go` turns JSON into a `Record`, `record.go`/`labels.go` say what a record and its labels are, `store.go` renders and retains entries and `fields.go` indexes what they were labeled with, `filter.go` pairs a parsed query with the level the view cycles, and keeps its incremental `View`, `highlight.go`/`escape.go` decide what reaches the screen. |
+| `internal/ui` | the bubbletea models. `app.go` is the root, `start.go` picks a place or a group and `saved.go` is what the config offers it, `logview.go` is the list, `entryview.go` one entry and `entrydoc.go` the rows its cursor walks, `clipboard.go` copies a row and `locate.go`/`open.go` open what one points at, `complete.go` finishes what the filter prompt is typing and `help.go` writes the filter language out, `theme.go` the palette, `rows.go` the row backgrounds, `logo.go` the banner. |
 | `internal/config` | `config.yaml` and `history.yaml`. A `Place` is where logs are read from and how it is reached (`via:` for a command, `proxy:` for a database); a `Group` is several places read as one. `Load` resolves both; `New` does the same for declarations that did not come from a file. |
 | `internal/query` | the filter language: `Parse` builds an `Expr`, `Match` evaluates it against one `Record`. It sits below `source` so a query can be compiled into one a database answers itself. |
 | `internal/complete` | the suggestions the start screen offers, fetched by shelling out. |
@@ -53,7 +53,11 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   compiles what it can prove and drops the rest, `logs.Filter` still runs over
   everything that comes back, and only a conjunction may lose a term — an `or`
   branch or a `not` operand would narrow. `Config.Pushed()` is what the view
-  compares to decide whether a filter is worth asking again.
+  compares to decide whether a filter is worth asking again. It follows that a
+  server which will not read what was compiled for it must cost the
+  optimization and not the stream: a 400 is asked again as the place alone and
+  remembered per endpoint, since LogsQL is younger than a lot of the databases
+  running it.
 - **A merge trusts its children to be ordered** and does a k-way merge over
   their heads. Each child may have exactly one line pending — the per-child ack
   channel is what enforces that, not the unbuffered item channel. A source that
