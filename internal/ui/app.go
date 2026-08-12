@@ -24,16 +24,21 @@ const (
 	stateStart state = iota
 	stateLogs
 	stateEntry
+	stateHelp
 )
 
 // Model is the root bubbletea model.
 type Model struct {
 	state state
 	w, h  int
+	// back is the screen the help was opened over, since it can be read from the
+	// list or from the prompt and either is where it should return to.
+	back state
 
 	start startModel
 	logs  logModel
 	entry entryModel
+	help  helpModel
 
 	stream *source.Stream
 }
@@ -63,6 +68,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.start, _ = m.start.Update(msg)
 		m.logs.resize(msg.Width, msg.Height)
 		m.entry.resize(msg.Width, msg.Height)
+		m.help.resize(msg.Width, msg.Height)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -127,8 +133,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logs, cmd = m.logs.narrow(msg.term)
 		return m, cmd
 
+	case openHelpMsg:
+		m.help = newHelp(m.w, m.h)
+		m.back = m.state
+		m.state = stateHelp
+		return m, nil
+
 	case backMsg:
 		switch m.state {
+		case stateHelp:
+			m.state = m.back
 		case stateEntry:
 			m.state = stateLogs
 		case stateLogs:
@@ -149,6 +163,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logs, cmd = m.logs.Update(msg)
 	case stateEntry:
 		m.entry, cmd = m.entry.Update(msg)
+	case stateHelp:
+		m.help, cmd = m.help.Update(msg)
 	}
 	return m, cmd
 }
@@ -160,6 +176,8 @@ func (m Model) View() string {
 		return m.logs.View()
 	case stateEntry:
 		return m.entry.View()
+	case stateHelp:
+		return m.help.View()
 	default:
 		return m.start.View()
 	}
@@ -197,8 +215,10 @@ type (
 
 	initMsg      struct{}
 	openEntryMsg struct{ entry *logs.Entry }
-	backMsg      struct{}
-	quitMsg      struct{}
+	// openHelpMsg opens the filter reference over whatever asked for it.
+	openHelpMsg struct{}
+	backMsg     struct{}
+	quitMsg     struct{}
 )
 
 // saveHistory records what was opened. A failure to write is not worth

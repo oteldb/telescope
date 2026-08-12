@@ -174,6 +174,8 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 		m.search.Focus()
 		m.search.CursorEnd()
 		return m, textinput.Blink
+	case "?":
+		return m, openHelp
 	case "enter":
 		if i := m.cursor; i >= 0 && i < len(entries) {
 			e := entries[i]
@@ -221,6 +223,10 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 
 func (m logModel) updateSearch(km tea.KeyMsg) (logModel, tea.Cmd) {
 	switch km.String() {
+	// A "?" typed into the prompt is a regexp quantifier, so the reference is
+	// reached by a key that could not have been part of a query.
+	case "f1":
+		return m, openHelp
 	case "enter":
 		f := m.view.Filter()
 		f.Query = strings.TrimSpace(m.search.Value())
@@ -465,6 +471,7 @@ func (m logModel) footer(entries []*logs.Entry) string {
 	if m.searching {
 		return ansi.Truncate(strings.Join([]string{
 			key("enter", "apply"),
+			key("f1", "syntax"),
 			key("esc", "cancel"),
 		}, styleHint.Render(" · ")), m.width(), "")
 	}
@@ -472,6 +479,7 @@ func (m logModel) footer(entries []*logs.Entry) string {
 		key("↑↓", "move"),
 		key("enter", "entry"),
 		key("/", "filter"),
+		key("?", "syntax"),
 		key("f", "follow"),
 		key("l", "level"),
 		key("←→", "scroll"),

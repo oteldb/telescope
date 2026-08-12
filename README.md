@@ -253,6 +253,7 @@ whatever was typed — bound it in the command itself.
 | `←` `→` | scroll sideways, `0` resets |
 | `enter` | open the entry |
 | `/` | filter (`enter` applies, `esc` cancels) |
+| `?` | the filter language, written out (`f1` from inside the prompt) |
 | `f` | toggle follow |
 | `l` | cycle minimum level: all, info, warn, error |
 | `esc` | back to the picker |
@@ -315,6 +316,13 @@ came over the wire.
 | `level>=warn reset` | `*:~"(?i)reset"`, the level applied here |
 | `level>=warn or reset` | nothing: the `or` cannot lose a branch |
 
+Because it is only ever an optimization, a database that will not read what was
+compiled for it costs the optimization and not the stream: the `*:filter` form a
+bare word becomes is younger than a lot of the VictoriaLogs running out there,
+and an older one is asked for the place alone instead, once, and remembered.
+The filter still runs over everything that comes back, so the view is the same
+either way.
+
 A query the place itself names bounds all of this: it is sent as written, and
 what the filter adds narrows it further. Loki is sent its selector and nothing
 more — a LogQL line filter reads the line and not the labels beside it, so
@@ -345,6 +353,7 @@ laid under them without disturbing them.
 | `Y` | copy the whole entry as it arrived |
 | `o` | open the selected value: a URL in a browser, a file in `$EDITOR` |
 | `f` | narrow the list by the selected value |
+| `?` | the filter language, written out |
 | `esc`, `enter`, `backspace` | back |
 | `q`, `ctrl+c` | quit |
 

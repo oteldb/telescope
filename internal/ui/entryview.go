@@ -76,6 +76,10 @@ func (m entryModel) Update(msg tea.Msg) (entryModel, tea.Cmd) {
 		return m, func() tea.Msg { return quitMsg{} }
 	case "esc", "enter", "backspace":
 		return m, func() tea.Msg { return backMsg{} }
+	case "?":
+		// Narrowing from a row writes a term in the same language, so the
+		// reference is worth having here too.
+		return m, openHelp
 	case "up", "k":
 		m.sel = max(0, m.clamp(sel)-1)
 	case "down", "j":
@@ -229,6 +233,7 @@ func (m entryModel) help() string {
 		key("Y", "entry"),
 		key("o", "open"),
 		key("f", "filter"),
+		key("?", "syntax"),
 		key("esc", "back"),
 		key("q", "quit"),
 	}, styleHint.Render(" · "))
