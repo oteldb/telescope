@@ -12,6 +12,8 @@ import (
 
 	"github.com/go-faster/errors"
 	"github.com/go-faster/jx"
+
+	"github.com/oteldb/telescope/internal/query"
 )
 
 // Loki API paths, resolved against [Endpoint.URL].
@@ -36,31 +38,49 @@ const (
 // wait out a real interval.
 var lokiPoll = 2 * time.Second
 
-// lokiQuery is the LogQL to run, which is the target as typed.
-func (c Config) lokiQuery() string { return strings.TrimSpace(c.Target) }
+// lokiQuery is the LogQL to run: the view's filter compiled into a stream
+// selector, and whether there is one to compile.
+//
+// A Loki place names nothing of its own. LogsQL has a match-all and a place can
+// stand for the whole database; LogQL has none, and a query without a selector
+// is a parse error rather than everything. So the filter is the query here, and
+// a filter that names no label is not a wider stream but no stream at all — see
+// [startAPI], which will not open one, and [Config.Pushed], which is what tells
+// the view to ask again once there is something to ask.
+func (c Config) lokiQuery() (string, bool) { return query.LogQL(c.Filter) }
 
 // streamLoki reads the history, then polls for what follows it.
 func (c Config) streamLoki(ctx context.Context, out func(Line) bool) error {
+	q, ok := c.lokiQuery()
+	if !ok {
+		return errNoSelector
+	}
 	client := httpClient(c.Endpoint)
-	last, err := c.lokiBackfill(ctx, client, out)
+	last, err := c.lokiBackfill(ctx, client, q, out)
 	if err != nil {
 		return err
 	}
 	if !c.following() {
 		return nil
 	}
-	return c.lokiFollow(ctx, client, last, out)
+	return c.lokiFollow(ctx, client, q, last, out)
 }
+
+// errNoSelector is what a Loki stream is instead of a stream when the filter
+// names no label. It is worded as what to do about it: the view shows it where
+// the lines would have been, and typing a label is what starts them.
+var errNoSelector = errors.New(
+	`loki selects streams by label: filter by one, as in app=api`)
 
 // lokiBackfill emits the last Tail entries and returns the newest timestamp it
 // saw. Loki answers a backward query newest first, so the entries are sorted
 // before being emitted.
-func (c Config) lokiBackfill(ctx context.Context, client *http.Client, out func(Line) bool) (last time.Time, err error) {
+func (c Config) lokiBackfill(ctx context.Context, client *http.Client, q string, out func(Line) bool) (last time.Time, err error) {
 	if c.Tail <= 0 {
 		return time.Time{}, nil
 	}
 	params := url.Values{
-		"query":     {c.lokiQuery()},
+		"query":     {q},
 		"limit":     {strconv.Itoa(c.Tail)},
 		"direction": {"backward"},
 	}
@@ -97,7 +117,7 @@ func (c Config) lokiBackfill(ctx context.Context, client *http.Client, out func(
 //
 // Each poll starts one nanosecond after the newest entry already shown, which
 // is what Loki's own inclusive start bound needs to not repeat it.
-func (c Config) lokiFollow(ctx context.Context, client *http.Client, last time.Time, out func(Line) bool) error {
+func (c Config) lokiFollow(ctx context.Context, client *http.Client, q string, last time.Time, out func(Line) bool) error {
 	if last.IsZero() {
 		// Nothing was backfilled, so the window's own start is where to pick up.
 		last = c.Range.Since
@@ -114,7 +134,7 @@ func (c Config) lokiFollow(ctx context.Context, client *http.Client, last time.T
 		case <-ticker.C:
 		}
 		entries, err := c.lokiRequest(ctx, client, url.Values{
-			"query":     {c.lokiQuery()},
+			"query":     {q},
 			"limit":     {strconv.Itoa(lokiFollowLimit)},
 			"direction": {"forward"},
 			// Inclusive on both ends, so the poll starts just past the newest

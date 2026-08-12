@@ -133,20 +133,38 @@ places:
 	}
 }
 
-// TestLokiPlaceNeedsASelector: Loki selects streams by label and has no
-// match-all, so a place that names none opens the prompt rather than the logs.
-func TestLokiPlaceNeedsASelector(t *testing.T) {
+// TestLokiPlaceIsAnEndpointAndNothingElse: Loki selects streams by label and
+// has no match-all, but the labels are the filter's and the filter is the
+// view's — so the place is the endpoint, and it opens as it stands.
+func TestLokiPlaceIsAnEndpointAndNothingElse(t *testing.T) {
 	cfg, err := loadFrom(write(t, `
 places:
   - name: prod
     type: loki
     url: https://logs.example.com
+    query: app=api
 `))
-	require.NoError(t, err, "it is a place to write a query against, not a mistake")
+	require.NoError(t, err)
 
 	_, ready, err := cfg.Places[0].Stream()
 	require.NoError(t, err)
-	require.False(t, ready)
+	require.True(t, ready)
+	require.Equal(t, "app=api", cfg.Places[0].Query,
+		"which is the filter, and what selects the stream with it")
+}
+
+// TestLokiPlaceHasNoQueryOfItsOwn: LogQL used to be typed into target, and a
+// config that still says so is told where the filter lives now rather than
+// quietly ignored.
+func TestLokiPlaceHasNoQueryOfItsOwn(t *testing.T) {
+	_, err := loadFrom(write(t, `
+places:
+  - name: prod
+    type: loki
+    url: https://logs.example.com
+    target: '{app="api"}'
+`))
+	require.ErrorContains(t, err, "query: app=api")
 }
 
 // TestEndpointScope: a query written for one cluster means nothing against

@@ -18,6 +18,7 @@ import (
 
 	"github.com/oteldb/telescope/internal/complete"
 	"github.com/oteldb/telescope/internal/config"
+	"github.com/oteldb/telescope/internal/query"
 	"github.com/oteldb/telescope/internal/source"
 )
 
@@ -509,7 +510,7 @@ func missingLabel(c source.Collector) string {
 		return "pick a container"
 	case source.CollectorCommand:
 		return "type a command"
-	case source.CollectorVictoriaLogs, source.CollectorLoki:
+	case source.CollectorVictoriaLogs:
 		return "type a query"
 	default:
 		return "pick a unit"
@@ -988,11 +989,23 @@ func (m *startModel) input() *textinput.Model {
 		return &m.kubecontext
 	case m.step == stepCollector && m.detail == detailEndpoint:
 		return &m.endpointURL
+	case m.filtersInPlace():
+		return &m.query
 	case m.step == stepCollector, m.step == stepGroup:
 		return &m.target
 	default:
 		return &m.query
 	}
+}
+
+// filtersInPlace reports whether the step on screen is already typing the
+// filter, because the source has no target to be asked for.
+//
+// Loki is the one: it selects streams by label and has no match-all, so what
+// would be its query is the filter compiled into one, and a second step asking
+// for the same words would be asking twice.
+func (m startModel) filtersInPlace() bool {
+	return m.step == stepCollector && m.collectorAt() == source.CollectorLoki
 }
 
 // kubectlSelected reports whether the kubeconfig applies to the current choice.
@@ -1034,8 +1047,12 @@ func (m *startModel) syncPlaceholder() {
 		m.target.Placeholder = "any command writing logs to stdout"
 	case source.CollectorVictoriaLogs:
 		m.target.Placeholder = "LogsQL, e.g. level:error _time:5m"
-	case source.CollectorLoki:
-		m.target.Placeholder = `LogQL, e.g. {app="api"} |= "error"`
+	}
+	// Loki is filtered rather than queried, and the filter has to name a label:
+	// there is no stream until it does.
+	m.query.Placeholder = "grep term or regexp, empty for everything"
+	if collector == source.CollectorLoki {
+		m.query.Placeholder = "app=api — a label selects the stream, then anything else narrows it"
 	}
 }
 
@@ -1055,9 +1072,24 @@ func (m startModel) config() source.Config {
 	cfg.KubeConfig = strings.TrimSpace(m.kubeconfig.Value())
 	cfg.KubeContext = strings.TrimSpace(m.kubecontext.Value())
 
+	// What the filter compiles to is part of what will be asked, so the command
+	// preview shows the query as it is typed rather than after it is opened.
+	cfg = cfg.WithFilter(m.filter())
+
 	// The filter terms narrowed the list; what is left, plus whatever the terms
 	// named, is the target itself.
 	return cfg.WithTarget(complete.Target(m.target.Value(), cfg.Collector))
+}
+
+// filter is the query typed at the prompt, parsed. One that does not parse is
+// no filter yet: the view it opens says so, and the preview above says nothing
+// rather than guessing.
+func (m startModel) filter() query.Expr {
+	e, err := query.Parse(strings.TrimSpace(m.query.Value()))
+	if err != nil {
+		return nil
+	}
+	return e
 }
 
 func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
@@ -1294,7 +1326,9 @@ func (m startModel) advance() (startModel, tea.Cmd) {
 		query := strings.TrimSpace(m.query.Value())
 		return m, func() tea.Msg { return connectMsg{cfg: cfg, query: query} }
 	}
-	if m.step < stepQuery {
+	// Loki typed its filter at the collector step, since it has nothing else to
+	// be asked; there is no query step left to walk into.
+	if m.step < stepQuery && !m.filtersInPlace() {
 		m.step++
 		m.detail = detailNone
 		m.err = nil
@@ -1525,7 +1559,7 @@ func (m startModel) help() string {
 			key("esc", "quit"),
 		}, styleHint.Render(" · "))
 	}
-	if m.step == stepQuery && m.detail == detailNone {
+	if (m.step == stepQuery || m.filtersInPlace()) && m.detail == detailNone {
 		parts := []string{
 			key("enter", "open logs"),
 			key("esc", m.escLabel()),
@@ -1534,6 +1568,11 @@ func (m startModel) help() string {
 		}
 		if rangeSupported(m.collectorAt()) {
 			parts = append(parts, key("ctrl+g", "range "+m.timeRange().Label()))
+		}
+		// The endpoint is chosen at this step for a source that has no other,
+		// and there is no later step to reach it from.
+		if m.filtersInPlace() {
+			parts = append(parts, key("ctrl+e", "endpoint "+endpointLabel(m.endpoint())))
 		}
 		return strings.Join(parts, styleHint.Render(" · "))
 	}

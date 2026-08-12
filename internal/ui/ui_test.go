@@ -1347,6 +1347,29 @@ func TestFilteringADatabaseAsksItAgain(t *testing.T) {
 	require.Contains(t, ansi.Strip(screen(t, m)), "requerying")
 }
 
+// TestFilteringLokiIsWhatOpensIt: Loki reads nothing until the filter names a
+// label, and the filter is where that is typed — the same prompt that narrows
+// every other source is what starts this one.
+func TestFilteringLokiIsWhatOpensIt(t *testing.T) {
+	cfg := source.Config{
+		Collector: source.CollectorLoki,
+		Endpoint:  source.Endpoint{Name: "prod", URL: "https://logs.example.com"},
+		Follow:    true,
+	}
+	m := send(t, New(), size(), connectMsg{cfg: cfg})
+	require.Equal(t, []string{""}, m.(Model).logs.cfg.Pushed(), "nothing has been asked")
+
+	m = send(t, m, k("/"))
+	m = typed(t, m, "app=api error")
+	m = send(t, m, k("enter"))
+
+	logs := m.(Model).logs
+	require.Equal(t, []string{`{app=~"(?i)api"}`}, logs.cfg.Pushed(),
+		"the label selects the stream; the word is not a label and stays here")
+	require.Equal(t, "app=api error", logs.view.Filter().Query)
+	require.Contains(t, ansi.Strip(screen(t, m)), "requerying")
+}
+
 // TestFilteringACommandDoesNotAskItAgain: nothing can be pushed into docker
 // logs, so filtering stays where it is and the lines already read stay too.
 func TestFilteringACommandDoesNotAskItAgain(t *testing.T) {
@@ -1512,8 +1535,8 @@ func withEndpoints(t *testing.T, places []config.Place) {
 }
 
 // TestEndpointOpensFromTheStartScreen: a log database is a place like any
-// other, so it is offered in the same list. LogsQL has a match-all and opens as
-// it stands; LogQL has none, so Loki lands on the query it was missing.
+// other, so it is offered in the same list, and an endpoint is the whole of
+// what either kind names.
 func TestEndpointOpensFromTheStartScreen(t *testing.T) {
 	withEndpoints(t, []config.Place{
 		{Name: "prod", Type: "victorialogs", URL: "https://grafana.example.com/api/datasources/proxy/uid/abc"},
@@ -1526,18 +1549,50 @@ func TestEndpointOpensFromTheStartScreen(t *testing.T) {
 	require.Contains(t, out, "prod")
 	require.Contains(t, out, "grafana.example.com / abc", "the datasource uid tells two apart")
 	require.Contains(t, out, "staging")
-	require.Contains(t, out, "type a query")
 
 	m = send(t, m, k("down"), k("down"), k("enter"))
-	start := m.(Model).start
-	require.Equal(t, stepCollector, start.step)
-	require.Equal(t, source.CollectorLoki, start.collectorAt())
-	require.Equal(t, "staging", start.endpoint().Name)
-	require.Contains(t, screen(t, m), "LogQL", "the prompt asks for a query")
+	require.Equal(t, stateLogs, m.(Model).state,
+		"a place that names an endpoint says everything it has to")
+	require.Contains(t, screen(t, m), "filter by a label to select a stream",
+		"and Loki says what it still needs, above the lines it has none of")
+}
 
-	// A query is written, not listed, so the endpoint is never probed.
-	_, ok := start.request()
-	require.False(t, ok)
+// TestLokiIsFilteredRatherThanQueried: LogQL is compiled from the filter, so
+// the step that would ask a Loki place for a target asks for the filter, and
+// there is no second step behind it.
+func TestLokiIsFilteredRatherThanQueried(t *testing.T) {
+	withEndpoints(t, []config.Place{
+		{Name: "staging", Type: "loki", URL: "https://staging.example.com"},
+	})
+
+	// Past the saved list, then along the chips to loki, which is last, and
+	// which asks where to reach before anything else.
+	m := send(t, New(), size(), k("tab"))
+	for range collectors {
+		if m.(Model).start.collectorAt() == source.CollectorLoki {
+			break
+		}
+		m = send(t, m, k("tab"))
+	}
+	require.Equal(t, detailEndpoint, m.(Model).start.detail)
+	m = typed(t, m, "staging")
+	m = send(t, m, k("enter"))
+
+	start := m.(Model).start
+	require.Equal(t, source.CollectorLoki, start.collectorAt())
+	require.Equal(t, detailNone, start.detail)
+	require.Equal(t, &start.query, start.input(), "the prompt is the filter itself")
+	require.Contains(t, screen(t, m), "a label selects the stream")
+	require.Contains(t, screen(t, m), "open logs", "and enter opens rather than advancing")
+
+	// A filter that names a label is the query, and it shows as one.
+	m = typed(t, m, "app=api")
+	require.Contains(t, screen(t, m), `logql '{app=~"(?i)api"}'`)
+
+	m = send(t, m, k("enter"))
+	require.Equal(t, stateLogs, m.(Model).state)
+	require.Equal(t, []string{`{app=~"(?i)api"}`}, m.(Model).logs.cfg.Pushed(),
+		"and the stream is opened on it rather than on everything")
 }
 
 // TestEndpointIsPickedFromAList: with more endpoints than fit a row of chips,

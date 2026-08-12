@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/oteldb/telescope/internal/query"
 )
 
 // lokiResult renders a streams response the way Loki answers a log query.
@@ -44,14 +46,23 @@ func lokiResult(streams ...[][2]string) string {
 // at renders a nanosecond timestamp the way Loki writes one.
 func at(sec int) string { return strconv.FormatInt(time.Unix(int64(sec), 0).UnixNano(), 10) }
 
+// lokiConfig is a place read through the filter that selects its stream, which
+// is the only way a Loki place is ever opened.
 func lokiConfig(url string, follow bool) Config {
 	return Config{
 		Collector: CollectorLoki,
 		Endpoint:  Endpoint{Name: "prod", URL: url, Collector: CollectorLoki},
-		Target:    `{app="api"}`,
 		Tail:      100,
 		Follow:    follow,
+	}.WithFilter(mustParse(`app=api`))
+}
+
+func mustParse(s string) query.Expr {
+	e, err := query.Parse(s)
+	if err != nil {
+		panic(err)
 	}
+	return e
 }
 
 // TestLokiBackfill: Loki answers a backward query newest first and one list per
@@ -74,7 +85,7 @@ func TestLokiBackfill(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, []string{"first", "second", "third", "fourth"}, lines)
-	require.Equal(t, `{app="api"}`, got.Get("query"))
+	require.Equal(t, `{app=~"(?i)api"}`, got.Get("query"))
 	require.Equal(t, "100", got.Get("limit"))
 	require.Equal(t, "backward", got.Get("direction"))
 	require.NotEmpty(t, got.Get("since"), "a line count is not a time range, and Loki needs one")
@@ -139,21 +150,21 @@ func TestLokiFollowResumes(t *testing.T) {
 		"and each one after it moves on")
 }
 
-func TestLokiValidate(t *testing.T) {
+// TestLokiOpensOnWhatTheFilterSelects: a Loki place names nothing of its own,
+// and what it can be opened with is whatever the filter compiles to.
+func TestLokiOpensOnWhatTheFilterSelects(t *testing.T) {
 	cfg := lokiConfig("https://logs.example.com", true)
 	require.NoError(t, cfg.Validate())
+	require.Equal(t, `loki://prod · logql '{app=~"(?i)api"}'`, cfg.Title())
 
-	// A LogQL query without a stream selector is a parse error from the server,
-	// so it is worth catching before the request.
-	bare := cfg
-	bare.Target = "error"
-	require.ErrorContains(t, bare.Validate(), "stream selector")
-
-	empty := cfg
-	empty.Target = " "
-	require.ErrorContains(t, empty.Validate(), "LogQL")
-
-	require.Equal(t, `loki://prod · logql '{app="api"}'`, cfg.Title())
+	// A filter that selects no stream is not a wider query here but no query,
+	// and Loki is not asked one.
+	bare := lokiConfig("https://logs.example.com", true).WithFilter(mustParse("error"))
+	require.NoError(t, bare.Validate(), "the place itself is still a place")
+	_, err := Start(t.Context(), bare)
+	require.ErrorIs(t, err, errNoSelector)
+	require.Equal(t, []string{""}, bare.Pushed(),
+		"so the view knows it has asked for nothing yet")
 }
 
 // TestLokiTenant: Loki spells its tenant differently from VictoriaLogs.

@@ -10,6 +10,14 @@ import (
 // error. What differs is that there is nothing to kill, so closing is the
 // context alone.
 func startAPI(ctx context.Context, cfg Config) (*Stream, error) {
+	// Refused here rather than reported as an error the stream ends with, so a
+	// merge draws it where that place's lines would have been and keeps reading
+	// the rest.
+	if cfg.Collector == CollectorLoki {
+		if _, ok := cfg.lokiQuery(); !ok {
+			return nil, errNoSelector
+		}
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	s := &Stream{
 		cfg:    cfg,

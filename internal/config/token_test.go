@@ -91,7 +91,6 @@ places:
   - name: argv
     type: loki
     url: https://logs.example.com
-    target: '{app="api"}'
     token:
       exec: ["sh", "-c", "printf 'argv token' | cut -d' ' -f1"]
 `))

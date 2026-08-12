@@ -31,7 +31,7 @@ it, and what it takes to be let in.
 | `docker` | a container |
 | `command` | anything writing to stdout |
 | `victorialogs` | a [VictoriaLogs](https://docs.victoriametrics.com/victorialogs/) query, over HTTP |
-| `loki` | a [Loki](https://grafana.com/oss/loki/) query, over HTTP |
+| `loki` | a [Loki](https://grafana.com/oss/loki/) endpoint, over HTTP; the filter selects the stream |
 
 The first four run a command, on this machine unless the place is reached over
 ssh (`ctrl+o`, or `via: ssh://host` in the config file) — then every one of them
@@ -114,11 +114,17 @@ in place of its lines: a group of four environments is not as available as its
 worst one.
 
 What a place must name is the API's rule rather than telescope's: `kubectl`
-cannot stream without a pod or a selector, `docker` without a container, and
-Loki without a stream selector. `journalctl` with no unit is the whole journal,
-and LogsQL has a match-all, so a VictoriaLogs place needs nothing at all — which
-is what lets a group of four regions be four lines with no query written
-anywhere. The query is then typed once, into the view.
+cannot stream without a pod or a selector, and `docker` without a container.
+`journalctl` with no unit is the whole journal, and LogsQL has a match-all, so a
+VictoriaLogs place needs nothing at all — which is what lets a group of four
+regions be four lines with no query written anywhere. The query is then typed
+once, into the view.
+
+Loki is the one place where that view filter is not optional. It has no
+match-all: every query selects streams by label, so until the filter names one
+there is nothing to ask, and telescope reads nothing rather than reading
+everything. A Loki place is therefore just an endpoint, and `app=api` typed at
+the filter is what opens it.
 
 A group cannot stop to ask once per place, but it can ask once. When the places
 it names leave the same thing open — four clusters and no pod on any of them —
@@ -143,8 +149,8 @@ The same deployment usually has the same name on every cluster, which is the
 whole reason this is one question rather than four. A place that already names
 its own target keeps it and is not asked about, so a group may mix the two. What
 a group cannot do is ask for two different things at once: places that leave
-different kinds of thing open — a pod on one and a LogQL selector on another —
-are a mistake in the file, since one answer cannot be both.
+different kinds of thing open — a pod on one and a container on another — are a
+mistake in the file, since one answer cannot be both.
 
 ### Labels
 
@@ -331,10 +337,16 @@ and an older one is asked for the place alone instead, once, and remembered.
 The filter still runs over everything that comes back, so the view is the same
 either way.
 
-A query the place itself names bounds all of this: it is sent as written, and
-what the filter adds narrows it further. Loki is sent its selector and nothing
-more — a LogQL line filter reads the line and not the labels beside it, so
-pushing one there would drop lines this filter keeps.
+A LogsQL query the place itself names bounds all of this: it is sent as written,
+and what the filter adds narrows it further.
+
+Loki is asked the other way round. There is no query but the filter, and what
+reaches the server is its label comparisons compiled into a stream selector:
+`app=api pod!=api-7 error` is sent as `{app=~"(?i)api", pod!~"(?i)api-7"}`, and
+`error` stays here. A word is not pushed down because a LogQL line filter reads
+the line and not the labels beside it, and here a word matches both. Change the
+filter to name a different label and the stream is opened again on it; change
+only the words and it is not, since the server was never asked them.
 
 `l` cycles the minimum level over what a line says about itself and what its
 source said for it, so a Loki view filters by `detected_level` even though no
@@ -528,7 +540,7 @@ for nothing; see [Merging](#merging).
 | `unit` | | systemd unit, `user/` prefix accepted |
 | `user_unit` | `false` | read the user journal |
 | `namespace` | | Kubernetes namespace |
-| `target` | | pod name or label selector, `ns/pod:container` accepted; the query for a database |
+| `target` | | pod name or label selector, `ns/pod:container` accepted; the LogsQL query for VictoriaLogs |
 | `container` | | container, for kubectl or docker |
 | `kubeconfig` | | passed as `--kubeconfig` |
 | `context` | | passed as `--context` |
@@ -544,7 +556,7 @@ for nothing; see [Merging](#merging).
 | `range` | | the window read: `1h`, `today`, `6h..1h`; see [Time range](#time-range) |
 | `tail` | `1000` | lines of history, `0` for all |
 | `follow` | `true` | keep streaming |
-| `query` | | pre-fills the filter |
+| `query` | | pre-fills the filter, which is also what selects a Loki stream |
 
 A group takes `name`, `places`, and the same `range`, `tail`, `follow` and
 `query` — which belong to the view it opens rather than to any place in it.
@@ -566,7 +578,9 @@ every query — the URL, the datasource, the tenant and the credential — is
 declared once, so a second query against it costs three lines and no secret.
 
 A VictoriaLogs place needs no query at all, since LogsQL has a match-all; give
-one only when it is worth a name of its own.
+one only when it is worth a name of its own. A Loki place takes no `target`: its
+query is compiled from the filter, so what it pins is written under `query`,
+which is the filter every kind of place pre-fills.
 
 ```yaml
 places:
@@ -587,15 +601,15 @@ places:
     token:
       exec: secret-tool lookup service telescope account staging
 
-  # The database itself, with no Grafana in front of it, and a query worth
-  # keeping.
+  # The database itself, with no Grafana in front of it, and the filter that
+  # selects the stream worth keeping.
   - name: prod api
     type: loki
     url: http://127.0.0.1:3100
-    target: '{app="api"}'
+    query: app=api
 ```
 
-Queries are remembered per database and offered back there.
+LogsQL queries are remembered per database and offered back there.
 
 `ctrl+e` picks the endpoint from all the declared ones that speak the chosen
 database — a list, filtered as you type, not a chip per endpoint, since a
@@ -647,15 +661,21 @@ neither the config nor any group that does not name it.
 The proxy comes from the environment, so an endpoint reachable only through
 `HTTPS_PROXY` or `ALL_PROXY=socks5h://…` needs nothing further.
 
-The target is the query, in that database's own language, **sent as written**.
-LogsQL has a match-all, so an empty one tails everything the endpoint has — the
-way a journal with no unit named does. LogQL has none: Loki selects streams by
-label, and a query without a selector is a parse error from the server.
-`field:value` there belongs to [LogsQL][logsql], not to telescope's own filter,
-and no compact syntax is compiled into [LogQL][logql]: label names are whatever
-the shipper wrote them as — `k8s_namespace_name` as readily as `namespace` — so
-translating them would be a guess. `tail` becomes the query's limit, the time
-range its bounds, and `follow` keeps it open.
+For VictoriaLogs the target is the query, in [LogsQL][logsql], **sent as
+written**; `field:value` there belongs to that language and not to telescope's
+own filter. It has a match-all, so an empty one tails everything the endpoint
+has — the way a journal with no unit named does.
+
+Loki has no target. [LogQL][logql] has no match-all, and a query without a
+stream selector is a parse error from the server, so writing one by hand would
+mean writing it before there is anything to see; instead the filter's label
+comparisons are compiled into the selector, and nothing is asked until they say
+something. Only comparisons are: label names are whatever the shipper wrote them
+as, so `service_name=api` selects and `service.name=api` does not — Loki's names
+are Prometheus' names, and rewriting the dot would be a guess.
+
+`tail` becomes the query's limit, the time range its bounds, and `follow` keeps
+it open.
 
 | | VictoriaLogs | Loki |
 | --- | --- | --- |

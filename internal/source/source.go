@@ -130,15 +130,11 @@ func (c Config) Validate() error {
 		if err := c.Endpoint.ProxyError(); err != nil {
 			return err
 		}
-		// LogsQL has a match-all, so a query is optional there. Loki has none:
-		// every query selects streams by label, and one without a selector is a
-		// parse error from the server.
-		if c.Collector == CollectorLoki && !strings.Contains(c.Target, "{") {
-			if strings.TrimSpace(c.Target) == "" {
-				return fmt.Errorf("loki requires a LogQL query, as in {app=\"api\"}")
-			}
-			return fmt.Errorf("LogQL needs a stream selector, as in {app=\"api\"}")
-		}
+		// Neither names a query of its own beyond the endpoint: LogsQL has a
+		// match-all, and LogQL is compiled from the filter, which belongs to
+		// the view and not to the place. What a Loki stream cannot open without
+		// is a label to select by, and that is [startAPI]'s to refuse, since
+		// the filter changes while the place does not.
 	case CollectorKubectl:
 		if strings.TrimSpace(c.Target) == "" {
 			return fmt.Errorf("kubectl requires a pod, a resource such as deploy/name, or a label selector")
@@ -236,6 +232,11 @@ func (c Config) Pushed() []string {
 		return out
 	case CollectorVictoriaLogs:
 		return []string{c.vlogsQuery()}
+	case CollectorLoki:
+		// The empty string when the filter names no label, which is how a view
+		// with nothing to ask yet tells itself apart from one that has asked.
+		q, _ := c.lokiQuery()
+		return []string{q}
 	default:
 		return []string{""}
 	}
@@ -251,7 +252,11 @@ func (c Config) Command() string {
 	case CollectorVictoriaLogs:
 		return "logsql " + Quote(c.vlogsQuery())
 	case CollectorLoki:
-		return "logql " + Quote(c.lokiQuery())
+		q, ok := c.lokiQuery()
+		if !ok {
+			return "logql — filter by a label to select a stream"
+		}
+		return "logql " + Quote(q)
 	case CollectorJournal:
 		args := []string{"journalctl"}
 		if c.UserUnit {

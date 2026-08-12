@@ -191,6 +191,13 @@ func (p Place) validateHTTP() error {
 	if strings.TrimSpace(p.URL) == "" {
 		return errors.Errorf("%s requires a url", p.Type)
 	}
+	// LogQL was written here once. It is compiled from the filter now, so a
+	// place that still names one is told where the filter lives rather than
+	// opened on a query nothing reads.
+	if p.Collector() == source.CollectorLoki && strings.TrimSpace(p.Target) != "" {
+		return errors.New(
+			"loki has no query of its own: filter by a label instead, as in query: app=api")
+	}
 	if strings.TrimSpace(p.Via) != "" {
 		return errors.Errorf(
 			"%s is reached over HTTP, not over %q: name a proxy instead", p.Type, p.Via)

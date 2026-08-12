@@ -77,11 +77,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case connectMsg:
-		m.logs = newLogs(msg.cfg, logs.NewStore(storeLimit), msg.query)
+		// The filter the view opens with is part of what the sources are asked,
+		// not something they learn about on the first keystroke: a place opened
+		// on a query has already been narrowed by it.
+		cfg := msg.cfg.WithFilter(logs.Filter{Query: msg.query}.Compile().Expr())
+		m.logs = newLogs(cfg, logs.NewStore(storeLimit), msg.query)
 		m.logs.resize(m.w, m.h)
 		m.state = stateLogs
 		m.start.history.Remember(msg.cfg)
-		return m, tea.Batch(startStream(msg.cfg), saveHistory(m.start.history))
+		return m, tea.Batch(startStream(cfg), saveHistory(m.start.history))
 
 	case requeryMsg:
 		// The sources are asked the new query and the view is rebuilt from what

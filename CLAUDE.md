@@ -45,9 +45,9 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   says about itself, else when it arrived.** `Entry.HasTime` is the difference
   between the first two and the last, and only the first two are worth showing.
 - **What a place must name is the API's rule, not ours.** `kubectl` cannot
-  stream without a pod or a selector, `docker` without a container, Loki without
-  a stream selector; `journalctl` and VictoriaLogs need nothing. That is the
-  whole of what a `Group` may name, and why one can be four regions and no
+  stream without a pod or a selector, `docker` without a container;
+  `journalctl`, VictoriaLogs and Loki need nothing but where to read. That is
+  the whole of what a `Group` may name, and why one can be four regions and no
   query.
 - **Pushing a query down is an optimization, never an answer.** `query.LogsQL`
   compiles what it can prove and drops the rest, `logs.Filter` still runs over
@@ -58,6 +58,12 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   optimization and not the stream: a 400 is asked again as the place alone and
   remembered per endpoint, since LogsQL is younger than a lot of the databases
   running it.
+- **Loki is the exception, and only because LogQL has no match-all.**
+  `query.LogQL` compiles the filter's label comparisons into a stream selector
+  and nothing else — a bare word matches labels here and only the line there —
+  and a filter that compiles to none is no query rather than a wide one, so
+  `startAPI` refuses to open the stream. Everything above still holds: a term
+  it cannot say is dropped, and the view filters what comes back.
 - **A merge trusts its children to be ordered** and does a k-way merge over
   their heads. Each child may have exactly one line pending — the per-child ack
   channel is what enforces that, not the unbuffered item channel. A source that
