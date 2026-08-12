@@ -172,6 +172,17 @@ type startModel struct {
 	cache map[string]cacheEntry
 	// inflight tracks requests already asked for, including preloads.
 	inflight map[string]bool
+
+	// fields is what the database said its lines are labeled with, keyed by the
+	// field whose values were asked for and by "" for the names themselves, and
+	// asked is what has already been requested, answered or not. They belong to
+	// the step that types a filter rather than a target; see [startModel.at].
+	fields map[string][]string
+	asked  map[string]bool
+	// at is where in the filter the suggestions are being offered, which is
+	// what an accepted one replaces from. A filter is completed a term at a
+	// time, unlike a target, where the suggestion is the whole value.
+	at completion
 }
 
 // cacheEntry is one completed lookup, successful or not.
@@ -693,8 +704,9 @@ func (m *startModel) fetch() tea.Cmd {
 	reqs := m.requests()
 	if len(reqs) == 0 {
 		// Nothing to list, which is not the same as nothing to show: a step
-		// with no listing still offers what was used here before, and the
-		// range offers the windows worth reaching for.
+		// with no listing still offers what was used here before, the range
+		// offers the windows worth reaching for, and a filter over a database
+		// offers what that database says its lines are labeled with.
 		m.candKeys, m.loading = nil, false
 		switch m.detail {
 		case detailRange:
@@ -703,7 +715,7 @@ func (m *startModel) fetch() tea.Cmd {
 			m.candidates = m.endpointCandidates()
 		}
 		m.refilter()
-		return m.preload()
+		return tea.Batch(m.preload(), m.askAtCursor())
 	}
 
 	m.candKeys = requestKeys(reqs)
@@ -847,9 +859,12 @@ var fetcher = complete.Fetch
 // refilter narrows the suggestions to what has been typed, with the values
 // this machine reached for before floated to the top.
 func (m *startModel) refilter() {
-	if m.step == stepSaved {
+	switch {
+	case m.step == stepSaved:
 		m.filtered, m.savedIdx = m.filterSaved(m.input().Value())
-	} else {
+	case m.filtersInPlace() && m.detail == detailNone:
+		m.at, m.filtered = m.suggestFilter()
+	default:
 		m.filtered = complete.Rank(withRecent(m.candidates, m.recent()), m.narrowing(), m.attr())
 	}
 	if m.sel >= len(m.filtered) {
@@ -960,16 +975,28 @@ func withRecent(items []complete.Candidate, recent []string) []complete.Candidat
 	return out
 }
 
-// accept inserts the highlighted suggestion.
-func (m *startModel) accept() {
+// accept inserts the highlighted suggestion, and asks about whatever the cursor
+// lands in as a result.
+func (m *startModel) accept() tea.Cmd {
 	if m.sel < 0 || m.sel >= len(m.filtered) {
-		return
+		return nil
 	}
 	in := m.input()
-	in.SetValue(m.filtered[m.sel].Value)
-	in.CursorEnd()
+	// A target is the whole value; a filter is one term of several, so what is
+	// accepted there replaces the term being typed and nothing around it.
+	if m.filtersInPlace() && m.detail == detailNone {
+		value, pos := m.at.apply(in.Value(), m.filtered[m.sel].Value, m.at.Key == "")
+		in.SetValue(value)
+		in.SetCursor(pos)
+	} else {
+		in.SetValue(m.filtered[m.sel].Value)
+		in.CursorEnd()
+	}
 	m.sel = -1
 	m.refilter()
+	// Accepting a name leaves the cursor after the comparison, where the values
+	// under it are what is wanted next.
+	return m.askAtCursor()
 }
 
 // input returns the text input backing the current step.
@@ -1081,6 +1108,17 @@ func (m startModel) config() source.Config {
 	return cfg.WithTarget(complete.Target(m.target.Value(), cfg.Collector))
 }
 
+// fieldsConfig is the place whose labels are being listed: what is on screen,
+// with no filter on it.
+//
+// The filter is left off because a database is asked what it holds and not what
+// this filter would select, and because the question has to keep its identity
+// while the answer is in flight: a config that changed with every keystroke
+// would be a new question on every keystroke.
+func (m startModel) fieldsConfig() source.Config {
+	return m.config().WithFilter(nil)
+}
+
 // filter is the query typed at the prompt, parsed. One that does not parse is
 // no filter yet: the view it opens says so, and the preview above says nothing
 // rather than guessing.
@@ -1148,8 +1186,7 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 				return m, m.fetch()
 			}
 			if m.sel >= 0 {
-				m.accept()
-				return m, nil
+				return m, m.accept()
 			}
 			if m.choices() > 0 {
 				return m, m.cycle(1)
@@ -1223,8 +1260,7 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 				return m.openSaved(m.savedIdx[max(m.sel, 0)])
 			}
 			if m.sel >= 0 {
-				m.accept()
-				return m, nil
+				return m, m.accept()
 			}
 			if m.detail != detailNone {
 				// A window that does not read as one is worth saying so before
@@ -1269,11 +1305,17 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 	if !m.active() {
 		return m, nil
 	}
-	before := m.input().Value()
+	before, at := m.input().Value(), m.input().Position()
 	var cmd tea.Cmd
 	*m.input(), cmd = m.input().Update(msg)
-	if m.input().Value() != before {
+	switch {
+	case m.input().Value() != before:
 		m.sel = -1
+		m.refilter()
+		cmd = tea.Batch(cmd, m.askAtCursor())
+	case m.filtersInPlace() && m.input().Position() != at:
+		// Which term of a filter the cursor stands in is what decides what is
+		// being completed, so moving it is as much a change as typing.
 		m.refilter()
 	}
 	return m, cmd
@@ -1865,9 +1907,9 @@ func (m startModel) hints() string {
 			}
 		case source.CollectorLoki:
 			lines = []string{
-				`{app="api"}                        a stream selector is required`,
-				`{namespace="oteldb"} |= "error"`,
-				`{app="api"} | json | duration > 1s LogQL, sent as written`,
+				"app=api                            a label selects the stream",
+				"namespace=oteldb error             anything else narrows it here",
+				"pod~/api-/ level>=warn",
 			}
 		}
 	case stepQuery:

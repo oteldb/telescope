@@ -481,10 +481,20 @@ remote node lists that node's units and containers.
 | container | `docker ps -a` |
 | kubeconfig | the usual paths, plus whatever you type |
 | context | `kubectl config get-contexts` of the chosen kubeconfig |
+| label | `/loki/api/v1/labels` of the chosen endpoint, and `/label/<name>/values` once one is named |
 
 Results are cached for the session and preloaded ahead of use; `ctrl+r` forces
 a refresh. Hosts, kubeconfigs and targets you have opened before are offered
 first.
+
+The Loki step is the exception to the shape of all this: what it completes is
+the filter, so the suggestions are a term at a time rather than the whole value.
+The names are offered as soon as the endpoint is known, `tab` on one writes the
+`=` after it, and the values under that name are asked for and offered next —
+the same completion the filter prompt gives once the view is open, at the step
+that decides what the view will hold. A database that will not list its labels
+costs the suggestions and nothing else; the examples take their place, and the
+filter is typed either way.
 
 ## Configuration
 

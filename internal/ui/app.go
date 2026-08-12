@@ -138,6 +138,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case fieldsMsg:
+		// Both prompts complete by what a database says it is labeled with, and
+		// the one in front of the user is the one that asked.
+		if m.state == stateStart {
+			m.start.takeFields(msg)
+			return m, nil
+		}
 		m.logs.takeFields(msg)
 		return m, nil
 

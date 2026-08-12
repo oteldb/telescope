@@ -1557,16 +1557,15 @@ func TestEndpointOpensFromTheStartScreen(t *testing.T) {
 		"and Loki says what it still needs, above the lines it has none of")
 }
 
-// TestLokiIsFilteredRatherThanQueried: LogQL is compiled from the filter, so
-// the step that would ask a Loki place for a target asks for the filter, and
-// there is no second step behind it.
-func TestLokiIsFilteredRatherThanQueried(t *testing.T) {
+// lokiPrompt walks the manual flow to the filter that opens a Loki stream:
+// past the saved list, along the chips to loki, which is last, and through the
+// endpoint it asks for before anything else.
+func lokiPrompt(t *testing.T) tea.Model {
+	t.Helper()
 	withEndpoints(t, []config.Place{
 		{Name: "staging", Type: "loki", URL: "https://staging.example.com"},
 	})
 
-	// Past the saved list, then along the chips to loki, which is last, and
-	// which asks where to reach before anything else.
 	m := send(t, New(), size(), k("tab"))
 	for range collectors {
 		if m.(Model).start.collectorAt() == source.CollectorLoki {
@@ -1576,7 +1575,14 @@ func TestLokiIsFilteredRatherThanQueried(t *testing.T) {
 	}
 	require.Equal(t, detailEndpoint, m.(Model).start.detail)
 	m = typed(t, m, "staging")
-	m = send(t, m, k("enter"))
+	return send(t, m, k("enter"))
+}
+
+// TestLokiIsFilteredRatherThanQueried: LogQL is compiled from the filter, so
+// the step that would ask a Loki place for a target asks for the filter, and
+// there is no second step behind it.
+func TestLokiIsFilteredRatherThanQueried(t *testing.T) {
+	m := lokiPrompt(t)
 
 	start := m.(Model).start
 	require.Equal(t, source.CollectorLoki, start.collectorAt())
@@ -1593,6 +1599,58 @@ func TestLokiIsFilteredRatherThanQueried(t *testing.T) {
 	require.Equal(t, stateLogs, m.(Model).state)
 	require.Equal(t, []string{`{app=~"(?i)api"}`}, m.(Model).logs.cfg.Pushed(),
 		"and the stream is opened on it rather than on everything")
+}
+
+// TestStartScreenCompletesLokiLabels: the filter that opens a Loki stream is
+// the one prompt nothing on this machine can list for, so the database is asked
+// what its lines are labeled with, and the answer is offered a term at a time.
+func TestStartScreenCompletesLokiLabels(t *testing.T) {
+	m := lokiPrompt(t)
+	where := m.(Model).start.fieldsConfig().Title()
+
+	// The names, before anything has been typed: the list is the whole screen
+	// here, and naming a label is the whole of what this step is for.
+	m = send(t, m, fieldsMsg{cfg: where, values: []string{"app", "namespace", "pod"}})
+	out := screen(t, m)
+	require.Contains(t, out, "namespace")
+	require.Contains(t, out, "pod")
+
+	m = typed(t, m, "name")
+	require.Equal(t, "namespace", m.(Model).start.filtered[0].Value)
+
+	// Accepting a name leaves the comparison after it, since a name on its own
+	// is not a term.
+	m = send(t, m, k("down"), k("tab"))
+	require.Equal(t, "namespace=", m.(Model).start.query.Value())
+
+	// And the values under that name are what is wanted next.
+	m = send(t, m, fieldsMsg{cfg: where, key: "namespace", values: []string{"oteldb", "kube-system"}})
+	require.Equal(t, []string{"oteldb", "kube-system"}, values(m.(Model).start.filtered))
+
+	m = send(t, m, k("down"), k("tab"))
+	require.Equal(t, "namespace=oteldb", m.(Model).start.query.Value())
+
+	// A second term completes like the first, rather than replacing what is
+	// already typed the way a target suggestion would.
+	m = typed(t, m, " ap")
+	m = send(t, m, k("down"), k("tab"))
+	require.Equal(t, "namespace=oteldb app=", m.(Model).start.query.Value())
+}
+
+// TestStartScreenLabelsBelongToTheirEndpoint: an answer that arrives after the
+// prompt moved on describes a database nobody is looking at.
+func TestStartScreenLabelsBelongToTheirEndpoint(t *testing.T) {
+	m := lokiPrompt(t)
+	m = send(t, m, fieldsMsg{cfg: "loki://elsewhere", values: []string{"app"}})
+	require.Empty(t, m.(Model).start.filtered)
+}
+
+func values(cs []complete.Candidate) []string {
+	out := make([]string, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, c.Value)
+	}
+	return out
 }
 
 // TestEndpointIsPickedFromAList: with more endpoints than fit a row of chips,

@@ -204,6 +204,82 @@ func (m *logModel) wantFields(key string) tea.Cmd {
 	return fetchFields(m.cfg, key)
 }
 
+// suggestFilter is what the start screen's filter prompt is offering, for the
+// step where the filter is what opens the stream.
+//
+// Unlike the log view's prompt there is nothing read yet to complete by, so the
+// database is the only source — and unlike it, an empty prompt still offers the
+// names. The list is the whole of the screen here, and naming a label is the
+// whole of the task.
+func (m startModel) suggestFilter() (completion, []complete.Candidate) {
+	at := completeAt(m.query.Value(), m.query.Position())
+	if !at.OK {
+		return at, nil
+	}
+	return at, labelCandidates(m.fields[at.Key], at.Prefix)
+}
+
+// labelCandidates ranks what a database said it holds against what has been
+// typed of one.
+func labelCandidates(values []string, prefix string) []complete.Candidate {
+	items := make([]complete.Candidate, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, v := range values {
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		items = append(items, complete.Candidate{Value: v})
+	}
+	return complete.Rank(items, prefix, nil)
+}
+
+// wantLabels asks the endpoint about what is being completed, once per place
+// and field. What was asked is recorded before the answer arrives, so a
+// keystroke does not start the same request again.
+func (m *startModel) wantLabels(key string) tea.Cmd {
+	if !m.filtersInPlace() {
+		return nil
+	}
+	cfg := m.fieldsConfig()
+	if cfg.Validate() != nil {
+		// Nowhere to ask yet, and the endpoint prompt is what says so.
+		return nil
+	}
+	if m.asked == nil {
+		m.asked = map[string]bool{}
+	}
+	asked := cfg.Title() + "\x00" + key
+	if m.asked[asked] {
+		return nil
+	}
+	m.asked[asked] = true
+	return fetchFields(cfg, key)
+}
+
+// askAtCursor asks about whatever the cursor has moved into, which is the
+// values of a field the first time one is named.
+func (m *startModel) askAtCursor() tea.Cmd {
+	at := completeAt(m.query.Value(), m.query.Position())
+	if !at.OK {
+		return nil
+	}
+	return m.wantLabels(at.Key)
+}
+
+// takeFields records an answer, unless the prompt has moved to another place
+// since it was asked.
+func (m *startModel) takeFields(msg fieldsMsg) {
+	if msg.cfg != m.fieldsConfig().Title() {
+		return
+	}
+	if m.fields == nil {
+		m.fields = map[string][]string{}
+	}
+	m.fields[msg.key] = msg.values
+	m.refilter()
+}
+
 // takeFields records an answer, unless the view has moved to another place since
 // it was asked.
 func (m *logModel) takeFields(msg fieldsMsg) {
