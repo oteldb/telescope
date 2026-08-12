@@ -48,18 +48,23 @@ func (e *Entry) Level() (zapcore.Level, bool) { return e.Record.Level, e.Record.
 // first, then what the source said about the line, then the few names a record
 // is read under whatever it called them.
 //
-// A key is matched exactly. Values are compared without case because a pod name
-// typed in a hurry is still that pod, but a field name is what it is, and a
-// database asked the same question would answer it that way.
+// A key is matched exactly, and failing that under the name a shipper would
+// have kept it as: a field name is what it is, but service.name and
+// service_name are one attribute written twice, and a database asked for either
+// answers with the other. Values are compared without case because a pod name
+// typed in a hurry is still that pod.
 func (e *Entry) Field(key string) (string, bool) {
-	for _, f := range e.Record.Fields {
-		if f.Key == key {
-			return f.String(), true
-		}
+	if v, ok := e.named(key); ok {
+		return v, true
 	}
-	for _, l := range e.Labels {
-		if l.Key == key {
-			return l.Value, true
+	// Failing that, the name the shipper kept. An OTLP attribute arrives as
+	// service.name and is stored as service_name by most of what stores it —
+	// including the databases here, which answer a query for the one with the
+	// other. A filter that reaches the same lines a pushed-down query does is
+	// the whole point; the exact spelling above still wins where both exist.
+	if under := strings.ReplaceAll(key, ".", "_"); under != key {
+		if v, ok := e.named(under); ok {
+			return v, true
 		}
 	}
 	switch {
@@ -76,6 +81,21 @@ func (e *Entry) Field(key string) (string, bool) {
 			return "stderr", true
 		}
 		return "stdout", true
+	}
+	return "", false
+}
+
+// named is what the line or its source called key, exactly.
+func (e *Entry) named(key string) (string, bool) {
+	for _, f := range e.Record.Fields {
+		if f.Key == key {
+			return f.String(), true
+		}
+	}
+	for _, l := range e.Labels {
+		if l.Key == key {
+			return l.Value, true
+		}
 	}
 	return "", false
 }

@@ -26,6 +26,21 @@ func TestLogQL(t *testing.T) {
 		{"what is left of the filter is the view's", "pod=api reset", `{pod=~"(?i)api"}`},
 		{"a level says nothing about a stream", "pod=api level>=warn", `{pod=~"(?i)api"}`},
 
+		// A value is a value however it is spelled, and a LogQL string is a Go
+		// string: what a regexp needs escaped, and what the lexer needs escaped
+		// after that, are both written rather than refused.
+		{
+			"a dot in a value is a dot, not any character",
+			"service_name=caddy.service", `{service_name=~"(?i)caddy\\.service"}`,
+		},
+		{"and so is everything else a regexp reads", "pod=api+7", `{pod=~"(?i)api\\+7"}`},
+		{"a quote survives being read as a string", `pod="say \"hi\""`, `{pod=~"(?i)say \"hi\""}`},
+		{
+			"a name that is not an identifier is quoted",
+			"k8s.pod.name=api", `{"k8s.pod.name"=~"(?i)api"}`,
+		},
+		{"as is one with a dash", "my-label=api", `{"my-label"=~"(?i)api"}`},
+
 		// Nothing to select by is nothing to ask, which is not the same as
 		// asking for everything: Loki has no match-all to fall back on.
 		{"a word alone selects no stream", "reset", ""},
@@ -33,10 +48,9 @@ func TestLogQL(t *testing.T) {
 		{"nor a level", "level>=warn", ""},
 		{"a denial alone matches every stream that lacks the label", "pod!=api-7", ""},
 		{"and so does a pattern that admits the empty string", "pod~/a*/", ""},
-		{"a dotted key is not a Loki label", "k8s.pod.name=api", ""},
 		{"a name a record is read under is not a label", "msg=hello", ""},
 		{"the merge tag is telescope's own", "source=api", ""},
-		{"a value with a metacharacter is not escaped, it is dropped", "pod=api+7", ""},
+		{"an empty value selects every stream that lacks the label", `pod=""`, ""},
 		{"a branch of an or cannot be dropped", "pod=api or pod=web", ""},
 		{"nor the operand of a not", "not pod=api", ""},
 		{"a field under an or is not a conjunct", "level>=warn (pod=api or pod=web)", ""},

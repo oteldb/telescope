@@ -13,6 +13,14 @@ import (
 	"github.com/oteldb/telescope/internal/source"
 )
 
+// filterExpr is a filter as a source is given it.
+func filterExpr(t *testing.T, s string) query.Expr {
+	t.Helper()
+	e, err := query.Parse(s)
+	require.NoError(t, err)
+	return e
+}
+
 // rowOf is the row of an entry with the given key.
 func rowOf(t *testing.T, m entryModel, key string) item {
 	t.Helper()

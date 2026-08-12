@@ -239,3 +239,38 @@ func TestBandsFollowTheSecond(t *testing.T) {
 	require.NotEqual(t, same.Band, next.Band, "the next second is the next band")
 	require.NotEqual(t, next.Band, later.Band, "however long the gap")
 }
+
+// TestFieldReadsTheNameTheShipperKept: an OTLP attribute is written
+// service.name and stored service_name by most of what stores it, and a filter
+// naming either has to reach the same lines a query pushed down does.
+func TestFieldReadsTheNameTheShipperKept(t *testing.T) {
+	e := NewStore(10).Append(source.Line{
+		Data: []byte(`{"msg":"hi","k8s_pod_name":"api-0"}`),
+		Labels: []source.Label{
+			{Key: "service_name", Value: "caddy.service"},
+			{Key: "service.namespace", Value: "systemd"},
+		},
+	})
+
+	for _, tt := range []struct{ key, want string }{
+		{"service_name", "caddy.service"},
+		{"service.name", "caddy.service"},
+		{"k8s_pod_name", "api-0"},
+		{"k8s.pod.name", "api-0"},
+		// The exact spelling is still what it is, and still found first.
+		{"service.namespace", "systemd"},
+	} {
+		t.Run(tt.key, func(t *testing.T) {
+			got, ok := e.Field(tt.key)
+			require.True(t, ok)
+			require.Equal(t, tt.want, got)
+		})
+	}
+
+	// Only the one direction: what is stored dotted is not also underscored,
+	// since nothing renames it that way.
+	_, ok := e.Field("service_namespace")
+	require.False(t, ok)
+	_, ok = e.Field("nothing.here")
+	require.False(t, ok)
+}

@@ -1553,8 +1553,8 @@ func TestEndpointOpensFromTheStartScreen(t *testing.T) {
 	m = send(t, m, k("down"), k("down"), k("enter"))
 	require.Equal(t, stateLogs, m.(Model).state,
 		"a place that names an endpoint says everything it has to")
-	require.Contains(t, screen(t, m), "filter by a label to select a stream",
-		"and Loki says what it still needs, above the lines it has none of")
+	require.Contains(t, screen(t, m), "loki://staging \u00b7 logql",
+		"opened on the endpoint, with no stream selected yet")
 }
 
 // lokiPrompt walks the manual flow to the filter that opens a Loki stream:
@@ -2028,8 +2028,7 @@ func TestEntryViewShowsLabels(t *testing.T) {
 	cfg := source.Config{
 		Collector: source.CollectorLoki,
 		Endpoint:  source.Endpoint{Name: "homelab", URL: "https://logs.example.com"},
-		Target:    `{k8s_namespace_name="flux-system"}`,
-	}
+	}.WithFilter(filterExpr(t, "k8s_namespace_name=flux-system"))
 	e := logs.NewStore(10).Append(source.Line{
 		Data: []byte("artifact up-to-date with remote revision"),
 		At:   time.Now(),
@@ -2046,7 +2045,8 @@ func TestEntryViewShowsLabels(t *testing.T) {
 	require.Contains(t, out, "source")
 	require.Contains(t, out, "endpoint")
 	require.Contains(t, out, "homelab")
-	require.Contains(t, out, `{k8s_namespace_name="flux-system"}`)
+	require.Contains(t, out, `{k8s_namespace_name=~"(?i)flux-system"}`,
+		"the query is what was asked for, which the filter is what wrote")
 	require.Contains(t, out, "labels")
 	require.Contains(t, out, "k8s_pod_name")
 	require.Contains(t, out, "source-controller-7f56dddc9d")

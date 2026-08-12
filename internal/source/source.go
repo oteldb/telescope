@@ -254,7 +254,9 @@ func (c Config) Command() string {
 	case CollectorLoki:
 		q, ok := c.lokiQuery()
 		if !ok {
-			return "logql — filter by a label to select a stream"
+			// The filter selects no stream yet. Why that is worth saying is the
+			// view's to say, once, where it says everything else that failed.
+			return "logql"
 		}
 		return "logql " + Quote(q)
 	case CollectorJournal:

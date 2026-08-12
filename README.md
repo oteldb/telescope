@@ -288,9 +288,10 @@ source reported are searched too, since the list has no room to show them.
 A field is looked up where the line named it first, then among those labels,
 then under the names a record is read as, so `msg` and `trace_id` work whatever
 the shipper called them; `source` is the merge tag and `stream` is `stdout` or
-`stderr`. A key is matched exactly — a field name is what it is — while values
-are compared without case, because a pod name typed in a hurry is still that
-pod. A line that never reported a level passes no `level` comparison at all: an
+`stderr`. A key is matched exactly, and failing that under the name a shipper
+would have kept it as, so `service.name` finds the label that arrived as
+`service_name` — one attribute written twice is not two fields. Values are
+compared without case, because a pod name typed in a hurry is still that pod. A line that never reported a level passes no `level` comparison at all: an
 unlevelled line is not quietly an info one.
 
 `tab` finishes what is being typed: a field name where a bare word is, and the
@@ -680,9 +681,18 @@ Loki has no target. [LogQL][logql] has no match-all, and a query without a
 stream selector is a parse error from the server, so writing one by hand would
 mean writing it before there is anything to see; instead the filter's label
 comparisons are compiled into the selector, and nothing is asked until they say
-something. Only comparisons are: label names are whatever the shipper wrote them
-as, so `service_name=api` selects and `service.name=api` does not — Loki's names
-are Prometheus' names, and rewriting the dot would be a guess.
+something.
+
+Only comparisons are, and they are compiled whole: `service_name=caddy.service`
+is sent as `{service_name=~"(?i)caddy\\.service"}`, escaped for the regexp and
+then for the string it is written inside, rather than dropped for having a dot
+in it. A name that is not a Prometheus identifier — `service.name`, which is
+what an OTLP attribute is called before whatever stored it renamed the dots
+away — is sent quoted, which is how a label name is spelled since the parser
+took UTF-8 names; a server too old to read that answers with a parse error,
+which is at least an answer. Nothing is renamed on the way out, but a filter
+naming `service.name` does match a line whose label came back `service_name`,
+so either spelling reaches the same lines.
 
 `tail` becomes the query's limit, the time range its bounds, and `follow` keeps
 it open.

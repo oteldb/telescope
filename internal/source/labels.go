@@ -45,7 +45,14 @@ func (c Config) SourceLabels(from string) []Label {
 		add("endpoint", c.Endpoint.Label())
 		add("url", c.Endpoint.URL)
 		add("tenant", c.Endpoint.Tenant)
-		add("query", c.Target)
+		// What was asked for, which for Loki is what the filter compiled to and
+		// not anything the place itself names.
+		if c.Collector == CollectorLoki {
+			q, _ := c.lokiQuery()
+			add("query", q)
+		} else {
+			add("query", c.Target)
+		}
 	case CollectorJournal:
 		add("unit", c.Unit)
 		if c.UserUnit {

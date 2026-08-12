@@ -1,6 +1,8 @@
 package query
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -68,23 +70,27 @@ func conjuncts(e Expr) []Expr {
 // Every matcher is a regexp, because equality here ignores case and Loki's does
 // not. Loki anchors a matcher to the whole label value, which is what equality
 // means anyway; a term that matched part of one is wrapped back out to it.
+//
+// Nothing is dropped for the sake of escaping, the way [LogsQL] drops it. A
+// LogsQL filter would have to guess how the server reads a backslash; a LogQL
+// string is a Go string, so [strconv.Quote] is exactly the inverse of what the
+// lexer does to it, and a value is a value however it is spelled. Dropping one
+// here would cost the whole query rather than narrow it.
 func logQLMatcher(e Field) (matcher string, selects, ok bool) {
-	if !fieldPushable(e.Key) || !logQLName(e.Key) {
+	name, ok := logQLName(e.Key)
+	if !ok || !fieldPushable(e.Key) || e.Value == "" {
 		return "", false, false
 	}
 	switch e.Op {
 	case OpEq, OpNe:
-		if !literalPushable(e.Value) {
-			return "", false, false
-		}
-		return e.Key + logQLOp(e.Op) + `"(?i)` + e.Value + `"`, e.Op == OpEq, true
+		// Quoted twice over: once so the value is a regexp matching itself, and
+		// once so the regexp survives being read as a string.
+		value := strconv.Quote("(?i)" + regexp.QuoteMeta(e.Value))
+		return name + logQLOp(e.Op) + value, e.Op == OpEq, true
 	case OpMatch, OpNotMatch:
-		if !regexpPushable(e.Value) {
-			return "", false, false
-		}
 		// Grouped, since an alternation would otherwise take the padding into
 		// its last branch and select everything.
-		matcher = e.Key + logQLOp(e.Op) + `"(?i).*(?:` + e.Value + `).*"`
+		matcher = name + logQLOp(e.Op) + strconv.Quote("(?i).*(?:"+e.Value+").*")
 		// A pattern that admits the empty string admits a stream that has no
 		// such label, so only one that cannot is worth a selector.
 		return matcher, e.Op == OpMatch && e.re != nil && !e.re.MatchString(""), true
@@ -100,11 +106,33 @@ func logQLOp(op Op) string {
 	return "=~"
 }
 
-// logQLName reports whether a key can be a Loki label name at all. They are
-// Prometheus' names, and a dot is not one: a database that renamed service.name
-// to service_name on the way in is asked for the name it kept, which is also the
-// name its lines come back labeled with.
-func logQLName(key string) bool {
+// logQLName writes a key as a label name, and reports whether it can be one.
+//
+// A Prometheus identifier is written as itself, which every server that answers
+// for Loki has always read. A name that is not one — an OTLP attribute such as
+// service.name, before whatever ingested it renamed the dots away — is written
+// quoted, which is how a label name became sayable when the parser took UTF-8
+// names. A server too old for that answers with a parse error, which is at
+// least an answer; refusing to compile the name at all was no query and no
+// message.
+//
+// Nothing is guessed either way: a server that stored service.name under
+// service_name is asked for what it stored, by whoever completes the name from
+// what it says it holds.
+func logQLName(key string) (string, bool) {
+	if key == "" || strings.ContainsAny(key, " \t\r\n\"\\{}(),=~!|") {
+		// Not a name anything wrote, whatever it is, and quoting would only
+		// turn it into a selector that selects nothing.
+		return "", false
+	}
+	if identifier(key) {
+		return key, true
+	}
+	return strconv.Quote(key), true
+}
+
+// identifier reports whether a name needs no quoting.
+func identifier(key string) bool {
 	for i := range len(key) {
 		switch c := key[i]; {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '_':
@@ -113,5 +141,5 @@ func logQLName(key string) bool {
 			return false
 		}
 	}
-	return key != ""
+	return true
 }
