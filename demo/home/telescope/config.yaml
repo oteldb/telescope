@@ -1,0 +1,10 @@
+places:
+  - name: api
+    type: command
+    args: demo/emit.sh api
+  - name: worker
+    type: command
+    args: demo/emit.sh worker
+groups:
+  - name: prod
+    places: [api, worker]

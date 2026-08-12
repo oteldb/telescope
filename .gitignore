@@ -20,6 +20,8 @@
 # the repo instead of the user's own directories.
 config.yaml
 history.yaml
+# Except the one the recording reads, which is what it has instead of a machine.
+!demo/home/telescope/config.yaml
 
 # goreleaser
 dist

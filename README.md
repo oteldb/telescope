@@ -1,4 +1,4 @@
-# telescope
+# telescope [![Go Reference](https://img.shields.io/badge/go-pkg-00ADD8)](https://pkg.go.dev/github.com/oteldb/telescope#section-documentation) [![alpha](https://img.shields.io/badge/-alpha-orange)](https://go-faster.org/docs/projects/status#alpha)
 
 A terminal log viewer for the [oteldb](https://github.com/oteldb/oteldb) project.
 
@@ -7,6 +7,13 @@ or through `ssh`, and from a VictoriaLogs or Loki database, directly or through
 a Grafana datasource. It pretty prints them with [go-faster/pl](https://github.com/go-faster/pl).
 Structured lines are rendered by level and field; anything unstructured passes
 through with timestamps, levels, numbers and paths highlighted.
+
+![telescope](demo/demo.gif)
+
+Two services read as one stream, narrowed to what is worth reading, and one
+entry taken back to the list by the trace id it carries. It is recorded from
+[`demo/demo.tape`](demo/demo.tape), which reads `demo/emit.sh` twice and nothing
+on the machine it runs on.
 
 ```
 go run ./cmd/telescope
