@@ -103,12 +103,9 @@ func (c Config) streamVictoriaLogs(ctx context.Context, out func(Line) bool) err
 // The query endpoint answers newest first when a limit is given, so the entries
 // are collected before being emitted rather than streamed.
 func (c Config) vlogsBackfill(ctx context.Context, client *http.Client, q string, out func(Line) bool) (last time.Time, err error) {
-	if c.Tail <= 0 {
-		return time.Time{}, nil
-	}
 	params := url.Values{
 		"query": {q},
-		"limit": {strconv.Itoa(c.Tail)},
+		"limit": {strconv.Itoa(c.backfill())},
 	}
 	// A range narrows the query itself, so the limit applies within the window
 	// rather than to the whole database.

@@ -14,6 +14,23 @@ import (
 // worth, and the lines already held are still there.
 const pageTimeout = 30 * time.Second
 
+// backfillLimit is how many lines the first query over a database asks for when
+// the place bounded it by nothing.
+//
+// A tail of zero is every line there is, which is what a command means by it and
+// what no database can be asked. It used to mean no backfill at all, which is
+// the opposite of what it says; now that reading further back is what a page
+// does, an unbounded tail starts at a page and walks back from there.
+const backfillLimit = 1000
+
+// backfill is how many lines to open with.
+func (c Config) backfill() int {
+	if c.Tail > 0 {
+		return c.Tail
+	}
+	return backfillLimit
+}
+
 // CanPage reports whether the source can be asked for what came before a line.
 //
 // Only a log database can. A collector is a process writing to a pipe: what it

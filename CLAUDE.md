@@ -26,7 +26,7 @@ about a workspace, re-run it with `GOWORK=off`.
 | --- | --- |
 | `internal/source` | building and running collectors. `Config` describes a stream; `Command`/`Argv` turn it into a process; `Stream` yields `Line`s. `loki.go`/`victorialogs.go` query over HTTP instead, `merge.go` interleaves several streams, `endpoint.go` holds the HTTP endpoint and its token, `fields.go` asks a database what its lines are labeled with, `page.go` asks it for what came before a line, `pushdown.go` is what to ask instead when it will not read the compiled filter. |
 | `internal/logs` | what a line means and how it reads. `parse.go` turns JSON into a `Record`, `record.go`/`labels.go` say what a record and its labels are, `store.go` renders and retains entries and `fields.go` indexes what they were labeled with, `filter.go` pairs a parsed query with the level the view cycles, and keeps its incremental `View`, `highlight.go`/`escape.go` decide what reaches the screen. |
-| `internal/ui` | the bubbletea models. `app.go` is the root, `start.go` picks a place or a group and `saved.go` is what the config offers it, `logview.go` is the list, `entryview.go` one entry and `entrydoc.go` the rows its cursor walks, `clipboard.go` copies a row and `locate.go`/`open.go`/`stack.go` open what one points at, `complete.go` finishes what either filter prompt is typing — the list's and the start screen's — and `help.go` writes the filter language out, `theme.go` the palette, `rows.go` the row backgrounds, `logo.go` the banner. |
+| `internal/ui` | the bubbletea models. `app.go` is the root, `start.go` picks a place or a group and `saved.go` is what the config offers it, `logview.go` is the list, `entryview.go` one entry and `entrydoc.go` the rows its cursor walks, `clipboard.go` copies a row and `locate.go`/`open.go`/`stack.go` open what one points at, `page.go` asks for the lines before the first one when the reader reaches it, `complete.go` finishes what either filter prompt is typing — the list's and the start screen's — and `help.go` writes the filter language out, `theme.go` the palette, `rows.go` the row backgrounds, `logo.go` the banner. |
 | `internal/config` | `config.yaml` and `history.yaml`. A `Place` is where logs are read from and how it is reached (`via:` for a command, `proxy:` for a database); a `Group` is several places read as one. `Load` resolves both; `New` does the same for declarations that did not come from a file. |
 | `internal/query` | the filter language: `Parse` builds an `Expr`, `Match` evaluates it against one `Record`. It sits below `source` so a query can be compiled into one a database answers itself. |
 | `internal/complete` | the suggestions the start screen offers, fetched by shelling out. |
@@ -74,6 +74,8 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   for older ones would undo the reading that asked for them. Loki has no notion
   of "the previous n lines" and only of a window, so an empty page there widens
   the window and asks again: a service quiet for a day is quiet, not finished.
+  It follows that `tail: 0` — every line there is — opens a database on
+  `backfillLimit` rather than on nothing, which is what it used to mean.
 - **A merge trusts its children to be ordered** and does a k-way merge over
   their heads. Each child may have exactly one line pending — the per-child ack
   channel is what enforces that, not the unbuffered item channel. A source that

@@ -175,6 +175,13 @@ Over a log database the filter is also sent to the server, as much of it as the
 server can answer, and the view is rebuilt from the result rather than filtered
 out of everything the database holds.
 
+Over a database the tail is where reading starts and not how far back it goes:
+scroll to the first line and the ones before it are fetched, as many at a time
+as the tail asks for. The header says so — `reading older` while a page is on
+its way, `at the start` once there is nothing before it, `holding all it can`
+when the view is full. A command has already written what it wrote, so there
+nothing can be fetched and `tail` is the whole of the history.
+
 A line out of a database usually carries labels the list has no room for — the
 pod, the namespace, the severity — so its time and level are drawn in two
 columns to the left, which `←`/`→` never scrolls away. A line whose rendering
@@ -275,7 +282,7 @@ A place does not have to be complete: one that pins a host, a kubeconfig and
 | `proxy` | | reach this database through `http://…` or `socks5h://…` |
 | `insecure` | `false` | skip TLS verification |
 | `range` | | the window read: `1h`, `today`, `6h..1h` |
-| `tail` | `1000` | lines of history, `0` for all |
+| `tail` | `1000` | lines of history to open with, `0` for all; over a database it is also the size of a page |
 | `follow` | `true` | keep streaming |
 | `query` | | pre-fills the filter, and is what selects a Loki stream |
 

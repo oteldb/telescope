@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -148,13 +149,18 @@ func TestPushdownKeepsAnErrorThatIsNotTheQuery(t *testing.T) {
 	require.False(t, refusesPushdown(Endpoint{URL: srv.URL}))
 }
 
-// TestPushdownFallsBackWhileTailing: a place with no backfill discovers the
-// refusal on the tail request instead, and falls back there.
+// TestPushdownFallsBackWhileTailing: the tail is a different endpoint from the
+// backfill, and a server that read the compiled query in one may refuse it in
+// the other, so the fallback has to happen there too.
 func TestPushdownFallsBackWhileTailing(t *testing.T) {
 	var asked []url.Values
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		asked = append(asked, q)
+		if r.URL.Path == vlogsQueryPath {
+			// The backfill reads it and finds nothing, which is not a refusal.
+			return
+		}
 		require.Equal(t, vlogsTailPath, r.URL.Path)
 		if strings.Contains(q.Get("query"), "*:~") {
 			w.WriteHeader(http.StatusBadRequest)
@@ -169,6 +175,29 @@ func TestPushdownFallsBackWhileTailing(t *testing.T) {
 	})
 
 	cfg := vlogsConfig(srv.URL, true).WithFilter(filterExpr(t, "reset"))
+
+	s, err := Start(t.Context(), cfg)
+	require.NoError(t, err)
+	lines, err := drain(t, s)
+	require.NoError(t, err)
+	require.Len(t, lines, 1)
+	require.Len(t, asked, 3, "the backfill, the tail that was refused, and the tail without it")
+	require.Equal(t, "app:api", asked[2].Get("query"))
+}
+
+// TestAnUnboundedTailStillOpensOnSomething: a tail of zero is every line there
+// is, which a database cannot be asked and no longer has to be — it opens on a
+// page and the view reads back from there.
+func TestAnUnboundedTailStillOpensOnSomething(t *testing.T) {
+	var asked url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, vlogsQueryPath, r.URL.Path)
+		asked = r.URL.Query()
+		_, _ = w.Write([]byte(vlogsEntry("2026-08-11T10:00:01Z", "first")))
+	}))
+	defer srv.Close()
+
+	cfg := vlogsConfig(srv.URL, false)
 	cfg.Tail = 0
 
 	s, err := Start(t.Context(), cfg)
@@ -176,6 +205,5 @@ func TestPushdownFallsBackWhileTailing(t *testing.T) {
 	lines, err := drain(t, s)
 	require.NoError(t, err)
 	require.Len(t, lines, 1)
-	require.Len(t, asked, 2)
-	require.Equal(t, "app:api", asked[1].Get("query"))
+	require.Equal(t, strconv.Itoa(backfillLimit), asked.Get("limit"))
 }

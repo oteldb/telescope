@@ -137,6 +137,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logs, cmd = m.logs.narrow(msg.term)
 		return m, cmd
 
+	case pageMsg:
+		m.logs.takePage(msg)
+		return m, nil
+
 	case fieldsMsg:
 		// Both prompts complete by what a database says it is labeled with, and
 		// the one in front of the user is the one that asked.

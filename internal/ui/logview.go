@@ -55,6 +55,14 @@ type logModel struct {
 	fields map[string][]string
 	asked  map[string]bool
 
+	// paging is a page of older lines in flight, atStart is a database that
+	// answered there are none, atCap is the store with no room for another and
+	// pageErr is why the last one did not arrive. See [logModel.wantPage].
+	paging  bool
+	atStart bool
+	atCap   bool
+	pageErr error
+
 	status string
 	err    error
 }
@@ -261,7 +269,7 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 		m.hoff = 0
 	}
 	m.clamp()
-	return m, nil
+	return m, m.wantPage()
 }
 
 func (m logModel) updateSearch(km tea.KeyMsg) (logModel, tea.Cmd) {
@@ -574,6 +582,9 @@ func (m logModel) topBar(entries []*logs.Entry) string {
 	}
 	if r := timeRange(entries); r != "" {
 		stats = append(stats, r)
+	}
+	if older := m.olderText(); older != "" {
+		stats = append(stats, older)
 	}
 	stats = append(stats, filter.Describe())
 	stats = append(stats, "follow "+onOff(m.follow))

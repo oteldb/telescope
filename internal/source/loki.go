@@ -76,12 +76,9 @@ var errNoSelector = errors.New(
 // saw. Loki answers a backward query newest first, so the entries are sorted
 // before being emitted.
 func (c Config) lokiBackfill(ctx context.Context, client *http.Client, q string, out func(Line) bool) (last time.Time, err error) {
-	if c.Tail <= 0 {
-		return time.Time{}, nil
-	}
 	params := url.Values{
 		"query":     {q},
-		"limit":     {strconv.Itoa(c.Tail)},
+		"limit":     {strconv.Itoa(c.backfill())},
 		"direction": {"backward"},
 	}
 	// Without a range Loki still needs one, and its own default is an hour;
