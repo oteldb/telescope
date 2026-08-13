@@ -30,7 +30,7 @@ about a workspace, re-run it with `GOWORK=off`.
 | `internal/config` | `config.yaml` and `history.yaml`. A `Place` is where logs are read from and how it is reached (`via:` for a command, `proxy:` for a database); a `Group` is several places read as one. `Load` resolves both; `New` does the same for declarations that did not come from a file. |
 | `internal/query` | the filter language: `Parse` builds an `Expr`, `Match` evaluates it against one `Record`. It sits below `source` so a query can be compiled into one a database answers itself. |
 | `internal/complete` | the suggestions the start screen offers, fetched by shelling out. |
-| `internal/trace` | a trace as it is read, and nothing that reads it: `span.go` is one operation, `tree.go` arranges them by their parent links, `skew.go` stops a child being drawn before the call that made it, `window.go` is the interval a view covers and the axis over it, `jaeger.go` decodes the query API's response. Nothing here draws; `ui/gantt.go` does, `ui/traceview.go` is the model around it and `ui/spanpalette.go` the colors. |
+| `internal/trace` | a trace as it is read, and nothing that reads it: `span.go` is one operation, `tree.go` arranges them by their parent links, `skew.go` stops a child being drawn before the call that made it, `window.go` is the interval a view covers and the axis over it. `otlp.go` decodes what Tempo answers with, in either encoding, and `jaeger.go` the Jaeger query API's response. Nothing here fetches — `source/tempo.go` does — and nothing here draws: `ui/gantt.go` does, `ui/traceview.go` is the model around it and `ui/spanpalette.go` the colors. |
 
 The dependency order is `query` → `source` → `logs` → `ui`, and `config` feeds
 `ui`. It does not run the other way: when `source` needed to date a line by
@@ -91,6 +91,23 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   from that and optional: it moves a subtree by the least that stops the
   picture lying about causality, and is not Jaeger's per-service adjustment,
   which needs span kinds telescope does not have yet.
+- **An OTLP id is hex or base64, and only its length says which.** The
+  specification writes a trace id as hex; everything built on protojson writes
+  base64, Tempo included, and that is the one the Grafana plugin is tested
+  against. They cannot be told apart by trying one and catching the failure —
+  every hex digit is in the base64 alphabet, so a hex id decodes as base64
+  without complaint into sixteen bytes of nonsense, and every document parses
+  with every id wrong. Length decides instead: hex spells the two ids in 32 and
+  16 characters and base64 in 24 and 12, four lengths that do not collide. See
+  `trace.hexID`, and note that the failure this avoids is silent — the tree
+  still builds, since the nonsense is deterministic and parent links still
+  match, and only the id somebody copies is wrong.
+- **What a trace decodes as is decided by what came out, not by what failed.**
+  A Jaeger response is JSON, so the OTLP decoder reads it as a valid payload
+  describing no spans and reports no error — unknown fields are how OTLP stays
+  forwards-compatible, and `DiscardUnknown` is what makes a newer Tempo
+  readable. `cmd/telescope.decodeTrace` therefore falls through on an empty
+  result rather than on an error, or a Jaeger file would open as an empty trace.
 - **A service's color is counted out, not hashed.** `newServicePalette` hands
   out swatches in the order the trace first names a service, which is
   jaeger-ui's rule and theirs is arithmetic: a hash into twenty buckets collides

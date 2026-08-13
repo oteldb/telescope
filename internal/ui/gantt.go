@@ -312,6 +312,12 @@ func (g *gantt) name(n *trace.Node) string {
 
 // treeGuide draws the lines connecting a span to the one that called it.
 //
+// One cell per level, not two. A real trace is deep — an authentication filter
+// alone can be eight frames — and at two cells a level the guide had taken half
+// the name column before the names it is indenting had been read. What is lost
+// is the horizontal stroke into the connector, which was decoration; what is
+// kept is which parent each row hangs off.
+//
 // The connector sits at the parent's indent, so the verticals to its left stand
 // for the ancestors below the root: each one is a line down to that ancestor's
 // next sibling, and it is drawn where that sibling is still to come. The root's
@@ -327,15 +333,15 @@ func treeGuide(n *trace.Node) string {
 	b := &strings.Builder{}
 	for i := len(above) - 2; i >= 0; i-- {
 		if above[i] {
-			b.WriteString("  ")
+			b.WriteByte(' ')
 		} else {
-			b.WriteString("│ ")
+			b.WriteString("│")
 		}
 	}
 	if n.Last {
-		b.WriteString("└─")
+		b.WriteString("└")
 	} else {
-		b.WriteString("├─")
+		b.WriteString("├")
 	}
 	return b.String()
 }

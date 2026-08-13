@@ -256,15 +256,24 @@ The clipboard is the one on the machine telescope runs on (`wl-copy`, `xclip`,
 ### Trace view
 
 ```console
-$ telescope trace ./checkout.json
-$ curl -s "$JAEGER/api/traces/$TRACE_ID" | telescope trace -
+$ telescope trace --from https://tempo.example.com 4bf92f3577b34da6a3ce929d0e0e4736
+$ telescope trace --from prod 4bf92f3577b34da6a3ce929d0e0e4736
+$ telescope trace ./saved.json
+$ curl -s "$TEMPO/api/traces/$ID" | telescope trace -
 ```
 
-`telescope trace` reads a trace and draws it as a gantt: the spans down the
-left in the order they were called, how long each took, and a bar showing when
-it ran against the request as a whole. It takes a Jaeger query API response,
-which is what Jaeger, Tempo and oteldb all answer `/api/traces/{id}` with, from
-a file or from standard input.
+`telescope trace` draws a trace as a gantt: the spans down the left in the
+order they were called, how long each took, and a bar showing when it ran
+against the request as a whole.
+
+`--from` names a Tempo, either as a url or as the name of a place that declares
+one, and the argument is then the trace id. Without it the argument is a file
+holding a response already, or `-` to read one on standard input.
+
+Tempo's API is what it speaks — the same one oteldb and Grafana's Tempo
+datasource speak — and Jaeger's query API is read too, so a response saved from
+either opens. OTLP arrives as JSON or as protobuf and both are understood; which
+one it is, is worked out rather than declared.
 
 | key | |
 | --- | --- |
@@ -284,8 +293,8 @@ span names a parent that is not in the response — sampled away, or not written
 yet — the header says how many, since a duration read off a partial trace is
 not the whole story.
 
-There is no way in from the log view yet: nothing fetches a trace by id, so a
-line carrying `trace_id` cannot open one.
+There is no way in from the log view yet: a line carrying `trace_id` cannot
+open one.
 
 ## Configuration
 
@@ -353,6 +362,24 @@ A group takes `name`, `places`, and the same `range`, `tail`, `follow` and
 `query`. Fields a place cannot use — a `command` with a `token`, a database
 reached `via: ssh://…` — are reported as mistakes in the file rather than
 ignored, as is a key that is not a key at all.
+
+### Traces
+
+A place can say where its traces are read from, which `telescope trace --from
+<name>` then refers to by name:
+
+```yaml
+places:
+  - name: prod
+    type: victorialogs
+    url: https://logs.example.com
+    token:
+      env: LOGS_TOKEN
+    traces: https://tempo.example.com
+```
+
+`traces:` is a Tempo API. It borrows the place's token, tenant, proxy and TLS
+settings, since a system's traces usually sit behind the same door as its logs.
 
 ### Endpoints
 

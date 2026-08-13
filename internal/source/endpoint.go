@@ -101,9 +101,16 @@ func (e Endpoint) setTenant(req *http.Request, names ...string) {
 	if tenant == "" {
 		return
 	}
-	for i, part := range strings.SplitN(tenant, ":", len(names)) {
-		if part = strings.TrimSpace(part); part != "" {
-			req.Header.Set(names[i], part)
+	// Walked by name rather than by part, so that the header being set is
+	// always one that was asked for: SplitN cannot return more parts than
+	// names, but only the loop bound can say so.
+	parts := strings.SplitN(tenant, ":", len(names))
+	for i, name := range names {
+		if i >= len(parts) {
+			return
+		}
+		if part := strings.TrimSpace(parts[i]); part != "" {
+			req.Header.Set(name, part)
 		}
 	}
 }

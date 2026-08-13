@@ -99,9 +99,9 @@ func TestAMissingParentIsSaidOutLoud(t *testing.T) {
 
 func TestTheTreeIsDrawnDownTheNameColumn(t *testing.T) {
 	out := render(t, ganttOf(t, checkout()), 100, 20)
-	require.Contains(t, out, "├─", "a span with siblings below it")
-	require.Contains(t, out, "└─", "and the last of them")
-	require.Contains(t, out, "│ ", "and the line past a row to its uncle")
+	require.Contains(t, out, "├", "a span with siblings below it")
+	require.Contains(t, out, "└", "and the last of them")
+	require.Contains(t, out, "│├", "and the line running past a row to its uncle")
 }
 
 // The whole point of the view: a bar's left edge is when the span started.

@@ -2,6 +2,7 @@ package trace
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"time"
 
@@ -109,7 +110,13 @@ func (s jaegerSpan) span(t jaegerTrace) Span {
 		ParentID: s.parent(),
 		Name:     s.OperationName,
 		Service:  s.service(t),
-		Duration: time.Duration(s.Duration) * time.Microsecond,
+	}
+	// Microseconds, and a thousand of them do not always fit where one did: a
+	// duration this format can write is not always one Go can hold, and the
+	// multiplication wraps into a span that ran backwards. A negative one is
+	// nothing a clock produced either.
+	if s.Duration > 0 && s.Duration <= math.MaxInt64/int64(time.Microsecond) {
+		out.Duration = time.Duration(s.Duration) * time.Microsecond
 	}
 	// Left at the zero time rather than turned into 1970, so [repair] can tell
 	// a span with no clock from one that really started at the epoch and give

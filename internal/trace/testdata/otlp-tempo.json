@@ -1,0 +1,224 @@
+{
+  "trace": {
+    "resourceSpans": [
+      {
+        "resource": {
+          "attributes": [
+            {
+              "key": "service.name",
+              "value": {
+                "stringValue": "gateway"
+              }
+            }
+          ]
+        },
+        "scopeSpans": [
+          {
+            "scope": {
+              "name": "telescope/test"
+            },
+            "spans": [
+              {
+                "traceId": "S/kvNXezTaajzpKdDg5HNg==",
+                "spanId": "APBnqgupArc=",
+                "name": "POST /checkout",
+                "kind": "SPAN_KIND_SERVER",
+                "startTimeUnixNano": "1786694400000000000",
+                "endTimeUnixNano": "1786694400480000000",
+                "attributes": [
+                  {
+                    "key": "http.request.method",
+                    "value": {
+                      "stringValue": "POST"
+                    }
+                  },
+                  {
+                    "key": "http.response.status_code",
+                    "value": {
+                      "intValue": "500"
+                    }
+                  },
+                  {
+                    "key": "http.route.params",
+                    "value": {
+                      "kvlistValue": {
+                        "values": [
+                          {
+                            "key": "cart",
+                            "value": {
+                              "stringValue": "c-91"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "key": "sampler.ratio",
+                    "value": {
+                      "doubleValue": 0.25
+                    }
+                  },
+                  {
+                    "key": "retry",
+                    "value": {
+                      "boolValue": false
+                    }
+                  },
+                  {
+                    "key": "tags",
+                    "value": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "eu"
+                          },
+                          {
+                            "stringValue": "beta"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "resource": {
+          "attributes": [
+            {
+              "key": "service.name",
+              "value": {
+                "stringValue": "identity"
+              }
+            }
+          ]
+        },
+        "scopeSpans": [
+          {
+            "scope": {
+              "name": "telescope/test"
+            },
+            "spans": [
+              {
+                "traceId": "S/kvNXezTaajzpKdDg5HNg==",
+                "spanId": "obLD1OX2Bxg=",
+                "name": "verify token",
+                "kind": "SPAN_KIND_SERVER",
+                "startTimeUnixNano": "1786694400005000000",
+                "endTimeUnixNano": "1786694400045000000",
+                "parentSpanId": "APBnqgupArc="
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "resource": {
+          "attributes": [
+            {
+              "key": "service.name",
+              "value": {
+                "stringValue": "sessions"
+              }
+            }
+          ]
+        },
+        "scopeSpans": [
+          {
+            "scope": {
+              "name": "telescope/test"
+            },
+            "spans": [
+              {
+                "traceId": "S/kvNXezTaajzpKdDg5HNg==",
+                "spanId": "ssPU5fYHGCk=",
+                "name": "GET session",
+                "kind": "SPAN_KIND_SERVER",
+                "startTimeUnixNano": "1786694400012000000",
+                "endTimeUnixNano": "1786694400013000000",
+                "parentSpanId": "obLD1OX2Bxg="
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "resource": {
+          "attributes": [
+            {
+              "key": "service.name",
+              "value": {
+                "stringValue": "checkout"
+              }
+            }
+          ]
+        },
+        "scopeSpans": [
+          {
+            "scope": {
+              "name": "telescope/test"
+            },
+            "spans": [
+              {
+                "traceId": "S/kvNXezTaajzpKdDg5HNg==",
+                "spanId": "w9Tl9gcYKTA=",
+                "name": "charge order",
+                "kind": "SPAN_KIND_SERVER",
+                "startTimeUnixNano": "1786694400060000000",
+                "endTimeUnixNano": "1786694400440000000",
+                "parentSpanId": "APBnqgupArc="
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "resource": {
+          "attributes": [
+            {
+              "key": "service.name",
+              "value": {
+                "stringValue": "orders-db"
+              }
+            }
+          ]
+        },
+        "scopeSpans": [
+          {
+            "scope": {
+              "name": "telescope/test"
+            },
+            "spans": [
+              {
+                "traceId": "S/kvNXezTaajzpKdDg5HNg==",
+                "spanId": "1OX2BxgpMEE=",
+                "name": "INSERT orders",
+                "kind": "SPAN_KIND_SERVER",
+                "startTimeUnixNano": "1786694400130000000",
+                "endTimeUnixNano": "1786694400340000000",
+                "parentSpanId": "w9Tl9gcYKTA=",
+                "status": {
+                  "code": "STATUS_CODE_ERROR",
+                  "message": "deadlock detected"
+                }
+              },
+              {
+                "traceId": "S/kvNXezTaajzpKdDg5HNg==",
+                "spanId": "5fYHGCkwQVI=",
+                "name": "flush wal",
+                "kind": "SPAN_KIND_SERVER",
+                "startTimeUnixNano": "1786694400470000000",
+                "endTimeUnixNano": "1786694400560000000",
+                "parentSpanId": "APBnqgupArc="
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
