@@ -91,6 +91,13 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   from that and optional: it moves a subtree by the least that stops the
   picture lying about causality, and is not Jaeger's per-service adjustment,
   which needs span kinds telescope does not have yet.
+- **The jump between a line and its trace is one message each way.** `T` sends
+  `openTraceMsg` with the merge tag, so a merge asks the trace store of the
+  place the line came from; `f` sends the `filterMsg` the entry view already
+  sends, so narrowing from a span and narrowing from a row of an entry are the
+  same path and land in the same place. Neither invents a second way to do
+  what the other does. A trace opened on its own refuses the second: there is
+  no list under it, and dropping into an empty one says less than saying so.
 - **A filter over services may not rewrite the tree.** A span whose service is
   filtered out is still drawn when something under it is not: removing it would
   leave its children hanging under a span that never called them, and the tree

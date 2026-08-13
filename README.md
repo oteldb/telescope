@@ -277,16 +277,25 @@ datasource speak — and Jaeger's query API is read too, so a response saved fro
 either opens. OTLP arrives as JSON or as protobuf and both are understood; which
 one it is, is worked out rather than declared.
 
-**From a log line.** `T` in the list or in an entry opens the trace that line
-was written inside, for any line carrying a `trace_id`. It asks the place's
-`traces:` endpoint — in a merge, the endpoint of the place that line came from —
-and `esc` comes back to where you were. A place with no `traces:` says so
-rather than opening an empty screen.
+**From a log line, and back.** `T` in the list or in an entry opens the trace
+that line was written inside, for any line carrying a `trace_id`. It asks the
+place's `traces:` endpoint — in a merge, the endpoint of the place that line
+came from — and `esc` comes back to where you were. A place with no `traces:`
+says so rather than opening an empty screen.
+
+`f` goes the other way: from the chart it narrows the list to
+`trace_id=<this trace>`, which is every line written anywhere inside that
+request; from a span it narrows by whichever row the cursor is on, so a
+`service.name` or an `http.route` selects the lines that share it. Narrowing
+lands on the list, and the term is anded onto whatever filter was already
+there — so a jump out and back leaves you reading the request you went looking
+for.
 
 | key | |
 | --- | --- |
 | `↑` `k`, `↓` `j`, `pgup` `pgdown`, `home` `g`, `end` `G` | select |
 | `enter` | open the span: its status, its timing and every attribute |
+| `f` | narrow the log list: by the trace here, by the selected row in a span |
 | `space` | fold a span's children away, or bring them back |
 | `C`, `E` | fold everything to the top level, or unfold it all |
 | `s` | the services the trace touched; `space` filters one out, `a` restores |
@@ -298,8 +307,10 @@ rather than opening an empty screen.
 | `esc` | back |
 | `q`, `ctrl+c` | quit |
 
-In the span view, `y` copies the value under the cursor as it arrived and `o`
-opens what it points at, the same as in a log entry.
+In the span view, `y` copies the value under the cursor as it arrived, `o`
+opens what it points at, and `f` narrows by it — the same three as in a log
+entry. The rows describing the span itself, its start and its duration, narrow
+nothing: a line does not carry them.
 
 Each service gets its own color, and a span that failed is marked `✗` and drawn
 in red. A fold says how many spans it hid and whether one of them failed, so

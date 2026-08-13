@@ -182,3 +182,108 @@ func TestAMergeAsksTheStoreOfThePlaceTheLineCameFrom(t *testing.T) {
 	_, ok = cfg.TraceEndpoint("unknown")
 	require.False(t, ok, "and a place that reads none reads none")
 }
+
+// pressRoot delivers a key and applies the message its command produced, which is
+// how a view hands work back to the root model. Unlike send it does not care
+// which key it was, and unlike send it runs exactly one command — so it is for
+// keys whose command is a message and not a request over the network.
+func pressRoot(t *testing.T, m tea.Model, key string) tea.Model {
+	t.Helper()
+	m, cmd := m.Update(k(key))
+	if cmd == nil {
+		return m
+	}
+	if msg := cmd(); msg != nil {
+		m, _ = m.Update(msg)
+	}
+	return m
+}
+
+// onto moves the span cursor to the row with this key.
+func onto(t *testing.T, m tea.Model, key string) tea.Model {
+	t.Helper()
+	for range 40 {
+		tm := m.(Model).trace
+		doc := tm.spanDoc()
+		sel := picks(doc)
+		require.NotEmpty(t, sel)
+		if doc[sel[tm.clampSel(sel)]].key == key {
+			return m
+		}
+		m, _ = m.Update(k("j"))
+	}
+	t.Fatalf("no row %q on this span", key)
+	return m
+}
+
+// jumped is a log list opened on the trace of its newest line, which is where
+// the cursor sits while the list is following.
+func jumped(t *testing.T, lines ...string) tea.Model {
+	t.Helper()
+	srv := tempoServer(t)
+	m := tracingLogs(t, srv.URL, lines...)
+	m = send(t, m, k("T"))
+	require.Equal(t, stateTrace, m.(Model).state)
+	return send(t, m, fetchTrace(source.Endpoint{URL: srv.URL}, jumpTraceID)())
+}
+
+// The reverse of the jump: having found the request, ask for everything written
+// anywhere inside it.
+func TestATraceNarrowsTheLogBackToIt(t *testing.T) {
+	other := `{"level":"info","ts":"2026-08-13T10:00:00Z","msg":"unrelated work"}`
+	m := jumped(t, other, tracedLine)
+
+	m = pressRoot(t, m, "f")
+	require.Equal(t, stateLogs, m.(Model).state, "narrowing lands on the list")
+
+	out := screen(t, m)
+	require.Contains(t, out, "trace_id="+jumpTraceID, "and the list says what it is filtered by")
+	require.Contains(t, out, "checkout failed")
+	require.NotContains(t, out, "unrelated work")
+}
+
+// A row of the span is a filter the same way a row of an entry is.
+func TestASpanRowNarrowsTheLogByWhateverItHolds(t *testing.T) {
+	m := jumped(t, tracedLine)
+	m, _ = m.Update(k("enter"))
+	m = onto(t, m, "http.route")
+
+	m = pressRoot(t, m, "f")
+	require.Equal(t, stateLogs, m.(Model).state)
+	require.Contains(t, screen(t, m), `http.route="/checkout"`)
+}
+
+// A duration is not something a line carries, and narrowing by one would ask
+// the list for something that was never going to be there.
+func TestASpanRowThatIsNotALabelDoesNotNarrow(t *testing.T) {
+	m := jumped(t, tracedLine)
+	m, _ = m.Update(k("enter"))
+	m = onto(t, m, "duration")
+
+	m = pressRoot(t, m, "f")
+	require.Equal(t, stateTrace, m.(Model).state, "and stays where it was")
+	require.Contains(t, screen(t, m), "nothing to narrow")
+}
+
+// A trace telescope was started on has no list under it, and dropping into an
+// empty one would be worse than saying so.
+func TestATraceOpenedOnItsOwnHasNoLogToNarrow(t *testing.T) {
+	m := traceModelOf(t, checkout())
+	m = pressRoot(t, m, "f")
+
+	require.Equal(t, stateTrace, m.(Model).state)
+	require.Contains(t, screen(t, m), "no logs here")
+}
+
+// The whole round trip: a line names its request, the request is read, and what
+// it did comes back as the lines that did it.
+func TestTheRoundTripEndsWhereItStarted(t *testing.T) {
+	m := jumped(t, tracedLine)
+
+	m = pressRoot(t, m, "f")
+	require.Equal(t, stateLogs, m.(Model).state)
+
+	// And out of the narrowed list into the same trace again.
+	m = send(t, m, k("T"))
+	require.Equal(t, stateTrace, m.(Model).state)
+}

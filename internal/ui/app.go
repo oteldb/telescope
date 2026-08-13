@@ -146,6 +146,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case filterMsg:
+		// A trace telescope was started on has no list under it to narrow, and
+		// dropping into an empty one would be worse than saying so.
+		if m.state == stateTrace && m.traceBack == stateTrace {
+			m.trace.note = "no logs here: this trace was opened on its own"
+			return m, nil
+		}
 		// Narrowing is done to the list, so the list is where it lands: reading
 		// one entry is how you find the thing worth narrowing by, and staying on
 		// it would hide what the narrowing did.

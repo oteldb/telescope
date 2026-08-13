@@ -24,7 +24,7 @@ import (
 func spanDocument(n *trace.Node, origin time.Time, palette servicePalette, width int) []item {
 	var out []item
 
-	labels := []string{"service", "span_id", "parent_id", "trace_id", "started", "duration", "status"}
+	labels := []string{"service.name", "span_id", "parent_id", "trace_id", "started", "duration", "status"}
 	for _, f := range n.Attrs {
 		labels = append(labels, f.Key)
 	}
@@ -45,7 +45,11 @@ func spanDocument(n *trace.Node, origin time.Time, palette servicePalette, width
 	field := func(key, raw string) { row(key, raw, renderValue(key, raw)) }
 
 	text(styleTitle.Render(logs.Sanitize(n.Name)), "")
-	row("service", n.Service, palette.style(n.Service).Render(logs.Sanitize(n.Service)))
+	// Spelled as OTLP spells it rather than as the chart labels it, because this
+	// row is also a filter: "service.name" is a field the log query resolves —
+	// and resolves through "service_name" as well — where a bare "service"
+	// would narrow by a name nothing carries.
+	row("service.name", n.Service, palette.style(n.Service).Render(logs.Sanitize(n.Service)))
 
 	switch {
 	case n.Failed() && n.StatusMessage != "":
@@ -86,4 +90,21 @@ func spanDocument(n *trace.Node, origin time.Time, palette servicePalette, width
 		}
 	}
 	return out
+}
+
+// narrowsLogs reports whether a row of the span document is worth taking back
+// to the log list as a filter.
+//
+// What it excludes are the rows that describe the span rather than label it. A
+// duration is not something a line can carry, and narrowing by one would ask
+// the list for something that was never going to be there — which the list
+// would then have to explain. The identity rows and the attributes are the
+// ones a logger also writes.
+func narrowsLogs(key string) bool {
+	switch key {
+	case "started", "duration", "status":
+		return false
+	default:
+		return true
+	}
 }

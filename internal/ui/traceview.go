@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/oteldb/telescope/internal/logs"
+	"github.com/oteldb/telescope/internal/query"
 	"github.com/oteldb/telescope/internal/trace"
 )
 
@@ -160,6 +161,15 @@ func (m traceModel) updateGantt(km tea.KeyMsg) (traceModel, tea.Cmd) {
 	case "0":
 		m.g.fit()
 
+	case "f":
+		// The reverse of the jump that got here: every line written anywhere
+		// inside this request. The trace and not the span under the cursor,
+		// since that is the question a chart is being read to ask — the span
+		// view narrows by whichever row is selected.
+		return m, narrowLogs(query.Field{
+			Key: "trace_id", Op: query.OpEq, Value: m.g.tree.ID,
+		})
+
 	case "y":
 		if n := m.g.at(); n != nil {
 			return m, copyCmd("span_id", n.SpanID)
@@ -217,6 +227,17 @@ func (m traceModel) updateSpan(km tea.KeyMsg) (traceModel, tea.Cmd) {
 		}
 		it := doc[sel[m.clampSel(sel)]]
 		return m, copyCmd(it.key, it.value)
+	case "f":
+		if len(sel) == 0 {
+			return m, nil
+		}
+		it := doc[sel[m.clampSel(sel)]]
+		term := it.term()
+		if term == nil || !narrowsLogs(it.key) {
+			m.note = "nothing to narrow the log by on this row"
+			return m, nil
+		}
+		return m, narrowLogs(term)
 	case "o":
 		if len(sel) == 0 {
 			return m, nil
@@ -340,8 +361,8 @@ func (m traceModel) footer() string {
 }
 
 const (
-	traceKeys   = "enter span · space fold · C/E all · s services · +/- zoom · h/l pan · z focus · 0 fit · esc back"
-	spanKeys    = "↑↓ select · y copy · o open · esc back"
+	traceKeys   = "enter span · space fold · C/E all · s services · f logs · +/- zoom · h/l pan · z focus · esc back"
+	spanKeys    = "↑↓ select · f logs · y copy · o open · esc back"
 	serviceKeys = "space toggle · a all · esc back"
 )
 
@@ -354,4 +375,12 @@ func openTrace(e *logs.Entry) tea.Cmd {
 	return func() tea.Msg {
 		return openTraceMsg{id: e.Record.TraceID, from: e.Source}
 	}
+}
+
+// narrowLogs takes a term back to the log list, which is where narrowing lands
+// for the same reason it does from an entry: reading one thing is how you find
+// what is worth narrowing by, and staying on it would hide what the narrowing
+// did.
+func narrowLogs(term query.Expr) tea.Cmd {
+	return func() tea.Msg { return filterMsg{term: term} }
 }
