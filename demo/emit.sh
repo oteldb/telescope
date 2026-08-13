@@ -34,6 +34,16 @@ worker)
 	emit info '"msg":"job started","job_id":93,"kind":"invoice"'
 	emit info '"msg":"job done","job_id":93,"duration_ms":118'
 	;;
+cache)
+	# The place that does not survive the recording: three lines, then the
+	# session drops. What it says on the way out is its own, and the note
+	# telescope writes under it is the view's.
+	emit info '"msg":"cache warm","keys":1284'
+	emit info '"msg":"GET session hit","duration_ms":1'
+	emit info '"msg":"GET session hit","duration_ms":1'
+	printf 'Connection to cache-1 closed by remote host.\n' >&2
+	exit 255
+	;;
 esac
 
 sleep 600

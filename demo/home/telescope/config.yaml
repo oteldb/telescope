@@ -5,6 +5,9 @@ places:
   - name: worker
     type: command
     args: demo/emit.sh worker
+  - name: cache
+    type: command
+    args: demo/emit.sh cache
 groups:
   - name: prod
-    places: [api, worker]
+    places: [api, worker, cache]
