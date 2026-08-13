@@ -1,6 +1,7 @@
 package logs
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -82,6 +83,91 @@ func NewStore(limit int) *Store {
 
 // Append renders and stores a line.
 func (s *Store) Append(l source.Line) *Entry {
+	e := s.render(l)
+	if e == nil {
+		return nil
+	}
+	if sec := e.At.Truncate(time.Second); !sec.Equal(s.bandAt) {
+		s.band, s.bandAt = !s.band, sec
+	}
+	e.Band = s.band
+	e.Seq = s.seq
+	s.seq++
+	s.index.index(e)
+
+	s.entries = append(s.entries, e)
+	if len(s.entries) > s.max {
+		n := len(s.entries) - s.max
+		s.entries = append(s.entries[:0], s.entries[n:]...)
+		s.dropped += n
+	}
+	return e
+}
+
+// Prepend stores a page of lines older than everything held, which is what a
+// database answers when the view asks for what came before its first line. They
+// arrive oldest first, as a stream's do.
+//
+// It is not an append run backwards. A page is bounded by [Store.Room] rather
+// than by eviction — dropping the newest lines to make room for older ones would
+// undo the reading that asked for them — and the shading is worked out from the
+// entry the page joins, so the seam between the page and what was already held
+// alternates like every other second boundary.
+func (s *Store) Prepend(lines []source.Line) []*Entry {
+	room := s.Room()
+	if room <= 0 || len(lines) == 0 {
+		return nil
+	}
+	// The newest of the page is what joins what is held, so a page too large to
+	// fit loses its far end and not its near one.
+	if len(lines) > room {
+		lines = lines[len(lines)-room:]
+	}
+
+	page := make([]*Entry, 0, len(lines))
+	for _, l := range lines {
+		if e := s.render(l); e != nil {
+			page = append(page, e)
+		}
+	}
+	if len(page) == 0 {
+		return nil
+	}
+	for _, e := range page {
+		e.Seq = s.seq
+		s.seq++
+		s.index.index(e)
+	}
+
+	switch {
+	case len(s.entries) == 0:
+		for _, e := range page {
+			if sec := e.At.Truncate(time.Second); !sec.Equal(s.bandAt) {
+				s.band, s.bandAt = !s.band, sec
+			}
+			e.Band = s.band
+		}
+	default:
+		// Backwards from the entry the page runs into, so that page and store
+		// agree about the second they share.
+		first := s.entries[0]
+		band, at := first.Band, first.At.Truncate(time.Second)
+		for _, e := range slices.Backward(page) {
+			if sec := e.At.Truncate(time.Second); !sec.Equal(at) {
+				band, at = !band, sec
+			}
+			e.Band = band
+		}
+	}
+
+	s.entries = append(page, s.entries...)
+	return page
+}
+
+// render turns a line into an entry, without deciding where in the store it
+// belongs: what a line says is its own, and its sequence, shading and place in
+// the list are the store's.
+func (s *Store) render(l source.Line) *Entry {
 	rec := Parse(l.Data)
 	// What the line does not say about itself, the source may have said for
 	// it: a Loki entry is often a bare message with the severity in a label.
@@ -118,7 +204,6 @@ func (s *Store) Append(l source.Line) *Entry {
 	}
 
 	e := &Entry{
-		Seq:       s.seq,
 		Raw:       l.Data,
 		Text:      text,
 		Head:      head,
@@ -140,19 +225,6 @@ func (s *Store) Append(l source.Line) *Entry {
 	if e.At.IsZero() {
 		e.At = time.Now()
 	}
-	if sec := e.At.Truncate(time.Second); !sec.Equal(s.bandAt) {
-		s.band, s.bandAt = !s.band, sec
-	}
-	e.Band = s.band
-	s.seq++
-	s.index.index(e)
-
-	s.entries = append(s.entries, e)
-	if len(s.entries) > s.max {
-		n := len(s.entries) - s.max
-		s.entries = append(s.entries[:0], s.entries[n:]...)
-		s.dropped += n
-	}
 	return e
 }
 
@@ -161,6 +233,12 @@ func (s *Store) Entries() []*Entry { return s.entries }
 
 // Len returns the number of retained entries.
 func (s *Store) Len() int { return len(s.entries) }
+
+// Room is how many more entries fit under the cap. A page is worth asking a
+// database for only while there is somewhere to put it: reading further back is
+// what the cap costs once it is reached, and a page that evicted the newest
+// lines to land would be reading in a circle.
+func (s *Store) Room() int { return max(s.max-len(s.entries), 0) }
 
 // Dropped returns how many entries were evicted by the cap.
 func (s *Store) Dropped() int { return s.dropped }

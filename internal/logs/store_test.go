@@ -240,6 +240,79 @@ func TestBandsFollowTheSecond(t *testing.T) {
 	require.NotEqual(t, next.Band, later.Band, "however long the gap")
 }
 
+// TestPrependKeepsTheOrderAndTheSeam: a page is older than everything held, and
+// the shading has to read across the joint as if the lines had always been there.
+func TestPrependKeepsTheOrderAndTheSeam(t *testing.T) {
+	s := NewStore(10)
+	at := time.Date(2026, 8, 11, 15, 16, 36, 0, time.UTC)
+	held := s.Append(source.Line{Data: []byte("held"), At: at.Add(500 * time.Millisecond)})
+
+	page := s.Prepend([]source.Line{
+		{Data: []byte("two seconds back"), At: at.Add(-2 * time.Second)},
+		{Data: []byte("the second before"), At: at.Add(-500 * time.Millisecond)},
+		{Data: []byte("shares the second"), At: at.Add(10 * time.Millisecond)},
+	})
+	require.Len(t, page, 3)
+
+	require.Equal(t,
+		[]string{"two seconds back", "the second before", "shares the second", "held"},
+		bodies(s.Entries()))
+	require.Equal(t, held.Band, page[2].Band, "the page joins the second it lands in")
+	require.NotEqual(t, page[2].Band, page[1].Band, "and the second before it is the band before")
+	require.NotEqual(t, page[1].Band, page[0].Band)
+}
+
+// TestPrependIntoAnEmptyStore: nothing has been read yet, so a page is simply
+// the oldest thing there is.
+func TestPrependIntoAnEmptyStore(t *testing.T) {
+	s := NewStore(10)
+	at := time.Date(2026, 8, 11, 15, 16, 36, 0, time.UTC)
+
+	page := s.Prepend([]source.Line{
+		{Data: []byte("first"), At: at},
+		{Data: []byte("second"), At: at.Add(time.Second)},
+	})
+	require.Len(t, page, 2)
+	require.NotEqual(t, page[0].Band, page[1].Band)
+
+	next := s.Append(source.Line{Data: []byte("third"), At: at.Add(2 * time.Second)})
+	require.NotEqual(t, page[1].Band, next.Band, "and what arrives next carries on from it")
+	require.Equal(t, []string{"first", "second", "third"}, bodies(s.Entries()))
+}
+
+// TestPrependStopsAtTheCap: the cap is where reading further back ends, since a
+// page that evicted the newest lines would undo the reading that asked for it.
+func TestPrependStopsAtTheCap(t *testing.T) {
+	s := NewStore(3)
+	at := time.Date(2026, 8, 11, 15, 16, 36, 0, time.UTC)
+	s.Append(source.Line{Data: []byte("held"), At: at})
+	require.Equal(t, 2, s.Room())
+
+	page := s.Prepend([]source.Line{
+		{Data: []byte("oldest"), At: at.Add(-3 * time.Second)},
+		{Data: []byte("older"), At: at.Add(-2 * time.Second)},
+		{Data: []byte("old"), At: at.Add(-time.Second)},
+	})
+	require.Len(t, page, 2, "what fits is the near end of the page")
+	require.Equal(t, []string{"older", "old", "held"}, bodies(s.Entries()))
+	require.Zero(t, s.Room())
+	require.Zero(t, s.Dropped(), "nothing was evicted to make the room")
+
+	require.Nil(t, s.Prepend([]source.Line{{Data: []byte("older still"), At: at.Add(-4 * time.Second)}}))
+}
+
+// TestPrependRescansTheView: the view is maintained incrementally against the
+// front of the store, and a page moves it.
+func TestPrependRescansTheView(t *testing.T) {
+	s := NewStore(10)
+	v := NewView(Filter{Query: "keep"})
+	s.Append(line("keep me"))
+	require.Len(t, v.Entries(s), 1)
+
+	s.Prepend([]source.Line{line("keep this too"), line("drop this")})
+	require.Equal(t, []string{"keep this too", "keep me"}, bodies(v.Entries(s)))
+}
+
 // TestFieldReadsTheNameTheShipperKept: an OTLP attribute is written
 // service.name and stored service_name by most of what stores it, and a filter
 // naming either has to reach the same lines a query pushed down does.
