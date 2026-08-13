@@ -77,7 +77,10 @@ type Store struct {
 func NewStore(limit int) *Store {
 	return &Store{
 		max: limit,
-		fmt: &pl.Formatter{Color: true},
+		// The time is left out of the rendering and drawn by the view instead.
+		// A rendering is worked out once, when the line arrives, and how a time
+		// is written is something the reader changes while looking at it.
+		fmt: &pl.Formatter{Color: true, NoTime: true},
 	}
 }
 

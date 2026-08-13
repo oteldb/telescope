@@ -39,6 +39,11 @@ type logModel struct {
 	tags map[string]string
 	// cols are the gutter columns this stream has turned out to need.
 	cols columns
+	// times is how the time column is written, and origin is what an age in it
+	// is measured from: when the view was opened, and so when what it holds was
+	// asked for.
+	times  timeMode
+	origin time.Time
 
 	search    textinput.Model
 	searching bool
@@ -80,6 +85,7 @@ func newLogs(cfg source.Config, store *logs.Store, query string) logModel {
 		store:  store,
 		view:   logs.NewView(logs.Filter{Query: query}),
 		follow: true,
+		origin: time.Now(),
 		search: ti,
 		status: "connecting",
 	}
@@ -102,23 +108,29 @@ func (m *logModel) append(l source.Line) { m.observe(m.store.Append(l)) }
 
 // observe turns on the columns e needs.
 func (m *logModel) observe(e *logs.Entry) {
-	if e == nil || e.Record.Structured {
+	if e == nil {
 		return
 	}
 	m.cols.time = m.cols.time || e.HasTime
+	if e.Record.Structured {
+		return
+	}
 	m.cols.level = m.cols.level || e.Record.HasLevel
 }
 
-// gutter renders the columns of one entry, blank where it has nothing to say
-// and blank throughout for a structured line, which brings its own.
+// gutter renders the columns of one entry, blank where it has nothing to say.
+//
+// The time is drawn here for every line, structured or not, rather than left to
+// the renderer that made the text: how a time is written is the view's to
+// change, and a rendering worked out when the line arrived cannot be.
 func (m logModel) gutter(e *logs.Entry) string {
 	var b strings.Builder
 	if m.cols.time {
 		switch {
-		case e.HasTime && !e.Record.Structured:
-			b.WriteString(styleDim.Render(e.At.Local().Format(gutterTime)))
+		case e.HasTime:
+			b.WriteString(styleDim.Render(m.times.stamp(e.At, m.origin)))
 		default:
-			b.WriteString(strings.Repeat(" ", len(gutterTime)))
+			b.WriteString(strings.Repeat(" ", m.times.width()))
 		}
 		b.WriteByte(' ')
 	}
@@ -133,10 +145,6 @@ func (m logModel) gutter(e *logs.Entry) string {
 	}
 	return b.String()
 }
-
-// gutterTime is how the time column is written: the date is in the header, and
-// what a log list is read for is the order of things within a second.
-const gutterTime = "15:04:05.000"
 
 // mergeTags marks each source of a merge, padded to a single column so the
 // lines beside them line up whatever they came from.
@@ -235,6 +243,8 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 	case "f":
 		m.follow = !m.follow
 		m.syncFollow()
+	case "t":
+		m.times = m.times.next()
 	case "l":
 		f := m.view.Filter()
 		f.MinLevel = f.MinLevel.Next()
@@ -417,16 +427,32 @@ func (m *logModel) move(d, n int) {
 
 // clamp keeps the cursor inside the list and the window around the cursor,
 // scrolling by the least amount needed.
+//
+// A window is counted in rows and not in entries, since a gap between two of
+// them takes a row of its own: a screenful of a log that went quiet twice is
+// two lines shorter than a screenful of one that did not.
 func (m *logModel) clamp() {
-	n := len(m.view.Entries(m.store))
+	entries := m.view.Entries(m.store)
+	n := len(entries)
 	h := m.bodyHeight()
 
 	m.cursor = min(max(m.cursor, 0), max(n-1, 0))
-	m.top = min(max(m.top, 0), max(n-h, 0))
-	m.top = min(m.top, m.cursor)
-	if m.cursor >= m.top+h {
-		m.top = m.cursor - h + 1
+	m.top = min(max(m.top, 0), m.cursor)
+	for m.top < m.cursor && m.rows(entries, m.top, m.cursor) > h {
+		m.top++
 	}
+}
+
+// rows is how much of the screen the entries from..to take, the gaps between
+// them included.
+func (m logModel) rows(entries []*logs.Entry, from, to int) int {
+	n := to - from + 1
+	for i := from + 1; i <= to && i < len(entries); i++ {
+		if _, ok := gap(entries[i-1], entries[i]); ok {
+			n++
+		}
+	}
+	return n
 }
 
 func (m logModel) View() string {
@@ -434,12 +460,22 @@ func (m logModel) View() string {
 	m.clamp()
 
 	height := m.bodyHeight()
-	top := m.top
 
 	inner := max(m.width()-2, 10)
 	body := make([]string, 0, height)
-	for i := top; i < len(entries) && i < top+height; i++ {
+	for i := m.top; i < len(entries) && len(body) < height; i++ {
 		e := entries[i]
+		// The silence before a line is drawn above it, and only where the line
+		// above is on screen: a gap at the top of the window is the window's
+		// own edge and says nothing about the log.
+		if i > m.top {
+			if d, ok := gap(entries[i-1], e); ok {
+				body = append(body, gapRow(d, e.At, inner))
+				if len(body) == height {
+					break
+				}
+			}
+		}
 		row := renderLine(e, m.tags[e.Source], m.gutter(e), i == m.cursor, m.hoff, inner)
 		switch {
 		case i == m.cursor:
@@ -624,6 +660,7 @@ func (m logModel) footer(entries []*logs.Entry) string {
 		key("?", "syntax"),
 		key("f", "follow"),
 		key("l", "level"),
+		key("t", "time"),
 		key("←→", "scroll"),
 		key("home/end", "ends"),
 		key("esc", "sources"),

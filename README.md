@@ -141,6 +141,7 @@ targets you have opened before are offered first.
 | `?` | the filter language, written out |
 | `f` | toggle follow |
 | `l` | cycle minimum level: all, info, warn, error |
+| `t` | cycle the time column: clock, full date, age |
 | `esc` | back to the picker |
 | `q`, `ctrl+c` | quit |
 
@@ -182,12 +183,18 @@ its way, `at the start` once there is nothing before it, `holding all it can`
 when the view is full. A command has already written what it wrote, so there
 nothing can be fetched and `tail` is the whole of the history.
 
-A line out of a database usually carries labels the list has no room for — the
-pod, the namespace, the severity — so its time and level are drawn in two
-columns to the left, which `←`/`→` never scrolls away. A line whose rendering
-spans several lines, such as a stacktrace, takes one row marked `⏎N`; `enter`
-shows the whole thing. Rows are shaded by the second they happened in, so a
-burst reads as one block and a gap shows as a seam.
+Every line's time is drawn in a column to the left, which `←`/`→` never scrolls
+away, and `t` cycles how it is written: the clock time, the whole instant with
+its date and offset, or how long before the view opened the line was written.
+That last one is measured from when the lines were fetched and not from now, so
+a list being read does not renumber itself. A line a database reported the
+severity of rather than saying it itself gets a level column beside the time.
+
+A line whose rendering spans several lines, such as a stacktrace, takes one row
+marked `⏎N`; `enter` shows the whole thing. Rows are shaded by the second they
+happened in, so a burst reads as one block; where a log went quiet for a minute
+or more the two lines are separated by how long the silence lasted and the
+instant it ended.
 
 ### Entry view
 
