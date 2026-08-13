@@ -253,6 +253,40 @@ The clipboard is the one on the machine telescope runs on (`wl-copy`, `xclip`,
 `pbcopy`). Over ssh it falls back to OSC 52, which under tmux needs
 `set -g set-clipboard on`.
 
+### Trace view
+
+```console
+$ telescope trace ./checkout.json
+$ curl -s "$JAEGER/api/traces/$TRACE_ID" | telescope trace -
+```
+
+`telescope trace` reads a trace and draws it as a gantt: the spans down the
+left in the order they were called, how long each took, and a bar showing when
+it ran against the request as a whole. It takes a Jaeger query API response,
+which is what Jaeger, Tempo and oteldb all answer `/api/traces/{id}` with, from
+a file or from standard input.
+
+| key | |
+| --- | --- |
+| `↑` `k`, `↓` `j`, `pgup` `pgdown`, `home` `g`, `end` `G` | select |
+| `space`, `enter` | fold a span's children away, or bring them back |
+| `+` `-` | zoom, around the selected span |
+| `←` `h`, `→` `l` | pan |
+| `z` | zoom to the selected span |
+| `0` | back to the whole trace |
+| `y` | copy the selected span's id; `Y` the trace's |
+| `esc`, `q`, `ctrl+c` | quit |
+
+Each service gets its own color, and a span that failed is marked `✗` and drawn
+in red. A fold says how many spans it hid and whether one of them failed, so
+folding a subtree away cannot hide the thing you opened the trace for. Where a
+span names a parent that is not in the response — sampled away, or not written
+yet — the header says how many, since a duration read off a partial trace is
+not the whole story.
+
+There is no way in from the log view yet: nothing fetches a trace by id, so a
+line carrying `trace_id` cannot open one.
+
 ## Configuration
 
 Places live in `$XDG_CONFIG_HOME/telescope/config.yaml`, by default

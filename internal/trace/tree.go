@@ -280,6 +280,31 @@ func (t *Tree) bounds() {
 	}
 }
 
+// Walk visits every span in display order, parents before children, stopping
+// early if f says to.
+func (t *Tree) Walk(f func(*Node) bool) {
+	if t == nil {
+		return
+	}
+	for _, r := range t.Roots {
+		if !walk(r, f) {
+			return
+		}
+	}
+}
+
+func walk(n *Node, f func(*Node) bool) bool {
+	if !f(n) {
+		return false
+	}
+	for _, c := range n.Children {
+		if !walk(c, f) {
+			return false
+		}
+	}
+	return true
+}
+
 // Rows is the tree flattened for display, stopping at anything collapsed names.
 //
 // Collapse is keyed by node and not by span id, since a trace that reported one

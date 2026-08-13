@@ -1,0 +1,134 @@
+{
+  "data": [
+    {
+      "traceID": "4bf92f3577b34da6a3ce929d0e0e4736",
+      "spans": [
+        {
+          "traceID": "4bf92f3577b34da6a3ce929d0e0e4736",
+          "spanID": "00f067aa0ba902b7",
+          "operationName": "POST /checkout",
+          "references": [],
+          "startTime": 1786694400000000,
+          "duration": 480000,
+          "tags": [
+            { "key": "span.kind", "type": "string", "value": "server" },
+            { "key": "http.status_code", "type": "int64", "value": 500 }
+          ],
+          "logs": [],
+          "processID": "p1",
+          "warnings": null
+        },
+        {
+          "traceID": "4bf92f3577b34da6a3ce929d0e0e4736",
+          "spanID": "a1b2c3d4e5f60718",
+          "operationName": "verify token",
+          "references": [
+            {
+              "refType": "CHILD_OF",
+              "traceID": "4bf92f3577b34da6a3ce929d0e0e4736",
+              "spanID": "00f067aa0ba902b7"
+            }
+          ],
+          "startTime": 1786694400005000,
+          "duration": 40000,
+          "tags": [{ "key": "otel.status_code", "type": "string", "value": "OK" }],
+          "logs": [],
+          "processID": "p2",
+          "warnings": null
+        },
+        {
+          "traceID": "4bf92f3577b34da6a3ce929d0e0e4736",
+          "spanID": "b2c3d4e5f6071829",
+          "operationName": "GET session",
+          "references": [
+            {
+              "refType": "CHILD_OF",
+              "traceID": "4bf92f3577b34da6a3ce929d0e0e4736",
+              "spanID": "a1b2c3d4e5f60718"
+            }
+          ],
+          "startTime": 1786694400012000,
+          "duration": 900,
+          "tags": [],
+          "logs": [],
+          "processID": "p3",
+          "warnings": null
+        },
+        {
+          "traceID": "4bf92f3577b34da6a3ce929d0e0e4736",
+          "spanID": "c3d4e5f607182930",
+          "operationName": "charge order",
+          "references": [
+            {
+              "refType": "CHILD_OF",
+              "traceID": "4bf92f3577b34da6a3ce929d0e0e4736",
+              "spanID": "00f067aa0ba902b7"
+            }
+          ],
+          "startTime": 1786694400060000,
+          "duration": 380000,
+          "tags": [],
+          "logs": [],
+          "processID": "p4",
+          "warnings": null
+        },
+        {
+          "traceID": "4bf92f3577b34da6a3ce929d0e0e4736",
+          "spanID": "d4e5f60718293041",
+          "operationName": "INSERT orders",
+          "references": [
+            {
+              "refType": "CHILD_OF",
+              "traceID": "4bf92f3577b34da6a3ce929d0e0e4736",
+              "spanID": "c3d4e5f607182930"
+            }
+          ],
+          "startTime": 1786694400130000,
+          "duration": 210000,
+          "tags": [
+            { "key": "error", "type": "bool", "value": true },
+            {
+              "key": "otel.status_description",
+              "type": "string",
+              "value": "deadlock detected"
+            },
+            { "key": "db.statement", "type": "string", "value": "INSERT INTO orders" }
+          ],
+          "logs": [],
+          "processID": "p5",
+          "warnings": null
+        },
+        {
+          "traceID": "4bf92f3577b34da6a3ce929d0e0e4736",
+          "spanID": "e5f6071829304152",
+          "operationName": "flush wal",
+          "references": [
+            {
+              "refType": "FOLLOWS_FROM",
+              "traceID": "4bf92f3577b34da6a3ce929d0e0e4736",
+              "spanID": "00f067aa0ba902b7"
+            }
+          ],
+          "startTime": 1786694400470000,
+          "duration": 90000,
+          "tags": [],
+          "logs": [],
+          "processID": "p5",
+          "warnings": null
+        }
+      ],
+      "processes": {
+        "p1": { "serviceName": "gateway", "tags": [] },
+        "p2": { "serviceName": "identity", "tags": [] },
+        "p3": { "serviceName": "sessions", "tags": [] },
+        "p4": { "serviceName": "checkout", "tags": [] },
+        "p5": { "serviceName": "orders-db", "tags": [] }
+      },
+      "warnings": null
+    }
+  ],
+  "total": 0,
+  "limit": 0,
+  "offset": 0,
+  "errors": null
+}

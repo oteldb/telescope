@@ -30,7 +30,7 @@ about a workspace, re-run it with `GOWORK=off`.
 | `internal/config` | `config.yaml` and `history.yaml`. A `Place` is where logs are read from and how it is reached (`via:` for a command, `proxy:` for a database); a `Group` is several places read as one. `Load` resolves both; `New` does the same for declarations that did not come from a file. |
 | `internal/query` | the filter language: `Parse` builds an `Expr`, `Match` evaluates it against one `Record`. It sits below `source` so a query can be compiled into one a database answers itself. |
 | `internal/complete` | the suggestions the start screen offers, fetched by shelling out. |
-| `internal/trace` | a trace as it is read, and nothing that reads it: `span.go` is one operation, `tree.go` arranges them by their parent links, `skew.go` stops a child being drawn before the call that made it, `window.go` is the interval a view covers and the axis over it. Nothing here fetches or draws — `ui/gantt.go` does the drawing. Not yet reachable from the app. |
+| `internal/trace` | a trace as it is read, and nothing that reads it: `span.go` is one operation, `tree.go` arranges them by their parent links, `skew.go` stops a child being drawn before the call that made it, `window.go` is the interval a view covers and the axis over it, `jaeger.go` decodes the query API's response. Nothing here draws; `ui/gantt.go` does, `ui/traceview.go` is the model around it and `ui/spanpalette.go` the colors. |
 
 The dependency order is `query` → `source` → `logs` → `ui`, and `config` feeds
 `ui`. It does not run the other way: when `source` needed to date a line by
@@ -91,6 +91,16 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   from that and optional: it moves a subtree by the least that stops the
   picture lying about causality, and is not Jaeger's per-service adjustment,
   which needs span kinds telescope does not have yet.
+- **A service's color is counted out, not hashed.** `newServicePalette` hands
+  out swatches in the order the trace first names a service, which is
+  jaeger-ui's rule and theirs is arithmetic: a hash into twenty buckets collides
+  for six services more than half the time, and two services sharing a color in
+  the one trace on screen defeats the only thing the color is for. The counter
+  is per trace rather than per session as theirs is, so the same trace draws the
+  same way for everybody — their ADR records reconciling that as unfinished, and
+  a gantt opened on one trace at a time gets it for free. It follows that
+  failure cannot be carried by color: one of the twenty swatches is red, so a
+  failed span is marked `✗` as well.
 - **A bar's two edges do not get the same resolution.** The eighth blocks fill
   a cell from its left, so a bar *ending* mid-cell lands within an eighth with
   no idea what the terminal's background is; a bar *starting* mid-cell would

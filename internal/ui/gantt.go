@@ -2,8 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"hash/fnv"
-	"io"
 	"math"
 	"strings"
 	"time"
@@ -39,8 +37,9 @@ const (
 // and the cursor, and none of it needs a message loop to be looked at or
 // tested; what a key does is the wiring's business.
 type gantt struct {
-	tree *trace.Tree
-	win  trace.Window
+	tree    *trace.Tree
+	palette servicePalette
+	win     trace.Window
 	// bounds is the whole trace, which is what panning is kept near and what
 	// the axis counts its offsets from.
 	bounds trace.Window
@@ -54,6 +53,7 @@ type gantt struct {
 func newGantt(t *trace.Tree) *gantt {
 	g := &gantt{
 		tree:      t,
+		palette:   newServicePalette(t),
 		win:       trace.Fit(t),
 		bounds:    trace.Fit(t),
 		collapsed: map[*trace.Node]bool{},
@@ -287,9 +287,16 @@ func (g *gantt) name(n *trace.Node) string {
 		// would be drawing a parent that is not there.
 		b.WriteString(styleDim.Render("⋯ "))
 	}
-	b.WriteString(serviceStyle(n.Service).Render(logs.Sanitize(n.Service)))
+	b.WriteString(g.palette.style(n.Service).Render(logs.Sanitize(n.Service)))
 	b.WriteByte(' ')
 	b.WriteString(logs.Sanitize(n.Name))
+	if n.Failed() {
+		// Said and not only colored. The palette is a qualitative scale and one
+		// of its twenty swatches is red, so a service that drew that one would
+		// otherwise read as a request that failed — and a reader who cannot
+		// tell the two reds apart is not helped by there being two.
+		b.WriteString(styleErr.Render(" ✗"))
+	}
 	if g.collapsed[n] {
 		hidden := fmt.Sprintf(" +%d", n.Hidden())
 		// A fold that hid an error has to say so, or folding becomes a way to
@@ -362,7 +369,7 @@ const barFloor = 1.0 / 8
 
 func (g *gantt) bar(n *trace.Node, cells int) string {
 	x0, x1 := g.win.Span(n.Span, cells)
-	return barStyle(n).Render(string(barCells(cells, x0, x1)))
+	return g.barStyle(n).Render(string(barCells(cells, x0, x1)))
 }
 
 // barCells draws an interval given in cell coordinates, which may lie partly or
@@ -424,11 +431,11 @@ func barCells(cells int, x0, x1 float64) []rune {
 // of them reads as four blocks of color, and red when the span itself failed —
 // which outranks whose it was, since a failure is what somebody opened the
 // trace for.
-func barStyle(n *trace.Node) lipgloss.Style {
+func (g *gantt) barStyle(n *trace.Node) lipgloss.Style {
 	if n.Failed() {
 		return lipgloss.NewStyle().Foreground(colorErr)
 	}
-	return serviceStyle(n.Service)
+	return g.palette.style(n.Service)
 }
 
 func durStyle(n *trace.Node) lipgloss.Style {
@@ -436,18 +443,6 @@ func durStyle(n *trace.Node) lipgloss.Style {
 		return styleErr
 	}
 	return styleDim
-}
-
-// serviceStyle colors a service by its name, so it keeps the same color
-// wherever it appears in the trace and across two traces of the same request.
-//
-// The palette is small and two services can share a color, which is the same
-// trade [traceStyle] makes: a color that groups often enough to be worth
-// following, and the name beside it for when it matters.
-func serviceStyle(service string) lipgloss.Style {
-	h := fnv.New32a()
-	_, _ = io.WriteString(h, service)
-	return tagStyle(int(h.Sum32() % uint32(len(tagColors))))
 }
 
 // humanDur writes a span's length the way a trace is read: three significant

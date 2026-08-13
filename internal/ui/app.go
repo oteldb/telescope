@@ -10,6 +10,7 @@ import (
 	"github.com/oteldb/telescope/internal/logs"
 	"github.com/oteldb/telescope/internal/query"
 	"github.com/oteldb/telescope/internal/source"
+	"github.com/oteldb/telescope/internal/trace"
 )
 
 // storeLimit is how many lines are retained in memory.
@@ -25,6 +26,7 @@ const (
 	stateLogs
 	stateEntry
 	stateHelp
+	stateTrace
 )
 
 // Model is the root bubbletea model.
@@ -39,6 +41,7 @@ type Model struct {
 	logs  logModel
 	entry entryModel
 	help  helpModel
+	trace traceModel
 
 	stream *source.Stream
 }
@@ -46,6 +49,13 @@ type Model struct {
 // New returns the root model, opening on the start screen.
 func New() Model {
 	return Model{start: newStart()}
+}
+
+// NewTrace returns the root model opened on one trace, which is what reading a
+// trace out of a file does. There is no stream behind it and nothing to go back
+// to: the start screen picks a log source, and a trace did not come from one.
+func NewTrace(t *trace.Tree) Model {
+	return Model{state: stateTrace, start: newStart(), trace: newTrace(t)}
 }
 
 // Init implements [tea.Model].
@@ -69,6 +79,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logs.resize(msg.Width, msg.Height)
 		m.entry.resize(msg.Width, msg.Height)
 		m.help.resize(msg.Width, msg.Height)
+		m.trace.resize(msg.Width, msg.Height)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -163,6 +174,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = m.back
 		case stateEntry:
 			m.state = stateLogs
+		case stateTrace:
+			// A trace opened from a file has nothing under it, and leaving it
+			// for a start screen that cannot reopen it would be a trapdoor.
+			return m, m.quit()
 		case stateLogs:
 			m.stopStream()
 			m.state = stateStart
@@ -183,6 +198,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.entry, cmd = m.entry.Update(msg)
 	case stateHelp:
 		m.help, cmd = m.help.Update(msg)
+	case stateTrace:
+		m.trace, cmd = m.trace.Update(msg)
 	}
 	return m, cmd
 }
@@ -196,6 +213,8 @@ func (m Model) View() string {
 		return m.entry.View()
 	case stateHelp:
 		return m.help.View()
+	case stateTrace:
+		return m.trace.View()
 	default:
 		return m.start.View()
 	}
