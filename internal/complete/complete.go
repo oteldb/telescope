@@ -2,9 +2,10 @@
 package complete
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -151,11 +152,11 @@ func Rank(items []Candidate, query string, attr Attr) []Candidate {
 		}
 		out = append(out, r)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].tier != out[j].tier {
-			return out[i].tier < out[j].tier
+	slices.SortStableFunc(out, func(a, b ranked) int {
+		if c := cmp.Compare(a.tier, b.tier); c != 0 {
+			return c
 		}
-		return out[i].atStart < out[j].atStart
+		return cmp.Compare(a.atStart, b.atStart)
 	})
 
 	res := make([]Candidate, len(out))

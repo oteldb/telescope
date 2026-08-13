@@ -118,7 +118,7 @@ func after(out []token, kind tokenKind) bool {
 }
 
 func lexWord(s string) string {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		switch c := s[i]; {
 		case c == ' ', c == '\t', c == '\n', c == '\r',
 			c == '(', c == ')', c == '"',
