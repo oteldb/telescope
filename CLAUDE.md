@@ -101,6 +101,13 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   on every redraw could not be read. A silence longer than `gapAfter` takes a
   row of its own between the two lines, which is why `logModel.clamp` counts the
   window in rows and not in entries.
+- **A suggestion the database knows and the lines do not is worth saying so
+  about.** `onRecordDetail` is worded as what it is, since "not seen yet" was
+  read as "this value does not exist" — and the same distinction is what
+  `Store.HasField` answers for an empty list: a value nothing has is a value to
+  change, a field nothing has is a filter that was never going to match. It
+  resolves a name the way `Entry.Field` does, off the index rather than by
+  scanning, and the index never forgets.
 - **Ordering-sensitive state is computed once, on arrival.** `Entry.Band` is
   worked out in `Store.Append` because a view that scrolls or filters cannot
   work it out again without disagreeing with itself.

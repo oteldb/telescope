@@ -7,9 +7,11 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 
 	"github.com/oteldb/telescope/internal/logs"
+	"github.com/oteldb/telescope/internal/query"
 	"github.com/oteldb/telescope/internal/source"
 )
 
@@ -159,4 +161,76 @@ func entryAt(at time.Time, msg string) source.Line {
 func stampOf(m tea.Model, i int) string {
 	lg := m.(Model).logs
 	return strings.TrimSpace(lg.times.stamp(lg.store.Entries()[i].At, lg.origin))
+}
+
+// TestATracedLineIsMarked: a trace id is thirty-two characters nobody reads, so
+// what the list says is that there is one, and which lines share it.
+func TestATracedLineIsMarked(t *testing.T) {
+	const (
+		one = "4bf92f3577b34da6a3ce929d0e0e4736"
+		two = "1b4a2f9c0e5d8877a1c2b3d4e5f60718"
+	)
+	m := logsModel(t,
+		`{"msg":"GET /orders","trace_id":"`+one+`"}`,
+		`{"msg":"query","trace_id":"`+one+`"}`,
+		`{"msg":"boom","trace_id":"`+two+`"}`,
+		`{"msg":"no trace here"}`,
+	)
+	require.True(t, m.(Model).logs.cols.trace)
+
+	rows := strings.Split(m.View(), "\n")
+	marked := func(body string) string {
+		i := slices.IndexFunc(rows, func(r string) bool { return strings.Contains(ansi.Strip(r), body) })
+		require.GreaterOrEqual(t, i, 0, body)
+		return rows[i]
+	}
+	require.Contains(t, marked("GET /orders"), traceStyle(one).Render(traceGlyph))
+	require.Contains(t, marked("query"), traceStyle(one).Render(traceGlyph),
+		"one request is one color, however far apart its lines are")
+	require.Contains(t, marked("boom"), traceStyle(two).Render(traceGlyph))
+	require.NotContains(t, ansi.Strip(marked("no trace here")), traceGlyph,
+		"a line outside a trace keeps the column and says nothing in it")
+}
+
+// TestTheTraceColumnIsOnlyForStreamsThatHaveOne: a column of blanks is a column
+// of nothing, and the width belongs to the line.
+func TestTheTraceColumnIsOnlyForStreamsThatHaveOne(t *testing.T) {
+	m := logsModel(t, `{"msg":"hi","pod":"api-7"}`)
+	require.False(t, m.(Model).logs.cols.trace)
+	require.NotContains(t, screen(t, m), traceGlyph)
+}
+
+// TestWhyNothingMatched: filtering by a field the lines do not carry looks
+// exactly like filtering by a value they do not have, and the two are fixed
+// differently — the first by any spelling of the value, never.
+func TestWhyNothingMatched(t *testing.T) {
+	m := logsModel(t, `{"msg":"hi","pod":"api-7"}`)
+
+	absent := send(t, typed(t, send(t, m, k("/")), "service_name=oteldb"), k("enter"))
+	out := screen(t, absent)
+	require.Contains(t, out, "no lines match")
+	require.Contains(t, out, "no line carries service_name")
+
+	present := send(t, typed(t, send(t, m, k("/")), "pod=api-9"), k("enter"))
+	out = screen(t, present)
+	require.Contains(t, out, "no lines match")
+	require.NotContains(t, out, "no line carries", "the field is there, the value is not")
+}
+
+func TestFilterFields(t *testing.T) {
+	for _, tt := range []struct {
+		query string
+		want  []string
+	}{
+		{"pod=api", []string{"pod"}},
+		{"word", nil},
+		{"pod=api -zone=eu", []string{"pod", "zone"}},
+		{"pod=api or zone=eu", []string{"pod", "zone"}},
+		{"not (pod=api)", []string{"pod"}},
+		{"level>=warn", nil},
+	} {
+		e, err := query.Parse(tt.query)
+		require.NoError(t, err)
+		require.Equal(t, tt.want, filterFields(e), tt.query)
+	}
 }

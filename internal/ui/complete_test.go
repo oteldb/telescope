@@ -166,7 +166,9 @@ func TestCompleteFromTheDatabase(t *testing.T) {
 
 	require.Equal(t, []string{"pod", "region"}, suggested(m))
 	require.Empty(t, offered(m)[0].Detail, "one of them is on screen")
-	require.Equal(t, "not seen yet", offered(m)[1].Detail, "the other only on record")
+	require.Equal(t, onRecordDetail, offered(m)[1].Detail, "the other only on record")
+	require.Contains(t, onRecordDetail, "not in these lines",
+		"which is about the lines held and not about whether the name exists")
 }
 
 // TestCompleteAsksACommandNothing: a process writing to a pipe has nothing to

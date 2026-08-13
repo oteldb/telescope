@@ -170,7 +170,14 @@ Values are compared without case. A line that reported no level passes no
 `tab` completes: field names where a bare word is, and the values under one once
 it is named. What has already been read is offered first, and a log database is
 also asked what else it holds, so `pod=` completes to a pod no line has
-mentioned yet.
+mentioned yet. Those are marked *on record, not in these lines* — the database
+has it, the lines here do not, and filtering by one will select nothing until
+such a line arrives.
+
+That is also what a list with nothing in it says: `no lines match` where the
+value is the reason, and `no lines match · no line carries service_name` where
+the field is. A field none of the lines have is a filter that was never going
+to match, however the value is spelled.
 
 Over a log database the filter is also sent to the server, as much of it as the
 server can answer, and the view is rebuilt from the result rather than filtered
@@ -189,6 +196,10 @@ its date and offset, or how long before the view opened the line was written.
 That last one is measured from when the lines were fetched and not from now, so
 a list being read does not renumber itself. A line a database reported the
 severity of rather than saying it itself gets a level column beside the time.
+
+A line written inside a trace is marked `◆` beside its time, colored by the
+trace it belongs to, so the lines of one request stand out among everything
+else that was happening; `enter` has the id, and `f` there narrows to it.
 
 A line whose rendering spans several lines, such as a stacktrace, takes one row
 marked `⏎N`; `enter` shows the whole thing. Rows are shaded by the second they

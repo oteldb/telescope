@@ -112,6 +112,10 @@ func (c completion) apply(s, value string, isKey bool) (string, int) {
 	return s[:c.At] + value + s[end:], c.At + len(value)
 }
 
+// onRecordDetail marks a suggestion that came from the database rather than
+// from the lines on screen.
+const onRecordDetail = "on record, not in these lines"
+
 // suggest ranks what the stream is known to offer against what has been typed.
 // The two sources are joined rather than chosen between: what the lines already
 // read carry is what this stream is actually saying, and what the database knows
@@ -149,12 +153,17 @@ func (m logModel) suggest() (completion, []complete.Candidate) {
 	// What only the database knows is offered behind what has actually been
 	// seen, and marked: a name on screen is the more likely one, and one merely
 	// on record may match nothing in the lines this view is holding.
+	//
+	// The wording is what it is because the alternative was read as "this value
+	// does not exist". It does exist — the database says so — and the thing
+	// worth knowing before filtering by it is that none of the lines here
+	// carries it.
 	for _, v := range remote {
 		if v == "" || seen[v] {
 			continue
 		}
 		seen[v] = true
-		items = append(items, complete.Candidate{Value: v, Detail: "not seen yet"})
+		items = append(items, complete.Candidate{Value: v, Detail: onRecordDetail})
 	}
 	return at, complete.Rank(items, at.Prefix, nil)
 }

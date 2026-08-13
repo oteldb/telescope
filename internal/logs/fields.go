@@ -121,6 +121,47 @@ func (s *Store) FieldValues(key string) []string {
 	return out
 }
 
+// HasField reports whether any line so far carried key, resolved the way
+// [Entry.Field] resolves the one a filter names.
+//
+// It answers a question a reader asks of an empty list: whether a filter found
+// nothing because no line has that value, or because no line has that field at
+// all. The index is what answers it rather than a scan, and the index never
+// forgets, so this is about every line the stream produced and not only the
+// ones still held.
+func (s *Store) HasField(key string) bool {
+	if key == "" {
+		return false
+	}
+	if s.index.has(key) {
+		return true
+	}
+	// The name the shipper would have kept, as [Entry.Field] tries next.
+	if under := strings.ReplaceAll(key, ".", "_"); under != key && s.index.has(under) {
+		return true
+	}
+	switch {
+	case matches(key, bodyKeys):
+		return s.index.has("msg")
+	case matches(key, traceKeys):
+		return s.index.has("trace_id")
+	case matches(key, spanKeys):
+		return s.index.has("span_id")
+	case strings.EqualFold(key, "level"):
+		return s.index.has("level")
+	case strings.EqualFold(key, "source"):
+		return s.index.has("source")
+	case strings.EqualFold(key, "stream"):
+		return s.index.has("stream")
+	}
+	return false
+}
+
+func (ix *fieldIndex) has(key string) bool {
+	_, ok := ix.values[key]
+	return ok
+}
+
 // compareFold orders suggestions the way a reader scans them, which is by the
 // letters and not by their case.
 func compareFold(a, b string) int {

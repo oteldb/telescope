@@ -101,6 +101,7 @@ func newLogs(cfg source.Config, store *logs.Store, query string) logModel {
 type columns struct {
 	time  bool
 	level bool
+	trace bool
 }
 
 // append stores a line and notes what rendering it will need.
@@ -112,6 +113,7 @@ func (m *logModel) observe(e *logs.Entry) {
 		return
 	}
 	m.cols.time = m.cols.time || e.HasTime
+	m.cols.trace = m.cols.trace || e.Record.TraceID != ""
 	if e.Record.Structured {
 		return
 	}
@@ -141,6 +143,10 @@ func (m logModel) gutter(e *logs.Entry) string {
 		default:
 			b.WriteString(strings.Repeat(" ", levelWidth))
 		}
+		b.WriteByte(' ')
+	}
+	if m.cols.trace {
+		b.WriteString(traceMark(e))
 		b.WriteByte(' ')
 	}
 	return b.String()
@@ -667,9 +673,51 @@ func (m logModel) footer(entries []*logs.Entry) string {
 		key("q", "quit"),
 	}, styleHint.Render(" · "))
 	if len(entries) == 0 && m.store.Len() > 0 {
-		help = styleHint.Render("no lines match · ") + help
+		why := "no lines match"
+		// Which of the two it is, since they are fixed differently: a value
+		// nothing has is a value to change, and a field nothing has is a filter
+		// that was never going to match however it was spelled.
+		if missing := m.missingFields(); len(missing) > 0 {
+			why += " · no line carries " + strings.Join(missing, " or ")
+		}
+		help = styleHint.Render(why+" · ") + help
 	}
 	return ansi.Truncate(help, m.width(), "")
+}
+
+// missingFields are the names the filter compares that no line has carried.
+func (m logModel) missingFields() []string {
+	var out []string
+	for _, key := range filterFields(m.view.Filter().Expr()) {
+		if !m.store.HasField(key) && !slices.Contains(out, key) {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+// filterFields are the names a query compares, in the order it names them.
+func filterFields(e query.Expr) []string {
+	switch e := e.(type) {
+	case query.And:
+		return slices.Concat(mapSlice(e, filterFields)...)
+	case query.Or:
+		return slices.Concat(mapSlice(e, filterFields)...)
+	case query.Not:
+		return filterFields(e.Expr)
+	case query.Field:
+		return []string{e.Key}
+	default:
+		return nil
+	}
+}
+
+func mapSlice[T, R any](in []T, fn func(T) R) []R {
+	out := make([]R, 0, len(in))
+	for _, v := range in {
+		out = append(out, fn(v))
+	}
+	return out
 }
 
 // timeRange summarizes the time span covered by the visible entries.

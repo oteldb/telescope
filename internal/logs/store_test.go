@@ -347,3 +347,33 @@ func TestFieldReadsTheNameTheShipperKept(t *testing.T) {
 	_, ok = e.Field("nothing.here")
 	require.False(t, ok)
 }
+
+// TestHasField: a filter that found nothing found it for one of two reasons,
+// and the store is what can tell them apart.
+func TestHasField(t *testing.T) {
+	s := NewStore(10)
+	s.Append(source.Line{
+		Data:   []byte(`{"level":"info","msg":"hi","trace_id":"abc","k8s_pod_name":"api-0"}`),
+		Labels: []source.Label{{Key: "zone", Value: "eu"}},
+	})
+
+	for _, tt := range []struct {
+		key  string
+		want bool
+	}{
+		{"k8s_pod_name", true},
+		{"zone", true},         // what the source said beside the line
+		{"k8s.pod.name", true}, // the name the shipper would have kept
+		{"msg", true},
+		{"body", true},
+		{"trace_id", true},
+		{"traceID", true},
+		{"level", true},
+		{"stream", true},
+		{"span_id", false},
+		{"service_name", false},
+		{"", false},
+	} {
+		require.Equal(t, tt.want, s.HasField(tt.key), tt.key)
+	}
+}

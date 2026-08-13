@@ -2,8 +2,12 @@ package ui
 
 import (
 	"fmt"
+	"hash/fnv"
+	"io"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/oteldb/telescope/internal/logs"
 )
@@ -95,6 +99,32 @@ func humanAge(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%s%dd%02dh", sign, int(d.Hours())/24, int(d.Hours())%24)
 	}
+}
+
+// traceGlyph marks a line that was written inside a trace. A trace id is
+// thirty-two characters nobody reads, so what the list shows is that there is
+// one: the id itself is a keystroke away in the entry, and the color is what
+// says two lines belong to the same request.
+const traceGlyph = "◆"
+
+// traceMark is the trace column of one entry, blank for a line outside a trace.
+func traceMark(e *logs.Entry) string {
+	if e.Record.TraceID == "" {
+		return " "
+	}
+	return traceStyle(e.Record.TraceID).Render(traceGlyph)
+}
+
+// traceStyle colors a trace by its id, so the lines of one request carry the
+// same mark wherever they are in the list and whichever source they came from.
+//
+// The palette is small, so two traces on screen can share a color. That is the
+// trade: a mark that is right about "these are the same" often enough to be
+// worth following, and never asked to be proof — narrowing by the id is.
+func traceStyle(id string) lipgloss.Style {
+	h := fnv.New32a()
+	_, _ = io.WriteString(h, id)
+	return tagStyle(int(h.Sum32() % uint32(len(tagColors))))
 }
 
 // gapAfter is how far apart two lines have to be for the seam between them to
