@@ -50,9 +50,12 @@ func (m entryModel) document(width int) []item {
 	text := func(lines ...string) { out = append(out, item{lines: lines}) }
 
 	// row is a "label  value" the cursor can stop on, drawn as rendered says and
-	// carrying raw for whatever is done with it next.
+	// carrying raw for whatever is done with it next. What decides whether there
+	// is a row is the value received and never its rendering: coloring an empty
+	// string still writes the escapes around it, and a blank trace_id the cursor
+	// could stop on is a row that narrows by a value nothing has.
 	row := func(key, raw, rendered string) {
-		if rendered == "" {
+		if raw == "" {
 			return
 		}
 		out = append(out, item{

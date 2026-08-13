@@ -84,6 +84,24 @@ func TestEntryCursorWalksTheAttributes(t *testing.T) {
 	require.Zero(t, m.off, "and the frame is back at the top of the document")
 }
 
+// TestEntryLeavesOutWhatTheLineDoesNotHave: a line with no trace is a line
+// with no trace_id row. Drawing the label with nothing after it invites the
+// cursor onto it and narrowing by it asks for a value nothing carries.
+func TestEntryLeavesOutWhatTheLineDoesNotHave(t *testing.T) {
+	m := entryOf(t, `{"msg":"boom"}`)
+
+	var keys []string
+	for _, idx := range picks(m.document(m.docWidth())) {
+		keys = append(keys, m.document(m.docWidth())[idx].key)
+	}
+	require.NotContains(t, keys, "trace_id")
+	require.NotContains(t, keys, "span_id")
+	require.NotContains(t, ansi.Strip(m.View()), "trace_id")
+
+	traced := entryOf(t, `{"msg":"boom","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736"}`)
+	require.Contains(t, ansi.Strip(traced.View()), "4bf92f3577b34da6a3ce929d0e0e4736")
+}
+
 // TestEntryMarksWhatIsSelected: a cursor nobody can see is not a cursor.
 func TestEntryMarksWhatIsSelected(t *testing.T) {
 	m := entryOf(t, `{"msg":"boom","caller":"internal/ui/start.go:42"}`)
