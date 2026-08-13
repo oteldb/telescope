@@ -34,7 +34,22 @@ Enter
 Sleep 6s
 
 Type "/"
+Sleep 700ms
+Type "serv"
+Sleep 1200ms
+Tab
+Sleep 800ms
+Type "wo"
+Sleep 1200ms
+Tab
+Sleep 800ms
+Enter
+Sleep 2500ms
+
+Type "/"
 Sleep 500ms
+Ctrl+U
+Sleep 300ms
 Type "level>=warn"
 Sleep 1s
 Enter
