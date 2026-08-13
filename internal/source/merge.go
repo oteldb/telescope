@@ -131,6 +131,7 @@ func startMerge(ctx context.Context, cfg Config, opt options) (*Stream, error) {
 			notes = append(notes, Line{
 				Data:   []byte("telescope: " + labels[i] + ": " + err.Error()),
 				Stderr: true,
+				Note:   true,
 				Source: labels[i],
 			})
 			continue
@@ -147,26 +148,114 @@ func startMerge(ctx context.Context, cfg Config, opt options) (*Stream, error) {
 	return s, nil
 }
 
+// openGrace bounds how long a source's opening stderr is held back. A collector
+// that cannot read where it was pointed says so and exits at once, so what it
+// wrote in that moment is a complaint and not output; past this it is still
+// running, and what it writes is the log.
+const openGrace = 2 * time.Second
+
+// maxHeld bounds what is held over [openGrace]. A source this talkative on
+// stderr is a source writing its log there.
+const maxHeld = 64
+
 // forward carries one source's lines to the merge, one at a time: the merge
 // compares the head of every source, so a source may only ever have one line
 // pending. It waits for the merge to take that line before reading the next,
 // which is what keeps a source that is far ahead from buffering into the merge.
+//
+// What a source says while it is opening is held until it is known whether it
+// opened: a place a group names and this one does not have writes its refusal
+// on stderr and exits, and that is not a line in the timeline.
 func forward(ctx context.Context, idx int, sub *Stream, label string, items chan<- mergeItem, ack <-chan struct{}) {
-	for l := range sub.Lines() {
+	send := func(l Line) bool {
 		l.Source = label
 		select {
 		case items <- mergeItem{idx: idx, line: l}:
 		case <-ctx.Done():
-			return
+			return false
 		}
 		select {
 		case <-ack:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	var (
+		held    []Line
+		holding = true
+	)
+	release := func() bool {
+		holding = false
+		for _, l := range held {
+			if !send(l) {
+				return false
+			}
+		}
+		held = nil
+		return true
+	}
+
+	grace := time.NewTimer(openGrace)
+	defer grace.Stop()
+
+	lines := sub.Lines()
+	for lines != nil {
+		select {
+		case l, ok := <-lines:
+			if !ok {
+				lines = nil
+				continue
+			}
+			switch {
+			case !holding:
+			case l.Stderr && len(held) < maxHeld:
+				held = append(held, l)
+				continue
+			default:
+				// A source that is reading wrote what it wrote on the way there.
+				if !release() {
+					return
+				}
+			}
+			if !send(l) {
+				return
+			}
+		case <-grace.C:
+			if !release() {
+				return
+			}
 		case <-ctx.Done():
 			return
 		}
 	}
+
+	err := <-sub.Done()
+	if holding && absent(held) {
+		// The place does not have what the group named. It contributes nothing,
+		// which is the whole of what there is to say about it.
+		held, err = nil, nil
+	}
+	for _, l := range held {
+		if !send(l) {
+			return
+		}
+	}
+	if err != nil {
+		// Said where its lines would have been, since the exit error is only
+		// reported once every source has ended and a source can outlive the
+		// reader's interest in why another one stopped.
+		if !send(Line{
+			Data:   []byte("telescope: " + label + ": " + err.Error()),
+			Stderr: true,
+			Note:   true,
+		}) {
+			return
+		}
+	}
 	select {
-	case items <- mergeItem{idx: idx, err: <-sub.Done(), end: true}:
+	case items <- mergeItem{idx: idx, err: err, end: true}:
 	case <-ctx.Done():
 	}
 }

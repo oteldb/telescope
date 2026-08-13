@@ -2,8 +2,10 @@ package source
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -88,9 +90,11 @@ func TestMergeSurvivesOneSource(t *testing.T) {
 	require.NoError(t, err)
 
 	lines, err := drain(t, s)
-	require.Len(t, lines, 1)
+	require.Len(t, lines, 2)
 	require.Contains(t, lines[0], "still here")
-	require.ErrorContains(t, err, "500", "and the one that failed is reported")
+	require.Contains(t, lines[1], "telescope: bad:", "and the one that failed says so where its lines would have been")
+	require.Contains(t, lines[1], "500")
+	require.ErrorContains(t, err, "500", "and the reader is told again at the end")
 }
 
 // TestMergeLabels: what each line is tagged with, when nothing was named.
@@ -270,6 +274,90 @@ func TestMergeWaitsOutASilentSource(t *testing.T) {
 	})
 }
 
+// TestMergeSaysNothingOfAPlaceThatDoesNotHaveIt: a group may name a workload
+// that only one of its clusters runs, and the rest refusing is not news.
+func TestMergeSaysNothingOfAPlaceThatDoesNotHaveIt(t *testing.T) {
+	s, kids := fakeMerge(t.Context(), 2)
+
+	kids[0].feed(Line{Data: []byte("serving")})
+	kids[1].feed(Line{
+		Data:   []byte(`error: error from server (NotFound): deployments.apps "api" not found in namespace "octo"`),
+		Stderr: true,
+	})
+	kids[1].end(errors.New("exit status 1"))
+	kids[0].end(nil)
+
+	var got []string
+	for l := range s.Lines() {
+		got = append(got, string(l.Data))
+	}
+	require.Equal(t, []string{"serving"}, got, "the place that has it is the whole timeline")
+	require.NoError(t, <-s.Done(), "and a place with nothing to give is not a failure")
+}
+
+// TestMergeSaysWhyASourceStopped: a place that could not be read is a place
+// with something to say, and telescope says it where its lines would have been.
+func TestMergeSaysWhyASourceStopped(t *testing.T) {
+	s, kids := fakeMerge(t.Context(), 1)
+
+	kids[0].feed(Line{
+		Data:   []byte("ssh: connect to host 10.0.0.1 port 22: Connection refused"),
+		Stderr: true,
+	})
+	kids[0].end(errors.New("exit status 255"))
+
+	var got []Line
+	for l := range s.Lines() {
+		got = append(got, l)
+	}
+	require.Len(t, got, 2)
+	require.Contains(t, string(got[0].Data), "Connection refused")
+	require.False(t, got[0].Note, "what the collector wrote is the collector talking")
+	require.Contains(t, string(got[1].Data), "telescope: s0: exit status 255")
+	require.True(t, got[1].Note, "and what telescope wrote is marked as its own")
+	require.ErrorContains(t, <-s.Done(), "exit status 255")
+}
+
+// TestMergeHoldsOnlyWhatComesBeforeTheLog: a source that is reading writes its
+// log to whichever stream it likes, and holding that back would be holding the
+// log back.
+func TestMergeHoldsOnlyWhatComesBeforeTheLog(t *testing.T) {
+	s, kids := fakeMerge(t.Context(), 1)
+
+	kids[0].feed(Line{Data: []byte("W deprecated flag"), Stderr: true})
+	kids[0].feed(Line{Data: []byte("listening")})
+	kids[0].end(nil)
+
+	var got []string
+	for l := range s.Lines() {
+		got = append(got, string(l.Data))
+	}
+	require.Equal(t, []string{"W deprecated flag", "listening"}, got)
+	require.NoError(t, <-s.Done())
+}
+
+// TestMergeReleasesASourceThatOnlyWritesStderr: a container logging to stderr
+// and nowhere else is not refusing to open, it is running, and past the grace
+// it is read like anything else.
+func TestMergeReleasesASourceThatOnlyWritesStderr(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, kids := fakeMerge(t.Context(), 1)
+
+		kids[0].feed(Line{Data: []byte("E boom"), Stderr: true, At: time.Now()})
+		synctest.Wait()
+		require.Empty(t, s.Lines(), "held while it may still be a refusal")
+
+		time.Sleep(openGrace)
+		synctest.Wait()
+		require.Len(t, s.Lines(), 1, "past the grace it is the log")
+
+		kids[0].end(nil)
+		for range s.Lines() {
+		}
+		require.NoError(t, <-s.Done())
+	})
+}
+
 // fakeMerge runs the merge over sources fed by hand, which is the only way to
 // say when a source goes quiet.
 func fakeMerge(ctx context.Context, n int) (*Stream, []*Stream) {
@@ -283,7 +371,7 @@ func fakeMerge(ctx context.Context, n int) (*Stream, []*Stream) {
 		kids[i] = &Stream{lines: make(chan Line), done: make(chan error, 1)}
 		acks[i] = make(chan struct{}, 1)
 		open[i] = true
-		go forward(ctx, i, kids[i], "", items, acks[i])
+		go forward(ctx, i, kids[i], "s"+strconv.Itoa(i), items, acks[i])
 	}
 	s := &Stream{lines: make(chan Line, 64), done: make(chan error, 1)}
 	go s.merge(ctx, items, acks, open, nil, nil, options{})

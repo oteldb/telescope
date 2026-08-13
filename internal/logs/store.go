@@ -23,6 +23,9 @@ type Entry struct {
 	Head   string
 	Extra  int
 	Stderr bool
+	// Note says the line is telescope reporting on the source rather than
+	// anything the source wrote, which is why the list marks it.
+	Note bool
 	// Source names which stream the line came from, for a merge of several.
 	Source string
 	// Labels are what the source reported beside the line.
@@ -212,6 +215,7 @@ func (s *Store) render(l source.Line) *Entry {
 		Head:      head,
 		Extra:     extra,
 		Stderr:    l.Stderr,
+		Note:      l.Note,
 		Source:    l.Source,
 		Labels:    l.Labels,
 		At:        rec.Time,

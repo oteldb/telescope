@@ -84,6 +84,19 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   channel is what enforces that, not the unbuffered item channel. A source that
   goes quiet past `mergeLag` is skipped for ordering; being quiet is not being
   finished, and treating it as finished loses lines.
+- **A place that does not have what a group named is not a failure of the
+  group.** A collector pointed at a workload the cluster does not run writes its
+  refusal on stderr and exits at once, so `forward` holds what a child says
+  until it is known whether it opened: `absent` reads that complaint, and a
+  child that never opened for that reason contributes nothing — no line, no
+  note, no error out of `Done`. Anything else it said is kept, because a host
+  that could not be reached is a place with something to say. The hold ends at
+  the first line on stdout or at `openGrace`, since a container logging only to
+  stderr is running and not refusing.
+- **`Line.Note` is telescope talking, not the source.** A collector's stderr is
+  the source's own output — `docker` and `ssh` fold an application's stderr into
+  it — so only what telescope writes itself is marked, and that is what `ui`
+  washes with `noteWash`.
 - **Everything a source produces is somebody else's bytes.** Rendered lines go
   through `logs.Sanitize`, attribute values through `logs.Escape`. A background
   laid under a line has to be re-armed after every reset the line contains; see

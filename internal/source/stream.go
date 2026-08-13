@@ -19,6 +19,11 @@ const maxLineSize = 8 * 1024 * 1024
 type Line struct {
 	Data   []byte
 	Stderr bool
+	// Note says the line is telescope's own words about the source — it could
+	// not be opened, it stopped reading, it exited — and not anything the source
+	// wrote. A collector's stderr is the source talking and stays a line like
+	// any other; this is the view's warrant to draw one differently.
+	Note bool
 	// At is when the line was written, for a source that reports it out of
 	// band. Zero when the line is all there is, which is the usual case: a
 	// timestamp inside the line is the parser's business, not the source's.
@@ -176,7 +181,7 @@ func (s *Stream) scan(ctx context.Context, r io.Reader, isErr bool, wg *sync.Wai
 		// Surface read failures (most often a line over maxLineSize) in the
 		// stream itself instead of losing the rest of the output silently.
 		select {
-		case s.lines <- Line{Data: []byte("telescope: read: " + err.Error()), Stderr: true}:
+		case s.lines <- Line{Data: []byte("telescope: read: " + err.Error()), Stderr: true, Note: true}:
 		case <-ctx.Done():
 		}
 	}

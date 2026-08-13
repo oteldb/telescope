@@ -26,6 +26,11 @@ var (
 	// second, so a burst reads as a block and a gap reads as a seam. Faint
 	// enough to be seen only as grouping.
 	bandWash = lipgloss.AdaptiveColor{Light: "#f4f1fd", Dark: "#1b1a28"}
+
+	// What telescope says about a source is not a log line, and a reader
+	// scanning for the shape of the log should not have to read it to know
+	// that. Dim, since it is a remark and not an alarm.
+	noteWash = lipgloss.AdaptiveColor{Light: "#fbe9e9", Dark: "#3a1c20"}
 )
 
 // stop is one end of the gradient on each theme, mixed before the theme is
@@ -37,6 +42,12 @@ func adaptiveStop(light, dark rgb) stop { return stop{light: light, dark: dark} 
 // bandRow lays the band wash under a row.
 func bandRow(row string, width int) string {
 	bg := bgSequence(bandWash)
+	return paint(row, width, func(int) string { return bg })
+}
+
+// noteRow lays the note wash under a row telescope wrote itself.
+func noteRow(row string, width int) string {
+	bg := bgSequence(noteWash)
 	return paint(row, width, func(int) string { return bg })
 }
 

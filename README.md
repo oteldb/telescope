@@ -70,8 +70,13 @@ groups:
 
 The places need not be alike — `kubectl` on a cluster, `journalctl` over ssh,
 and a database in another region read as one stream. The window, tail and follow
-belong to the group. A place that fails to open is reported where its lines
-would have been; the rest keep streaming.
+belong to the group. A place that fails to open, or stops reading, is reported
+where its lines would have been and marked as telescope's own words rather than
+the log's; the rest keep streaming.
+
+A place that simply does not have what the group named — the deployment runs in
+one cluster of the four — says nothing at all. It has no lines to contribute,
+and that is the whole of what there is to say about it.
 
 When every place in a group leaves the same thing open — four clusters and no
 pod on any of them — picking the group asks once and gives the answer to all of

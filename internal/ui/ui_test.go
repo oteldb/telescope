@@ -2164,6 +2164,41 @@ func TestBandIsOneColorAllTheWay(t *testing.T) {
 	require.LessOrEqual(t, len(seqs), 3, "one per reset, not one per column")
 }
 
+// TestANoteIsMarkedAsOne: telescope reporting on a source is not a log line,
+// and the reader should not have to read it to know that.
+func TestANoteIsMarkedAsOne(t *testing.T) {
+	lg := newLogs(source.Config{Collector: source.CollectorLoki, Target: "*"}, logs.NewStore(10), "")
+	lg.resize(80, 20)
+	at := time.Date(2026, 8, 11, 15, 16, 36, 0, time.Local)
+	lg.append(source.Line{Data: []byte("serving"), At: at})
+	lg.append(source.Line{
+		Data:   []byte("telescope: prod: exit status 255"),
+		Stderr: true,
+		Note:   true,
+		At:     at.Add(time.Second),
+	})
+	lg.cursor, lg.follow = 0, false
+
+	rows := map[string]string{}
+	for line := range strings.SplitSeq(lg.View(), "\n") {
+		for _, w := range []string{"serving", "exit status 255"} {
+			if strings.Contains(ansi.Strip(line), w) {
+				rows[w] = line
+			}
+		}
+	}
+	require.Len(t, rows, 2)
+
+	washed := bgSeqs(rows["exit status 255"], -1)
+	require.NotEmpty(t, washed, "the note is washed")
+	for _, s := range washed {
+		require.Equal(t, washed[0], s, "flat, since it is a remark and not the cursor")
+	}
+	require.Equal(t, bgSequence(noteWash), washed[0])
+	require.NotEqual(t, bgSequence(bandWash), washed[0],
+		"and not the wash a second of ordinary lines gets")
+}
+
 // TestBandsAndCursorReachTheList: what the store worked out about time shows up
 // in the view, under the row it belongs to.
 func TestBandsAndCursorReachTheList(t *testing.T) {
