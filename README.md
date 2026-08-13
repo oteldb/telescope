@@ -190,6 +190,12 @@ its way, `at the start` once there is nothing before it, `holding all it can`
 when the view is full. A command has already written what it wrote, so there
 nothing can be fetched and `tail` is the whole of the history.
 
+A group pages when every place in it is a database: each is asked for the same
+window and the answers are read as one timeline, the way the live stream is. One
+that is a command is not asked, so the group is not paged at all — a place
+missing from a stretch of the timeline would read as a place that was quiet
+then.
+
 Every line's time is drawn in a column to the left, which `←`/`→` never scrolls
 away, and `t` cycles how it is written: the clock time, the whole instant with
 its date and offset, or how long before the view opened the line was written.

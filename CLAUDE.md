@@ -75,7 +75,10 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   of "the previous n lines" and only of a window, so an empty page there widens
   the window and asks again: a service quiet for a day is quiet, not finished.
   It follows that `tail: 0` — every line there is — opens a database on
-  `backfillLimit` rather than on nothing, which is what it used to mean.
+  `backfillLimit` rather than on nothing, which is what it used to mean. A merge
+  pages only where every child does, and by sorting rather than by the k-way
+  merge the stream uses: a page is the whole window at once, and the newest
+  `limit` lines of it are what keeps one page contiguous with the next.
 - **A merge trusts its children to be ordered** and does a k-way merge over
   their heads. Each child may have exactly one line pending — the per-child ack
   channel is what enforces that, not the unbuffered item channel. A source that

@@ -6,7 +6,10 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
+
+	"github.com/go-faster/errors"
 )
 
 // pageTimeout bounds one page. It is a scroll and not the stream: a database
@@ -37,7 +40,18 @@ func (c Config) backfill() int {
 // has already written is gone, and what it will write next is the only thing
 // left to read. That is why the tail of a command is a number chosen up front
 // and the tail of a database need not be.
-func (c Config) CanPage() bool { return c.Collector.IsRemoteAPI() }
+//
+// A merge pages only where every child does. One that cannot would contribute
+// nothing to the page, and a stream missing from a stretch of the timeline
+// reads as a stream that was quiet then — which is the one thing a merge must
+// never say on a source's behalf.
+func (c Config) CanPage() bool {
+	if c.Collector == CollectorMerge {
+		return len(c.Merge) > 0 && !slices.ContainsFunc(c.Children(),
+			func(sub Config) bool { return !sub.CanPage() })
+	}
+	return c.Collector.IsRemoteAPI()
+}
 
 // Page reads at most limit entries older than before, oldest first, so a view
 // that has scrolled to its first line can ask what came before it.
@@ -61,6 +75,9 @@ func (c Config) Page(ctx context.Context, before time.Time, limit int) ([]Line, 
 	ctx, cancel := context.WithTimeout(ctx, pageTimeout)
 	defer cancel()
 
+	if c.Collector == CollectorMerge {
+		return c.mergePage(ctx, before, limit)
+	}
 	client := httpClient(c.Endpoint)
 	switch c.Collector {
 	case CollectorLoki:
@@ -70,6 +87,47 @@ func (c Config) Page(ctx context.Context, before time.Time, limit int) ([]Line, 
 	default:
 		return nil, nil
 	}
+}
+
+// mergePage asks every child for the page before the same instant and
+// interleaves the answers.
+//
+// The stream does a k-way merge over the heads of its sources because it reads
+// them forwards and one line at a time. A page is the whole window at once, so
+// it is a sort — and then a truncation to the newest limit lines of the lot,
+// which is what makes the page contiguous: whatever is dropped is older than
+// everything kept, so the next page asks for it and nothing falls between them.
+//
+// A child that fails costs its own lines and not the page, the way an
+// unreachable source costs its own lines and not the merge.
+func (c Config) mergePage(ctx context.Context, before time.Time, limit int) ([]Line, error) {
+	var (
+		children = c.Children()
+		labels   = c.Labels()
+		pages    = make([][]Line, len(children))
+		errs     = make([]error, len(children))
+		wg       sync.WaitGroup
+	)
+	for i, child := range children {
+		wg.Go(func() {
+			lines, err := child.Page(ctx, before, limit)
+			for j := range lines {
+				lines[j].Source = labels[i]
+			}
+			pages[i], errs[i] = lines, err
+		})
+	}
+	wg.Wait()
+
+	out := slices.Concat(pages...)
+	if len(out) == 0 {
+		return nil, errors.Join(errs...)
+	}
+	slices.SortStableFunc(out, func(a, b Line) int { return a.At.Compare(b.At) })
+	if len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out, nil
 }
 
 // pageEnd is the newest instant a page may hold: everything already shown is
