@@ -71,11 +71,23 @@ Sleep 1s
 
 Type "g"
 Sleep 500ms
-Down@250ms 10
+Down@250ms 6
 Sleep 1s
-Enter
-Sleep 3s
 
+# The two lines the failure was written on, one per service. Which of them the
+# cursor opens does not matter: both carry the trace, and "f" on it is the other
+# one coming back with it.
+Type "/"
+Sleep 500ms
+Ctrl+U
+Sleep 300ms
+Type "failed"
+Sleep 1200ms
+Enter
+Sleep 2s
+
+Enter
+Sleep 2500ms
 Down@400ms 3
 Sleep 1500ms
 Type "f"
