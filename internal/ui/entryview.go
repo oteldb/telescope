@@ -103,6 +103,12 @@ func (m entryModel) Update(msg tea.Msg) (entryModel, tea.Cmd) {
 	case "Y":
 		// The whole entry as it arrived, from wherever the cursor happens to be.
 		return m, copyCmd("entry", string(m.entry.Raw))
+	case "T":
+		if m.entry.Record.TraceID == "" {
+			m.note = "this line is not in a trace"
+			return m, nil
+		}
+		return m, openTrace(m.entry)
 	case "o":
 		if len(sel) == 0 {
 			return m, nil
@@ -232,6 +238,7 @@ func (m entryModel) help() string {
 		key("y", "copy"),
 		key("Y", "entry"),
 		key("o", "open"),
+		key("T", "trace"),
 		key("f", "filter"),
 		key("?", "syntax"),
 		key("esc", "back"),

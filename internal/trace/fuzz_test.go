@@ -54,7 +54,7 @@ func FuzzDecodeJaeger(f *testing.F) {
 			if seen != tr.Len() {
 				t.Fatalf("walked %d of %d spans", seen, tr.Len())
 			}
-			if rows := len(tr.Rows(nil)); rows != tr.Len() {
+			if rows := len(tr.Rows(nil, nil)); rows != tr.Len() {
 				t.Fatalf("drew %d of %d spans", rows, tr.Len())
 			}
 			tr.Walk(func(n *Node) bool {

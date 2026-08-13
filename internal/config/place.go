@@ -137,8 +137,13 @@ func (p Place) Stream() (cfg source.Config, ready bool, err error) {
 			"unknown type %q: want one of %s", p.Type, strings.Join(typeNames, ", "))
 	}
 
+	traces, _, traceErr := p.TraceEndpoint()
+	if traceErr != nil {
+		return source.Config{}, false, traceErr
+	}
 	cfg = source.Config{
 		Name:        p.Name,
+		Traces:      traces,
 		Collector:   collector,
 		Unit:        p.Unit,
 		UserUnit:    p.UserUnit,

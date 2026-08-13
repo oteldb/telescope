@@ -70,6 +70,10 @@ type logModel struct {
 
 	status string
 	err    error
+	// note is what the last key did, or why it could not, shown until the next
+	// one. A key that opens nothing has to leave some evidence that it was
+	// pressed at all.
+	note string
 }
 
 func newLogs(cfg source.Config, store *logs.Store, query string) logModel {
@@ -214,6 +218,10 @@ func (m logModel) suggestions() []complete.Candidate {
 func (m logModel) width() int { return max(m.w-2*screenPad, 20) }
 
 func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
+	if msg, ok := msg.(noteMsg); ok {
+		m.note = msg.text
+		return m, nil
+	}
 	km, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -221,6 +229,7 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 	if m.searching {
 		return m.updateSearch(km)
 	}
+	m.note = ""
 	entries := m.view.Entries(m.store)
 
 	switch km.String() {
@@ -277,6 +286,15 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 	case "L":
 		m.cursor = m.top + m.bodyHeight() - 1
 		m.follow = m.cursor >= len(entries)-1
+	case "T":
+		// The trace this line was written inside. A line that was not in one
+		// says so rather than opening a screen with nothing on it.
+		if i := m.cursor; i >= 0 && i < len(entries) {
+			if e := entries[i]; e.Record.TraceID != "" {
+				return m, openTrace(e)
+			}
+		}
+		return m, note("this line is not in a trace")
 	case "left":
 		m.hoff = max(0, m.hoff-hScrollStep)
 	case "right":
@@ -653,6 +671,9 @@ func (m logModel) statusText() string {
 }
 
 func (m logModel) footer(entries []*logs.Entry) string {
+	if m.note != "" && !m.searching {
+		return ansi.Truncate(styleOK.Render(m.note), m.width(), "")
+	}
 	if m.searching {
 		keys := []string{key("enter", "apply")}
 		if len(m.suggestions()) > 0 {

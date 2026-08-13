@@ -46,8 +46,12 @@ type gantt struct {
 
 	rows      []*trace.Node
 	collapsed map[*trace.Node]bool
-	cursor    int
-	top       int
+	// hidden is the services filtered out. A span of one is still drawn when
+	// something under it is not, since removing it would reparent its children
+	// onto a span that never called them.
+	hidden map[string]bool
+	cursor int
+	top    int
 }
 
 func newGantt(t *trace.Tree) *gantt {
@@ -57,6 +61,7 @@ func newGantt(t *trace.Tree) *gantt {
 		win:       trace.Fit(t),
 		bounds:    trace.Fit(t),
 		collapsed: map[*trace.Node]bool{},
+		hidden:    map[string]bool{},
 	}
 	g.reflow()
 	return g
@@ -71,7 +76,7 @@ func (g *gantt) reflow() {
 	if g.cursor >= 0 && g.cursor < len(g.rows) {
 		was = g.rows[g.cursor]
 	}
-	g.rows = g.tree.Rows(g.collapsed)
+	g.rows = g.tree.Rows(g.collapsed, g.hidden)
 	if was == nil {
 		return
 	}
@@ -119,6 +124,44 @@ func (g *gantt) toggle() {
 	} else {
 		g.collapsed[n] = true
 	}
+	g.reflow()
+}
+
+// collapseAll folds every span below a root, leaving the request and what it
+// called directly.
+//
+// The roots stay open on purpose. Folding them too is one row and nothing to
+// read off it, whereas the top level is the shape somebody opens a
+// hundred-span trace to see — and folding down to it one keystroke at a time is
+// not reading.
+func (g *gantt) collapseAll() {
+	g.tree.Walk(func(n *trace.Node) bool {
+		if len(n.Children) > 0 && n.Parent != nil {
+			g.collapsed[n] = true
+		}
+		return true
+	})
+	g.reflow()
+}
+
+// expandAll unfolds everything.
+func (g *gantt) expandAll() {
+	clear(g.collapsed)
+	g.reflow()
+}
+
+// toggleService filters a service out of the view, or brings it back.
+func (g *gantt) toggleService(service string) {
+	if g.hidden[service] {
+		delete(g.hidden, service)
+	} else {
+		g.hidden[service] = true
+	}
+	g.reflow()
+}
+
+func (g *gantt) showAllServices() {
+	clear(g.hidden)
 	g.reflow()
 }
 
@@ -204,6 +247,10 @@ func (g *gantt) summary() string {
 		styleDim.Render(fmt.Sprintf("%d services", len(g.tree.Services()))),
 		styleDim.Render(humanDur(g.tree.Duration())),
 	}
+	if len(g.hidden) > 0 {
+		parts = append(parts, styleSelected.Render(fmt.Sprintf("%d of %d services",
+			len(g.tree.Services())-len(g.hidden), len(g.tree.Services()))))
+	}
 	if d := g.tree.Detached; d > 0 {
 		// Worded as what it is. A span whose parent never arrived may mean the
 		// trace is still being written, and "incomplete" alone reads as
@@ -251,14 +298,28 @@ func (g *gantt) axis(nameWidth, barWidth int) string {
 }
 
 // row draws one span: where it sits in the tree, how long it took, and when.
+//
+// A span kept only to hold up what is under it draws as the structure it is:
+// no bar, and its duration dimmed. Drawing it as an ordinary row would put a
+// service back on screen that somebody had just asked to take off it.
 func (g *gantt) row(n *trace.Node, nameWidth, barWidth int) string {
 	b := &strings.Builder{}
 	b.WriteString(padRight(ansi.Truncate(g.name(n), nameWidth, styleDim.Render("…")), nameWidth))
 	b.WriteByte(' ')
-	b.WriteString(padLeft(durStyle(n).Render(humanDur(n.Duration)), durWidth))
+
+	scaffold := n.Scaffold(g.hidden)
+	if scaffold {
+		b.WriteString(padLeft(styleDim.Render(humanDur(n.Duration)), durWidth))
+	} else {
+		b.WriteString(padLeft(durStyle(n).Render(humanDur(n.Duration)), durWidth))
+	}
 	if barWidth > 0 {
 		b.WriteByte(' ')
-		b.WriteString(g.bar(n, barWidth))
+		if scaffold {
+			b.WriteString(strings.Repeat(" ", barWidth))
+		} else {
+			b.WriteString(g.bar(n, barWidth))
+		}
 	}
 	return b.String()
 }
@@ -287,9 +348,13 @@ func (g *gantt) name(n *trace.Node) string {
 		// would be drawing a parent that is not there.
 		b.WriteString(styleDim.Render("⋯ "))
 	}
-	b.WriteString(g.palette.style(n.Service).Render(logs.Sanitize(n.Service)))
-	b.WriteByte(' ')
-	b.WriteString(logs.Sanitize(n.Name))
+	if n.Scaffold(g.hidden) {
+		b.WriteString(styleDim.Render(logs.Sanitize(n.Service) + " " + logs.Sanitize(n.Name)))
+	} else {
+		b.WriteString(g.palette.style(n.Service).Render(logs.Sanitize(n.Service)))
+		b.WriteByte(' ')
+		b.WriteString(logs.Sanitize(n.Name))
+	}
 	if n.Failed() {
 		// Said and not only colored. The palette is a qualitative scale and one
 		// of its twenty swatches is red, so a service that drew that one would

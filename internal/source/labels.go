@@ -14,6 +14,30 @@ type Label struct {
 	Value string
 }
 
+// TraceEndpoint is where to ask for a trace carried by a line from `from`,
+// which is the merge tag on the line and empty for a stream that is not one.
+//
+// A merge is several places, and a trace id read off one of them means
+// something to that place's trace store and not to a sibling's. The merge's own
+// endpoint is what a stream that is not a merge answers with.
+func (c Config) TraceEndpoint(from string) (Endpoint, bool) {
+	if from != "" {
+		for _, child := range c.Merge {
+			if child.Name != from {
+				continue
+			}
+			if child.Traces.URL != "" {
+				return child.Traces, true
+			}
+			break
+		}
+	}
+	if c.Traces.URL != "" {
+		return c.Traces, true
+	}
+	return Endpoint{}, false
+}
+
 // SourceLabels describes where the lines of a stream come from: what every one
 // of them shares, as opposed to [Line.Labels], which each line brings itself.
 //

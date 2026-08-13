@@ -30,7 +30,7 @@ about a workspace, re-run it with `GOWORK=off`.
 | `internal/config` | `config.yaml` and `history.yaml`. A `Place` is where logs are read from and how it is reached (`via:` for a command, `proxy:` for a database); a `Group` is several places read as one. `Load` resolves both; `New` does the same for declarations that did not come from a file. |
 | `internal/query` | the filter language: `Parse` builds an `Expr`, `Match` evaluates it against one `Record`. It sits below `source` so a query can be compiled into one a database answers itself. |
 | `internal/complete` | the suggestions the start screen offers, fetched by shelling out. |
-| `internal/trace` | a trace as it is read, and nothing that reads it: `span.go` is one operation, `tree.go` arranges them by their parent links, `skew.go` stops a child being drawn before the call that made it, `window.go` is the interval a view covers and the axis over it. `otlp.go` decodes what Tempo answers with, in either encoding, and `jaeger.go` the Jaeger query API's response. Nothing here fetches — `source/tempo.go` does — and nothing here draws: `ui/gantt.go` does, `ui/traceview.go` is the model around it and `ui/spanpalette.go` the colors. |
+| `internal/trace` | a trace as it is read, and nothing that reads it: `span.go` is one operation, `tree.go` arranges them by their parent links, `skew.go` stops a child being drawn before the call that made it, `window.go` is the interval a view covers and the axis over it. `otlp.go` decodes what Tempo answers with, in either encoding, and `jaeger.go` the Jaeger query API's response. Nothing here fetches — `source/tempo.go` does — and nothing here draws: `ui/gantt.go` does, `ui/traceview.go` is the model around it — the gantt, one span, and the service filter are modes of it — with `ui/spandoc.go` drawing a span as the rows the entry view already reads, `ui/servicepick.go` the filter and `ui/spanpalette.go` the colors. |
 
 The dependency order is `query` → `source` → `logs` → `ui`, and `config` feeds
 `ui`. It does not run the other way: when `source` needed to date a line by
@@ -91,6 +91,15 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   from that and optional: it moves a subtree by the least that stops the
   picture lying about causality, and is not Jaeger's per-service adjustment,
   which needs span kinds telescope does not have yet.
+- **A filter over services may not rewrite the tree.** A span whose service is
+  filtered out is still drawn when something under it is not: removing it would
+  leave its children hanging under a span that never called them, and the tree
+  is the whole of what says who called whom. `Node.Shown` is that rule and
+  `Node.Scaffold` is what the drawing asks to know it is structure rather than
+  content. It is also why nothing here has jaeger-ui's separate protection for
+  the root's service — a root with anything visible below it is kept by the same
+  rule as everything else. A filter that hides every span is dropped rather than
+  obeyed: an empty screen says less than the trace does.
 - **An OTLP id is hex or base64, and only its length says which.** The
   specification writes a trace id as hex; everything built on protojson writes
   base64, Tempo included, and that is the one the Grafana plugin is tested

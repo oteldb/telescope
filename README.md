@@ -147,6 +147,7 @@ targets you have opened before are offered first.
 | `f` | toggle follow |
 | `l` | cycle minimum level: all, info, warn, error |
 | `t` | cycle the time column: clock, full date, age |
+| `T` | open the trace this line was written inside |
 | `esc` | back to the picker |
 | `q`, `ctrl+c` | quit |
 
@@ -226,6 +227,7 @@ instant it ended.
 | `y` | copy the selected value, as it arrived |
 | `Y` | copy the whole entry |
 | `o` | open the selected value: a URL in a browser, a file in `$EDITOR` |
+| `T` | open the trace this line was written inside |
 | `f` | narrow the list by the selected value |
 | `?` | the filter language, written out |
 | `esc`, `enter`, `backspace` | back |
@@ -275,26 +277,42 @@ datasource speak — and Jaeger's query API is read too, so a response saved fro
 either opens. OTLP arrives as JSON or as protobuf and both are understood; which
 one it is, is worked out rather than declared.
 
+**From a log line.** `T` in the list or in an entry opens the trace that line
+was written inside, for any line carrying a `trace_id`. It asks the place's
+`traces:` endpoint — in a merge, the endpoint of the place that line came from —
+and `esc` comes back to where you were. A place with no `traces:` says so
+rather than opening an empty screen.
+
 | key | |
 | --- | --- |
 | `↑` `k`, `↓` `j`, `pgup` `pgdown`, `home` `g`, `end` `G` | select |
-| `space`, `enter` | fold a span's children away, or bring them back |
+| `enter` | open the span: its status, its timing and every attribute |
+| `space` | fold a span's children away, or bring them back |
+| `C`, `E` | fold everything to the top level, or unfold it all |
+| `s` | the services the trace touched; `space` filters one out, `a` restores |
 | `+` `-` | zoom, around the selected span |
 | `←` `h`, `→` `l` | pan |
 | `z` | zoom to the selected span |
 | `0` | back to the whole trace |
 | `y` | copy the selected span's id; `Y` the trace's |
-| `esc`, `q`, `ctrl+c` | quit |
+| `esc` | back |
+| `q`, `ctrl+c` | quit |
+
+In the span view, `y` copies the value under the cursor as it arrived and `o`
+opens what it points at, the same as in a log entry.
 
 Each service gets its own color, and a span that failed is marked `✗` and drawn
 in red. A fold says how many spans it hid and whether one of them failed, so
-folding a subtree away cannot hide the thing you opened the trace for. Where a
-span names a parent that is not in the response — sampled away, or not written
-yet — the header says how many, since a duration read off a partial trace is
-not the whole story.
+folding a subtree away cannot hide the thing you opened the trace for.
 
-There is no way in from the log view yet: a line carrying `trace_id` cannot
-open one.
+Filtering out a service hides its spans, except where one of them is holding up
+a span that is still shown — that one stays, drawn as the structure it is, since
+removing it would leave its children hanging under a span that never called
+them. Filtering out everything filters out nothing.
+
+Where a span names a parent that is not in the response — sampled away, or not
+written yet — the header says how many, since a duration read off a partial
+trace is not the whole story.
 
 ## Configuration
 

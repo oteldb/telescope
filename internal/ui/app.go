@@ -3,8 +3,10 @@ package ui
 
 import (
 	"context"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/go-faster/errors"
 
 	"github.com/oteldb/telescope/internal/config"
 	"github.com/oteldb/telescope/internal/logs"
@@ -42,6 +44,10 @@ type Model struct {
 	entry entryModel
 	help  helpModel
 	trace traceModel
+	// traceBack is where leaving the trace returns to. A trace telescope was
+	// started on has nothing under it, and a start screen that cannot reopen it
+	// would be a trapdoor rather than a way back — so that one quits.
+	traceBack state
 
 	stream *source.Stream
 }
@@ -55,7 +61,7 @@ func New() Model {
 // trace out of a file does. There is no stream behind it and nothing to go back
 // to: the start screen picks a log source, and a trace did not come from one.
 func NewTrace(t *trace.Tree) Model {
-	return Model{state: stateTrace, start: newStart(), trace: newTrace(t)}
+	return Model{state: stateTrace, traceBack: stateTrace, start: newStart(), trace: newTrace(t)}
 }
 
 // Init implements [tea.Model].
@@ -162,6 +168,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logs.takeFields(msg)
 		return m, nil
 
+	case noteMsg:
+		// A note belongs to the screen that asked for it, and the trace screen
+		// is reached from two of them.
+		switch m.state {
+		case stateLogs:
+			m.logs, _ = m.logs.Update(msg)
+		case stateEntry:
+			m.entry, _ = m.entry.Update(msg)
+		case stateTrace:
+			m.trace, _ = m.trace.Update(msg)
+		}
+		return m, nil
+
+	case openTraceMsg:
+		endpoint, ok := m.logs.cfg.TraceEndpoint(msg.from)
+		if !ok {
+			// Said where the reader is, rather than by opening a screen with
+			// nothing on it: this is something the config does not have, not a
+			// trace that could not be read. Set rather than sent, since a
+			// command is for work that happens off the loop and this is
+			// already known.
+			m.logs.note = "no trace store here: give the place a traces: url"
+			return m, nil
+		}
+		m.traceBack = m.state
+		m.trace = loadingTrace(msg.id)
+		m.trace.resize(m.w, m.h)
+		m.state = stateTrace
+		return m, fetchTrace(endpoint, msg.id)
+
+	case traceLoadedMsg:
+		m.trace = newTrace(msg.tree)
+		m.trace.resize(m.w, m.h)
+		return m, nil
+
+	case traceErrMsg:
+		m.trace.err = msg.err
+		return m, nil
+
 	case openHelpMsg:
 		m.help = newHelp(m.w, m.h)
 		m.back = m.state
@@ -175,9 +220,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case stateEntry:
 			m.state = stateLogs
 		case stateTrace:
-			// A trace opened from a file has nothing under it, and leaving it
-			// for a start screen that cannot reopen it would be a trapdoor.
-			return m, m.quit()
+			if m.traceBack == stateTrace {
+				// Started on this trace: there is nothing underneath.
+				return m, m.quit()
+			}
+			m.state = m.traceBack
 		case stateLogs:
 			m.stopStream()
 			m.state = stateStart
@@ -252,6 +299,13 @@ type (
 
 	initMsg      struct{}
 	openEntryMsg struct{ entry *logs.Entry }
+	// openTraceMsg asks for the trace a line belongs to. from is the merge tag,
+	// which is what says whose trace store to ask.
+	openTraceMsg struct{ id, from string }
+	// traceLoadedMsg and traceErrMsg answer it. A trace is a request over the
+	// network, so the screen is opened first and filled in when it lands.
+	traceLoadedMsg struct{ tree *trace.Tree }
+	traceErrMsg    struct{ err error }
 	// openHelpMsg opens the filter reference over whatever asked for it.
 	openHelpMsg struct{}
 	backMsg     struct{}
@@ -264,6 +318,33 @@ func saveHistory(h config.History) tea.Cmd {
 	return func() tea.Msg {
 		_ = h.Save()
 		return nil
+	}
+}
+
+// traceTimeout bounds a fetch. A trace has an end, unlike the streams the rest
+// of telescope opens, so waiting forever for one is only ever a hang.
+const traceTimeout = 30 * time.Second
+
+// fetchTrace asks an endpoint for a trace, off the update loop.
+func fetchTrace(endpoint source.Endpoint, id string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), traceTimeout)
+		defer cancel()
+
+		data, err := endpoint.Trace(ctx, id)
+		if err != nil {
+			return traceErrMsg{err: err}
+		}
+		found, err := trace.DecodeOTLP(data)
+		if err != nil {
+			return traceErrMsg{err: err}
+		}
+		for _, t := range found {
+			if t.Len() > 0 {
+				return traceLoadedMsg{tree: t}
+			}
+		}
+		return traceErrMsg{err: errors.Errorf("trace %s has no spans", id)}
 	}
 }
 

@@ -68,6 +68,14 @@ type Config struct {
 	Target string
 	// Endpoint is the log API [Collector.IsRemoteAPI] collectors read from.
 	Endpoint Endpoint
+	// Traces is where this stream's traces are read from, when it has any. It
+	// is not a collector and nothing streams from it: a line carrying a trace
+	// id is the only reason it is here, and a stream that has none never asks.
+	//
+	// It travels with the stream rather than being looked up again because the
+	// view has the stream and not the config file it came from, and a merge's
+	// children may each answer to a different one.
+	Traces Endpoint
 	// Container narrows [CollectorKubectl] to a container and names the
 	// container for [CollectorDocker].
 	Container string

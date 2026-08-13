@@ -69,6 +69,12 @@ func send(t *testing.T, m tea.Model, msgs ...tea.Msg) tea.Model {
 			m, _ = m.Update(out)
 		case requeryMsg:
 			m, _ = m.Update(out)
+		case openTraceMsg:
+			// Applied, but the fetch it returns is not run: a test says what
+			// the endpoint answered itself.
+			m, _ = m.Update(out)
+		case noteMsg:
+			m, _ = m.Update(out)
 		}
 	}
 	return m
@@ -79,7 +85,12 @@ func send(t *testing.T, m tea.Model, msgs ...tea.Msg) tea.Model {
 // only resolves after a real delay.
 func navigates(msg tea.Msg) bool {
 	km, ok := msg.(tea.KeyMsg)
-	return ok && (km.Type == tea.KeyEnter || km.Type == tea.KeyEsc)
+	if !ok {
+		return false
+	}
+	// "T" opens a trace, which is navigation like the other two; it is named by
+	// its rune because it is the only letter that moves between screens.
+	return km.Type == tea.KeyEnter || km.Type == tea.KeyEsc || km.String() == "T"
 }
 
 func k(s string) tea.Msg {

@@ -39,7 +39,7 @@ func TestASpanReadsUnderTheOneThatCalledIt(t *testing.T) {
 	require.Equal(t, []string{"a"}, ids(tr.Roots))
 	require.Equal(t, []string{"b"}, ids(tr.Roots[0].Children))
 	require.Equal(t, []string{"c"}, ids(tr.Roots[0].Children[0].Children))
-	require.Equal(t, 2, tr.Rows(nil)[2].Depth)
+	require.Equal(t, 2, tr.Rows(nil, nil)[2].Depth)
 	require.Equal(t, 3, tr.Len())
 }
 
@@ -94,7 +94,7 @@ func TestACycleIsBrokenRatherThanFollowed(t *testing.T) {
 		at("c", "b", "svc", "three", 2, 6),
 	})
 	require.Equal(t, 3, tr.Len(), "every span is still reachable")
-	require.Len(t, tr.Rows(nil), 3)
+	require.Len(t, tr.Rows(nil, nil), 3)
 	require.Len(t, tr.Roots, 1)
 }
 
@@ -107,13 +107,13 @@ func TestASpanReportedTwiceIsKeptTwice(t *testing.T) {
 		at("dupe", "root", "a", "second copy", 10, 10),
 	})
 	require.Equal(t, 3, tr.Len())
-	require.Len(t, tr.Rows(nil), 3)
+	require.Len(t, tr.Rows(nil, nil), 3)
 }
 
 func TestASpanWithNoIDIsNotATree(t *testing.T) {
 	tr := Build("t", []Span{at("", "", "svc", "nameless", 0, 10)})
 	require.Equal(t, 0, tr.Len())
-	require.Empty(t, tr.Rows(nil))
+	require.Empty(t, tr.Rows(nil, nil))
 	require.Equal(t, Window{Dur: minWindow}, Fit(tr))
 }
 
@@ -151,7 +151,7 @@ func TestFoldingPutsAWholeSubtreeAway(t *testing.T) {
 	mid, _ := tr.Node("mid")
 
 	require.Equal(t, 1, mid.Hidden())
-	require.Equal(t, []string{"root", "mid", "other"}, ids(tr.Rows(map[*Node]bool{mid: true})))
+	require.Equal(t, []string{"root", "mid", "other"}, ids(tr.Rows(map[*Node]bool{mid: true}, nil)))
 
 	root, _ := tr.Node("root")
 	require.Equal(t, 3, root.Hidden(), "the whole subtree, not the children")
@@ -183,4 +183,46 @@ func TestServicesAreCounted(t *testing.T) {
 		at("b", "root", "checkout", "refund", 20, 10),
 	})
 	require.Equal(t, map[string]int{"gateway": 1, "checkout": 2}, tr.Services())
+}
+
+// Hiding a service must not reparent its children onto a span that never
+// called them: the tree is what says who called whom.
+func TestAHiddenServiceStaysWhereItHoldsUpSomethingVisible(t *testing.T) {
+	tr := Build("t", []Span{
+		at("root", "", "gateway", "GET /", 0, 100),
+		at("mid", "root", "sidecar", "proxy", 10, 80),
+		at("leaf", "mid", "db", "select", 20, 30),
+		at("only", "root", "sidecar", "health", 90, 5),
+	})
+	hidden := map[string]bool{"sidecar": true}
+
+	require.Equal(t, []string{"root", "mid", "leaf"}, ids(tr.Rows(nil, hidden)),
+		"mid is kept for leaf's sake, and the sidecar span with nothing under it goes")
+
+	mid, _ := tr.Node("mid")
+	require.True(t, mid.Scaffold(hidden), "and is marked as structure rather than content")
+
+	root, _ := tr.Node("root")
+	require.False(t, root.Scaffold(hidden))
+}
+
+// A filter that hides everything is not a filter anybody meant, and an empty
+// screen says less than the trace does.
+func TestHidingEverythingHidesNothing(t *testing.T) {
+	tr := Build("t", []Span{
+		at("root", "", "gateway", "GET /", 0, 100),
+		at("mid", "root", "db", "select", 10, 30),
+	})
+	all := map[string]bool{"gateway": true, "db": true}
+	require.Len(t, tr.Rows(nil, all), 2)
+}
+
+// Jaeger protects the root's service explicitly. Here the same thing falls out
+// of the rule every other span follows.
+func TestTheRootNeedsNoSpecialProtection(t *testing.T) {
+	tr := Build("t", []Span{
+		at("root", "", "gateway", "GET /", 0, 100),
+		at("mid", "root", "db", "select", 10, 30),
+	})
+	require.Equal(t, []string{"root", "mid"}, ids(tr.Rows(nil, map[string]bool{"gateway": true})))
 }

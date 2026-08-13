@@ -2,12 +2,16 @@ package ui
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 
+	"github.com/go-faster/jx"
+
+	"github.com/oteldb/telescope/internal/logs"
 	"github.com/oteldb/telescope/internal/trace"
 )
 
@@ -132,4 +136,115 @@ func TestATraceDrawsTheSameWayTwice(t *testing.T) {
 	require.Contains(t, colored, p.style("identity").Render("identity"),
 		"out of the palette the trace was given")
 	require.Zero(t, p["gateway"], "and the root's service took the first swatch")
+}
+
+// A hundred-span trace is read by its shape first, and folding down to that one
+// keystroke at a time is not reading.
+func TestCollapseAndExpandAll(t *testing.T) {
+	m := traceModelOf(t, checkout())
+	full := len(m.(Model).trace.g.rows)
+
+	// Down to the request and what it called directly, which is the shape
+	// somebody opens a trace to see. Folding the root too would leave one row
+	// and nothing to read off it.
+	m, _ = m.Update(k("C"))
+	rows := m.(Model).trace.g.rows
+	require.Len(t, rows, 4)
+	require.Equal(t, "POST /checkout", rows[0].Name)
+	for _, n := range rows[1:] {
+		require.Equal(t, 1, n.Depth, "the top level, and nothing below it")
+	}
+	require.NotContains(t, screen(t, m), "GET rates")
+
+	m, _ = m.Update(k("E"))
+	require.Len(t, m.(Model).trace.g.rows, full)
+}
+
+func TestTheServicePickerListsWhatTheTraceTouched(t *testing.T) {
+	m := traceModelOf(t, checkout())
+	m, _ = m.Update(k("s"))
+
+	out := screen(t, m)
+	require.Contains(t, out, "services")
+	// Ordered by how much of the trace each one is, so the busiest is first.
+	require.Contains(t, out, "3 postgres")
+	require.Contains(t, out, "1 gateway")
+	require.Less(t, strings.Index(out, "postgres"), strings.Index(out, "gateway"))
+}
+
+// Hiding a service must not take with it the spans below that are still shown:
+// the tree is what says who called whom.
+func TestHidingAServiceKeepsWhatHoldsUpTheRest(t *testing.T) {
+	tr := trace.Build("t", []trace.Span{
+		span("root", "", "gateway", "GET /", 0, 100*ms),
+		span("mid", "root", "sidecar", "proxy", 10*ms, 80*ms),
+		span("leaf", "mid", "db", "select", 20*ms, 30*ms),
+	})
+	m := traceModelOf(t, tr)
+
+	m, _ = m.Update(k("s"))
+	// Onto "sidecar" — one span each, so they are listed by name.
+	for range 3 {
+		if name, _ := m.(Model).trace.pick.at(); name == "sidecar" {
+			break
+		}
+		m, _ = m.Update(k("j"))
+	}
+	name, _ := m.(Model).trace.pick.at()
+	require.Equal(t, "sidecar", name)
+
+	m, _ = m.Update(k(" "))
+	m, _ = m.Update(k("esc"))
+
+	out := screen(t, m)
+	require.Contains(t, out, "db select", "what was under it is still there")
+	require.Contains(t, out, "sidecar proxy", "and so is the span holding it up")
+	require.Contains(t, out, "2 of 3 services", "and the header says a filter is on")
+
+	m, _ = m.Update(k("s"))
+	m, _ = m.Update(k("a"))
+	require.Empty(t, m.(Model).trace.g.hidden)
+}
+
+// The attributes are the reason to open a span at all.
+func TestASpanOpensAsItsAttributes(t *testing.T) {
+	failed := span("db", "", "orders-db", "INSERT orders", 0, 10*ms)
+	failed.Status = trace.StatusError
+	failed.StatusMessage = "deadlock detected"
+	failed.Attrs = []logs.Field{
+		{Key: "db.statement", Value: jx.Raw(`"INSERT INTO orders"`)},
+		{Key: "db.rows", Value: jx.Raw(`3`)},
+	}
+	m := traceModelOf(t, trace.Build("t", []trace.Span{failed}))
+
+	m, _ = m.Update(k("enter"))
+	out := screen(t, m)
+	require.Contains(t, out, "INSERT orders")
+	require.Contains(t, out, "orders-db")
+	require.Contains(t, out, "deadlock detected")
+	require.Contains(t, out, "db.statement")
+	require.Contains(t, out, "INSERT INTO orders")
+	require.Contains(t, out, "db.rows")
+	require.Contains(t, out, "into the trace", "and where in the request it ran")
+
+	m, _ = m.Update(k("esc"))
+	require.Contains(t, screen(t, m), "orders-db INSERT orders", "esc goes back to the chart")
+}
+
+// What a row draws as and what it carries are two values, in a span exactly as
+// in a log entry.
+func TestCopyingASpanRowTakesTheValueAsItArrived(t *testing.T) {
+	s := span("db", "", "orders-db", "INSERT orders", 0, 10*ms)
+	s.Attrs = []logs.Field{{Key: "db.statement", Value: jx.Raw(`"SELECT 1"`)}}
+	g := newGantt(trace.Build("t", []trace.Span{s}))
+
+	doc := spanDocument(g.rows[0], g.bounds.Start, g.palette, 80)
+	var found bool
+	for _, it := range doc {
+		if it.key == "db.statement" {
+			require.Equal(t, "SELECT 1", it.value, "unquoted, and not the rendering")
+			found = true
+		}
+	}
+	require.True(t, found, "the attribute is a row the cursor can stop on")
 }

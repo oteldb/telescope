@@ -309,13 +309,28 @@ func walk(n *Node, f func(*Node) bool) bool {
 //
 // Collapse is keyed by node and not by span id, since a trace that reported one
 // id twice would otherwise fold both halves at once.
-func (t *Tree) Rows(collapsed map[*Node]bool) []*Node {
+func (t *Tree) Rows(collapsed map[*Node]bool, hidden map[string]bool) []*Node {
 	if t == nil {
 		return nil
+	}
+	// A filter that hides everything is not a filter anybody meant, and an
+	// empty screen says less than the trace does. It is dropped rather than
+	// obeyed.
+	if len(hidden) > 0 {
+		var visible bool
+		for _, r := range t.Roots {
+			visible = visible || r.Shown(hidden)
+		}
+		if !visible {
+			hidden = nil
+		}
 	}
 	out := make([]*Node, 0, len(t.nodes))
 	var rec func(n *Node)
 	rec = func(n *Node) {
+		if !n.Shown(hidden) {
+			return
+		}
 		out = append(out, n)
 		if collapsed[n] {
 			return
@@ -328,6 +343,36 @@ func (t *Tree) Rows(collapsed map[*Node]bool) []*Node {
 		rec(r)
 	}
 	return out
+}
+
+// Shown reports whether a node survives a filter over services.
+//
+// A span of a hidden service is kept when something under it is visible, since
+// removing it would reparent its children onto a span that never called them —
+// the tree is what says who called whom, and a filter must not be able to
+// rewrite that. What is kept that way is scaffolding rather than content, which
+// is for the drawing to say.
+//
+// This is why nothing here has Jaeger's rule that a root's service may not be
+// hidden: a root with anything visible below it is kept by the same rule as
+// everything else, and a root with nothing visible below it is a subtree with
+// nothing worth showing.
+func (n *Node) Shown(hidden map[string]bool) bool {
+	if len(hidden) == 0 || !hidden[n.Service] {
+		return true
+	}
+	for _, c := range n.Children {
+		if c.Shown(hidden) {
+			return true
+		}
+	}
+	return false
+}
+
+// Scaffold reports that a node is only drawn to hold up what is under it: its
+// own service is filtered out, and something below it is not.
+func (n *Node) Scaffold(hidden map[string]bool) bool {
+	return len(hidden) > 0 && hidden[n.Service] && n.Shown(hidden)
 }
 
 // Hidden is how many spans collapsing this node puts away: the whole subtree
