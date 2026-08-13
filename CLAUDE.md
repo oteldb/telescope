@@ -30,6 +30,7 @@ about a workspace, re-run it with `GOWORK=off`.
 | `internal/config` | `config.yaml` and `history.yaml`. A `Place` is where logs are read from and how it is reached (`via:` for a command, `proxy:` for a database); a `Group` is several places read as one. `Load` resolves both; `New` does the same for declarations that did not come from a file. |
 | `internal/query` | the filter language: `Parse` builds an `Expr`, `Match` evaluates it against one `Record`. It sits below `source` so a query can be compiled into one a database answers itself. |
 | `internal/complete` | the suggestions the start screen offers, fetched by shelling out. |
+| `internal/trace` | a trace as it is read, and nothing that reads it: `span.go` is one operation, `tree.go` arranges them by their parent links, `skew.go` stops a child being drawn before the call that made it, `window.go` is the interval a view covers and the axis over it. Nothing here fetches or draws — `ui/gantt.go` does the drawing. Not yet reachable from the app. |
 
 The dependency order is `query` → `source` → `logs` → `ui`, and `config` feeds
 `ui`. It does not run the other way: when `source` needed to date a line by
@@ -79,6 +80,24 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   pages only where every child does, and by sorting rather than by the k-way
   merge the stream uses: a page is the whole window at once, and the newest
   `limit` lines of it are what keeps one page contiguous with the next.
+- **A trace that arrives is not a tree, and no span is dropped for it.** A
+  parent sampled away, a span reported twice, a runtime that wrote its own id
+  as its parent, a ring of parent links, a span stamped 1970: every one of them
+  is ordinary in production, and `trace.Build` resolves each to something
+  drawable rather than to an error, because there is nobody to report the
+  missing tenth of a trace to. A span that cannot be placed becomes a root and
+  says it was detached; a span with no clock takes its parent's, since the
+  alternative is a window fifty-six years wide. `Tree.ClampSkew` is separate
+  from that and optional: it moves a subtree by the least that stops the
+  picture lying about causality, and is not Jaeger's per-service adjustment,
+  which needs span kinds telescope does not have yet.
+- **A bar's two edges do not get the same resolution.** The eighth blocks fill
+  a cell from its left, so a bar *ending* mid-cell lands within an eighth with
+  no idea what the terminal's background is; a bar *starting* mid-cell would
+  need an eighth in reverse video, which means naming a background a
+  transparent terminal does not have, so it gets a half. See `ui.barCells` —
+  and the same rule is why a span too short to cover a cell is still drawn as
+  one eighth rather than as nothing.
 - **A merge trusts its children to be ordered** and does a k-way merge over
   their heads. Each child may have exactly one line pending — the per-child ack
   channel is what enforces that, not the unbuffered item channel. A source that
