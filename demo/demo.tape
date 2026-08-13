@@ -62,6 +62,13 @@ Sleep 500ms
 Enter
 Sleep 1s
 
+Type "t"
+Sleep 2s
+Type "t"
+Sleep 2s
+Type "t"
+Sleep 1s
+
 Type "g"
 Sleep 500ms
 Down@250ms 10
