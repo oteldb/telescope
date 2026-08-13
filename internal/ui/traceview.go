@@ -222,7 +222,10 @@ func (m traceModel) updateSpan(km tea.KeyMsg) (traceModel, tea.Cmd) {
 			return m, nil
 		}
 		// A span attribute is as likely to name a file or a URL as a log field
-		// is, and the machinery that opens one does not care which it came from.
+		// is, and the machinery that opens one does not care which it came
+		// from. There is no entry behind it — what an entry would add is the
+		// context that lets a bare line number find its file, and a span has
+		// no such pair of fields.
 		return m, openCmd(nil, doc[sel[m.clampSel(sel)]])
 	}
 	return m, nil

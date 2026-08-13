@@ -248,3 +248,36 @@ func TestCopyingASpanRowTakesTheValueAsItArrived(t *testing.T) {
 	}
 	require.True(t, found, "the attribute is a row the cursor can stop on")
 }
+
+// A span row has no log entry behind it, and every row that is not a file or a
+// URL reaches the stacktrace fallback, which used to read one.
+func TestOpeningASpanRowThatPointsNowhere(t *testing.T) {
+	s := span("db", "", "orders-db", "INSERT orders", 0, 10*ms)
+	s.Attrs = []logs.Field{
+		{Key: "db.statement", Value: jx.Raw(`"SELECT 1"`)},
+		{Key: "code.line.number", Value: jx.Raw(`42`)},
+	}
+	m := traceModelOf(t, trace.Build("t", []trace.Span{s}))
+	m, _ = m.Update(k("enter"))
+
+	// Every row of the span, including trace_id and a bare line number, which
+	// is the pair that goes looking for a file in the entry.
+	doc := m.(Model).trace.spanDoc()
+	require.NotEmpty(t, doc)
+	for _, it := range doc {
+		if !it.pick {
+			continue
+		}
+		require.NotPanics(t, func() {
+			require.IsType(t, noteMsg{}, openCmd(nil, it)(), "row %q opens nothing", it.key)
+		}, "row %q", it.key)
+	}
+}
+
+// An attribute that does point somewhere still opens, entry or no entry.
+func TestASpanAttributeThatIsAURLOpens(t *testing.T) {
+	it := item{key: "http.url", value: "https://example.com/orders", pick: true}
+	msg, ok := openCmd(nil, it)().(openMsg)
+	require.True(t, ok)
+	require.Equal(t, "https://example.com/orders", msg.target.url)
+}

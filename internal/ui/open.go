@@ -31,6 +31,9 @@ var (
 // where the row alone does not say: a path and the line in it are one value in
 // a zap caller and two attributes in an OTEL record, and the same key opens the
 // same file either way.
+//
+// e is where the row was read from, and may be nil for a row that came from
+// somewhere else — see [fieldOf].
 func (l locator) linkOf(e *logs.Entry, it item) (target, bool) {
 	if isHTTP(it.value) {
 		return target{url: it.value}, true
@@ -89,7 +92,16 @@ func anyKey(key string, names []string) bool {
 	return false
 }
 
+// fieldOf reads the first of these fields the entry has.
+//
+// The entry is optional. A row does not always come from a log line — a span
+// attribute is drawn by the same machinery and has no entry behind it — and
+// what an entry adds here is only the context that lets a bare line number find
+// its file. Without one, a row opens on what it holds itself.
 func fieldOf(e *logs.Entry, names []string) (string, bool) {
+	if e == nil {
+		return "", false
+	}
 	for _, n := range names {
 		if v, ok := e.Field(n); ok && v != "" {
 			return v, true
@@ -173,7 +185,8 @@ func editorArgv(env func(string) string, s site) ([]string, error) {
 }
 
 // openCmd works out what a value points at. It reads the disk and may ask git,
-// so it is a command and not part of an update.
+// so it is a command and not part of an update. e may be nil, for a row that
+// did not come from a log line.
 func openCmd(e *logs.Entry, it item) tea.Cmd {
 	return func() tea.Msg {
 		t, ok := newLocator().linkOf(e, it)
