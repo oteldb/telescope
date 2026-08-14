@@ -10,6 +10,16 @@ import (
 	"github.com/oteldb/telescope/internal/trace"
 )
 
+// configHome points config.Path at dir, so a test never reads the developer's
+// own config: what a name resolves to is whatever the test wrote. Both variables
+// are set because os.UserConfigDir reads XDG_CONFIG_HOME on unix and %AppData%
+// on Windows.
+func configHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("AppData", dir)
+}
+
 // A file has no content type, so which format it holds is worked out from what
 // comes out of it.
 func TestATraceIsReadWhicheverFormatItIsIn(t *testing.T) {
@@ -34,9 +44,7 @@ func TestBytesThatAreNoTraceAreReported(t *testing.T) {
 // A url is itself; anything else has to be declared, and saying so is more use
 // than a connection refused to whatever the name resolved to.
 func TestFromTakesAUrlOrTheNameOfAPlace(t *testing.T) {
-	// Never the developer's own config: what a name resolves to is whatever
-	// this test wrote, and nothing else.
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	configHome(t, t.TempDir())
 
 	e, err := traceEndpoint("https://tempo.example.com/")
 	require.NoError(t, err)
@@ -60,7 +68,7 @@ func TestAPlaceLendsItsTraceEndpointItsWayIn(t *testing.T) {
 			"    traces: https://tempo.example.com\n"+
 			"  - name: nearby\n"+
 			"    type: journalctl\n"), 0o644))
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	configHome(t, dir)
 
 	e, err := traceEndpoint("prod")
 	require.NoError(t, err)

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 
@@ -124,9 +125,13 @@ func TestHistorySaveAndLoad(t *testing.T) {
 
 	path := filepath.Join(dir, appDir, "history.yaml")
 	require.FileExists(t, path)
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "history may name internal hosts")
+	if runtime.GOOS != "windows" {
+		// Windows has no mode bits beyond read-only, so the file it writes is
+		// 0666 whatever it was created with.
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "history may name internal hosts")
+	}
 
 	require.Equal(t, h, LoadHistory())
 }
