@@ -2,12 +2,17 @@ places:
   - name: api
     type: command
     args: demo/emit.sh api
+    traces: &stub
+      url: http://127.0.0.1:8765
+      type: jaeger
   - name: worker
     type: command
     args: demo/emit.sh worker
+    traces: *stub
   - name: cache
     type: command
     args: demo/emit.sh cache
+    traces: *stub
 groups:
   - name: prod
     places: [api, worker, cache]
