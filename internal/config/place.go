@@ -68,13 +68,14 @@ type Place struct {
 	// Insecure skips TLS verification, for a place behind a private CA.
 	Insecure bool `yaml:"insecure,omitempty"`
 
-	// Traces is where this place's traces are read from, as a Tempo API. It is
-	// separate from URL because logs and traces are rarely the same server even
-	// when they are the same system, and a place is named after the system.
+	// Traces is where this place's traces are read from, and which API answers
+	// there. It is separate from URL because logs and traces are rarely the same
+	// server even when they are the same system, and a place is named after the
+	// system.
 	//
 	// It is not a `type`: nothing streams from it and it cannot be opened on
 	// its own, so it is a property of a place rather than another kind of one.
-	Traces string `yaml:"traces,omitempty"`
+	Traces TraceStore `yaml:"traces,omitempty"`
 	// Range bounds the window read, as typed at the prompt: "1h", "today",
 	// "6h..1h". It is resolved when the place is opened, so a relative one means
 	// the same thing every run.
@@ -279,15 +280,18 @@ func (p Place) Endpoint() (source.Endpoint, error) {
 // logs by running a command has none of those to lend, and the trace endpoint
 // is then the URL alone.
 func (p Place) TraceEndpoint() (source.Endpoint, bool, error) {
-	url := strings.TrimRight(strings.TrimSpace(p.Traces), "/")
-	if url == "" {
+	if p.Traces.IsZero() {
 		return source.Endpoint{}, false, nil
 	}
+	if err := p.Traces.Validate(); err != nil {
+		return source.Endpoint{}, false, err
+	}
 	out, err := p.Endpoint()
-	out.URL = url
-	// The collector is what speaks at the log endpoint and says nothing about
-	// this one, which is Tempo whatever the logs are.
-	out.Collector = ""
+	out.URL = strings.TrimRight(strings.TrimSpace(p.Traces.URL), "/")
+	// What speaks at the log endpoint says nothing about this one: a place whose
+	// logs are in VictoriaLogs may keep its traces in either store, or in
+	// neither's neighbor.
+	out.Collector = p.Traces.Collector()
 	return out, true, err
 }
 
