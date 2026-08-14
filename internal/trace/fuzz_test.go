@@ -69,6 +69,44 @@ func FuzzDecodeJaeger(f *testing.F) {
 	})
 }
 
+// FuzzDecodeSearch checks that a search result list cannot be made to produce a
+// row the screen cannot draw: a duration that ran backwards, or a timestamp so
+// far out that the arithmetic over it wraps.
+func FuzzDecodeSearch(f *testing.F) {
+	for _, seed := range []string{
+		tempoSearch,
+		`{"traces":[{"traceID":"t","durationMs":9223372036854775807}]}`,
+		`{"traces":[{"startTimeUnixNano":"-1"},{"startTimeUnixNano":"9223372036854775807"}]}`,
+		`{"traces":[{"spanSet":{"matched":3},"spanSets":[{"matched":1},{"spans":[{}]}]}]}`,
+		`{"traces":[]}`,
+		`{}`,
+		``,
+	} {
+		f.Add([]byte(seed))
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		found, err := DecodeSearch(data)
+		if err != nil {
+			return
+		}
+		for _, r := range found {
+			if r.Duration < 0 {
+				t.Fatalf("trace %s lasted %s", r.TraceID, r.Duration)
+			}
+			if r.Matched < 0 || r.Spans < 0 || r.Errors < 0 {
+				t.Fatalf("trace %s counts %d spans, %d matched", r.TraceID, r.Spans, r.Matched)
+			}
+			// The row draws the end as well as the start, so the sum has to be
+			// a time and not a wrap into the far past.
+			if end := r.Start.Add(r.Duration); end.Before(r.Start) {
+				t.Fatalf("trace %s ended %s before it started", r.TraceID, r.Start.Sub(end))
+			}
+		}
+		SortResults(found)
+	})
+}
+
 // FuzzDecodeOTLP checks the same for the OTLP payloads, in both the encodings
 // telescope reads and against bytes that are neither.
 //

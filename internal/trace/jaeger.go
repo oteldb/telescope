@@ -24,6 +24,23 @@ import (
 // than the response — is read too, since that is what somebody pasting one into
 // a file ends up with.
 func DecodeJaeger(data []byte) ([]*Tree, error) {
+	found, err := jaegerTraces(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(found) == 0 {
+		return nil, errors.New("no traces in response")
+	}
+	return found, nil
+}
+
+// DecodeJaegerSearch reads the same response as the answer to a search, where
+// holding no trace is an answer and not a failure: a query that matched nothing
+// is a query that matched nothing, and reporting it as a broken response would
+// send somebody looking for a fault in the store.
+func DecodeJaegerSearch(data []byte) ([]*Tree, error) { return jaegerTraces(data) }
+
+func jaegerTraces(data []byte) ([]*Tree, error) {
 	var doc struct {
 		Data []jaegerTrace `json:"data"`
 
@@ -38,9 +55,6 @@ func DecodeJaeger(data []byte) ([]*Tree, error) {
 	found := doc.Data
 	if len(found) == 0 && len(doc.Spans) > 0 {
 		found = []jaegerTrace{{TraceID: doc.TraceID, Spans: doc.Spans, Processes: doc.Processes}}
-	}
-	if len(found) == 0 {
-		return nil, errors.New("no traces in response")
 	}
 
 	out := make([]*Tree, 0, len(found))
