@@ -373,12 +373,16 @@ func (c Config) elevated(args []string) string {
 //
 // Shelling out to ssh(1) rather than dialing ourselves keeps ~/.ssh/config,
 // ProxyJump, the agent and known_hosts working without reimplementing them.
-func (c Config) Argv() []string {
+func (c Config) Argv() []string { return c.argvFor(c.Command()) }
+
+// argvFor wraps one command in the transport that runs it, which is the half of
+// [Config.Argv] that does not depend on what the command is: the pod watch is
+// reached the same way the logs are.
+func (c Config) argvFor(cmd string) []string {
 	if c.Collector.IsRemoteAPI() || c.Collector == CollectorMerge {
 		// Neither runs a command: one is HTTP, the other is several streams.
 		return nil
 	}
-	cmd := c.Command()
 	if c.Transport != TransportSSH {
 		return []string{"sh", "-c", cmd}
 	}

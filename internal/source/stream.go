@@ -124,9 +124,19 @@ func startCommand(ctx context.Context, cfg Config) (*Stream, error) {
 	wg.Add(2)
 	go s.scan(ctx, stdout, false, &wg)
 	go s.scan(ctx, stderr, true, &wg)
+
+	// The watch outlives nothing: it is stopped when the logs stop, since a
+	// pod still restarting is not worth saying to a reader whose stream has
+	// ended, and a stream that waited for it would never close.
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	var watching sync.WaitGroup
+	startWatch(watchCtx, cfg, s.lines, &watching)
+
 	go func() {
 		wg.Wait()
 		err := cmd.Wait()
+		stopWatch()
+		watching.Wait()
 		close(s.lines)
 		if ctx.Err() != nil {
 			err = nil
