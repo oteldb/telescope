@@ -30,7 +30,7 @@ about a workspace, re-run it with `GOWORK=off`.
 | `internal/config` | `config.yaml` and `history.yaml`. A `Place` is where logs are read from and how it is reached (`via:` for a command, `proxy:` for a database); a `Group` is several places read as one. `Load` resolves both; `New` does the same for declarations that did not come from a file. |
 | `internal/query` | the filter language: `Parse` builds an `Expr`, `Match` evaluates it against one `Record`. It sits below `source` so a query can be compiled into one a database answers itself. |
 | `internal/complete` | the suggestions the start screen offers, fetched by shelling out. |
-| `internal/trace` | a trace as it is read, and nothing that reads it: `span.go` is one operation, `tree.go` arranges them by their parent links, `skew.go` stops a child being drawn before the call that made it, `window.go` is the interval a view covers and the axis over it. `otlp.go` decodes what Tempo answers with, in either encoding, and `jaeger.go` the Jaeger query API's response. Nothing here fetches — `source/tempo.go` does — and nothing here draws: `ui/gantt.go` does, `ui/traceview.go` is the model around it — the gantt, one span, and the service filter are modes of it — with `ui/spandoc.go` drawing a span as the rows the entry view already reads, `ui/servicepick.go` the filter, `ui/spanpalette.go` the colors and `ui/tracecache.go` what was already fetched. |
+| `internal/trace` | a trace as it is read, and nothing that reads it: `span.go` is one operation, `tree.go` arranges them by their parent links, `skew.go` stops a child being drawn before the call that made it, `window.go` is the interval a view covers and the axis over it. `otlp.go` decodes what Tempo answers with, in either encoding, `jaeger.go` the Jaeger query API's response, `decode.go` reads whichever of the two arrived, and `search.go` is what a search answered with — a summary of a trace rather than its spans. Nothing here fetches — `source/tempo.go` does — and nothing here draws: `ui/gantt.go` does, `ui/traceview.go` is the model around it — the gantt, one span, and the service filter are modes of it — with `ui/spandoc.go` drawing a span as the rows the entry view already reads, `ui/servicepick.go` the filter, `ui/spanpalette.go` the colors and `ui/tracecache.go` what was already fetched. `ui/tracesearch.go` is the search form and its results, drawn by `ui/searchview.go`, asking through `source/search.go` and `source/tracequery.go`. |
 
 The dependency order is `query` → `source` → `logs` → `ui`, and `config` feeds
 `ui`. It does not run the other way: when `source` needed to date a line by
@@ -91,6 +91,42 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   from that and optional: it moves a subtree by the least that stops the
   picture lying about causality, and is not Jaeger's per-service adjustment,
   which needs span kinds telescope does not have yet.
+- **A trace store says which API it speaks; nothing is discovered.** `traces:`
+  takes a `type:` of `tempo` or `jaeger` and defaults to the first, which is
+  what a bare url meant before it could say. The two are not tellable apart by
+  asking: they serve one trace on the same path and answer with different
+  documents, both of which parse as the other's format and come out empty
+  rather than failing — the same trap `trace.Decode` exists for. A fallback
+  would also spend a round trip per search on a store that has already been
+  identified once, and would guess again the first time a proxy answered 404 of
+  its own accord. `Endpoint.Collector` carries it, since an endpoint has one
+  field for what speaks there and a trace API is one more thing that can.
+- **The search form is Jaeger's and the query is the store's.**
+  `source.TraceQuery` is a service, an operation, tags and a duration because
+  those are what somebody hunting a request knows and what can be drawn as
+  fields. It compiles into TraceQL and into Jaeger's parameters both; the
+  reverse would not, which is why this is not a TraceQL prompt with a
+  translation hung off it. What it cannot say — TraceQL's structural queries —
+  is a question this screen does not answer, not a gap to fill in by degrees.
+  Every backend disagreement is settled in the compiler rather than in the
+  form: a tag is unscoped in TraceQL and a string in Jaeger, a duration is the
+  trace's and not the span's, and the window is always sent because the two
+  servers default to different ones and two results lists that cannot be
+  compared are worse than either.
+- **What a search answers with is not a trace.** `trace.Result` is a row and
+  never becomes a `Tree`: Tempo answers with a summary, so `Spans` and `Errors`
+  are unknown there and only `Matched` — the spans the query selected — is
+  said. Jaeger answers with the traces themselves, so it is the other way
+  round. They are separate fields and drawn as separate claims, since a column
+  meaning whichever the store happened to report is a number nobody can read.
+  It follows that opening a Jaeger result asks for nothing: the row was drawn
+  out of the very bytes the gantt needs, so `openTraceMsg` carries the tree.
+- **An empty answer is an answer.** `DecodeSearch` and `DecodeJaegerSearch`
+  return no results and no error for a response holding no trace, which is why
+  the second exists at all — `DecodeJaeger` reports that as a broken response,
+  and it is one when a trace was asked for by id and something else when a
+  query simply did not match.
+
 - **The jump between a line and its trace is one message each way.** `T` sends
   `openTraceMsg` with the merge tag, so a merge asks the trace store of the
   place the line came from; `f` sends the `filterMsg` the entry view already
