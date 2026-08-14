@@ -210,6 +210,14 @@ That last one is measured from when the lines were fetched and not from now, so
 a list being read does not renumber itself. A line a database reported the
 severity of rather than saying it itself gets a level column beside the time.
 
+A `kubectl` place that is following keeps reading across a restart: `kubectl
+logs -f` ends when the container does, so telescope opens it again from the last
+line it saw, and a note in the timeline says which container came back and what
+killed it. The restarts come from a `kubectl get pods -w` running beside the
+logs, which needs permission to read pods and a target it can name — a pod or a
+label selector, not a workload — and quietly reports nothing when it has
+neither.
+
 A line repeated straight after itself is drawn once, with `×n` for how many
 times running it was said, and the top bar counts what that took off the screen.
 A repetition is the same message from the same source with no silence in

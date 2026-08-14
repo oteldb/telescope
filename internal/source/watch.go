@@ -170,3 +170,29 @@ func watchEvent(frame []byte) (kind string, obj []byte) {
 	}
 	return ev.Type, ev.Object
 }
+
+// reopens reports whether the end of this collector is the end of what it
+// reads.
+//
+// For kubectl it is not: "kubectl logs -f" ends when the container does, and a
+// container ending is the most ordinary thing in a cluster. Everywhere else an
+// exit is an exit — journalctl -f does not stop while the journal exists, and a
+// command a place named is a command that was asked to run once.
+func (c Config) reopens() bool {
+	return c.Collector == CollectorKubectl && c.following()
+}
+
+// resume is this config asked for what comes after at, which is how a collector
+// is opened again without replaying what has been read.
+func (c Config) resume(at time.Time) Config {
+	if at.IsZero() {
+		// Nothing dated has been read, so there is nothing to ask after: a
+		// place not stamping its lines opens again as it opened.
+		return c
+	}
+	c.Range.Since = at
+	c.Range.Until = time.Time{}
+	// The tail was how far back to start, and reading has since gone past it.
+	c.Tail = 0
+	return c
+}

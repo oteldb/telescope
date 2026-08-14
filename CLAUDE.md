@@ -151,6 +151,28 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   transparent terminal does not have, so it gets a half. See `ui.barCells` —
   and the same rule is why a span too short to cover a cell is still drawn as
   one eighth rather than as nothing.
+- **The end of a collector is not always the end of what it reads.** `kubectl
+  logs -f` ends when the container does, so a restart is indistinguishable from
+  a finished stream and the view would go dead beside a pod that is running.
+  `Config.reopens()` is where that is decided and it is kubectl alone: journalctl
+  does not stop while the journal exists, and a command a place named was asked
+  to run once. `Stream.follow` opens it again through `Config.resume`, asking
+  from the newest line's time rather than from the top — kubectl writes
+  `--since-time` to the second, so the seam costs a duplicated second and never
+  a lost line, and a duplicate is a row the list already folds. Only stdout
+  counts as having read something: a place answering "no such resource"
+  complains on stderr every time round, and `maxReopen` attempts that read
+  nothing is how that stops.
+- **What a restart is, Kubernetes does not say; it says a count.** `restarts`
+  remembers what each container was at when last seen, and a container seen for
+  the first time is recorded and not announced — a pod that had restarted twice
+  before telescope opened did not restart just now. The watch is a second
+  process beside the logs, reached through the same transport, and it says
+  nothing about itself: an old kubectl or a role that may read logs and not pods
+  costs the annotations and never the stream. Its output is framed on the braces
+  at column zero rather than decoded as a JSON stream, since the pty forced for
+  ssh folds the remote stderr in with it and a decoder that met one warning
+  would never read another object.
 - **A merge trusts its children to be ordered** and does a k-way merge over
   their heads. Each child may have exactly one line pending — the per-child ack
   channel is what enforces that, not the unbuffered item channel. A source that

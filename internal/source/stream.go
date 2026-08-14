@@ -65,6 +65,39 @@ type Stream struct {
 	lines  chan Line
 	done   chan error
 	cancel context.CancelFunc
+
+	// mu guards what the reopen loop needs to know about what has already been
+	// read: how much of it there was, and how far it got. Both scanners write
+	// here and the loop reads between them.
+	mu     sync.Mutex
+	nread  int
+	lastAt time.Time
+}
+
+// read is how many lines the collector has written to stdout, which is what
+// tells a stream that ended having read something from one that could not be
+// read at all.
+func (s *Stream) read() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.nread
+}
+
+// since is the newest line seen, which is where reading picks up again.
+func (s *Stream) since() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastAt
+}
+
+// saw records a line the collector wrote.
+func (s *Stream) saw(l Line) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nread++
+	if l.At.After(s.lastAt) {
+		s.lastAt = l.At
+	}
 }
 
 // Start opens the stream described by cfg, spawning a command or, for a
@@ -88,29 +121,11 @@ func Start(ctx context.Context, cfg Config, opts ...Option) (*Stream, error) {
 }
 
 func startCommand(ctx context.Context, cfg Config) (*Stream, error) {
-	argv := cfg.Argv()
-
 	ctx, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	isolate(cmd)
-	// Ask the collector to shut down instead of killing it, so ssh can tear
-	// down the remote side; WaitDelay bounds how long we honor that.
-	cmd.Cancel = func() error { return terminate(cmd) }
-	cmd.WaitDelay = 2 * time.Second
-
-	stdout, err := cmd.StdoutPipe()
+	cmd, stdout, stderr, err := spawnCommand(ctx, cfg)
 	if err != nil {
 		cancel()
-		return nil, errors.Wrap(err, "stdout")
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancel()
-		return nil, errors.Wrap(err, "stderr")
-	}
-	if err := cmd.Start(); err != nil {
-		cancel()
-		return nil, errors.Wrapf(err, "start %s", argv[0])
+		return nil, err
 	}
 
 	s := &Stream{
@@ -120,12 +135,7 @@ func startCommand(ctx context.Context, cfg Config) (*Stream, error) {
 		cancel: cancel,
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go s.scan(ctx, stdout, false, &wg)
-	go s.scan(ctx, stderr, true, &wg)
-
-	// The watch outlives nothing: it is stopped when the logs stop, since a
+	// The watch outlives nothing: it is stopped when the reading is, since a
 	// pod still restarting is not worth saying to a reader whose stream has
 	// ended, and a stream that waited for it would never close.
 	watchCtx, stopWatch := context.WithCancel(ctx)
@@ -133,8 +143,7 @@ func startCommand(ctx context.Context, cfg Config) (*Stream, error) {
 	startWatch(watchCtx, cfg, s.lines, &watching)
 
 	go func() {
-		wg.Wait()
-		err := cmd.Wait()
+		err := s.follow(ctx, cfg, cmd, stdout, stderr)
 		stopWatch()
 		watching.Wait()
 		close(s.lines)
@@ -145,6 +154,103 @@ func startCommand(ctx context.Context, cfg Config) (*Stream, error) {
 		close(s.done)
 	}()
 	return s, nil
+}
+
+// spawnCommand starts one collector process. It is a variable so the reopen
+// loop can be read without a cluster to restart.
+var spawnCommand = func(ctx context.Context, cfg Config) (*exec.Cmd, io.ReadCloser, io.ReadCloser, error) {
+	argv := cfg.Argv()
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	isolate(cmd)
+	// Ask the collector to shut down instead of killing it, so ssh can tear
+	// down the remote side; WaitDelay bounds how long we honor that.
+	cmd.Cancel = func() error { return terminate(cmd) }
+	cmd.WaitDelay = 2 * time.Second
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, nil, errors.Wrap(err, "stdout")
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, nil, nil, errors.Wrap(err, "stderr")
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, nil, nil, errors.Wrapf(err, "start %s", argv[0])
+	}
+	return cmd, stdout, stderr, nil
+}
+
+// reopenAfter is how long to wait before opening a collector again, doubling
+// with each attempt that read nothing.
+func reopenAfter(attempt int) time.Duration {
+	d := reopenBase << min(attempt, 4)
+	return min(d, reopenCap)
+}
+
+// reopenBase and reopenCap pace the reopening. They are variables so a test can
+// read the loop without waiting out the politeness.
+var (
+	reopenBase = 250 * time.Millisecond
+	reopenCap  = 4 * time.Second
+)
+
+const (
+	// maxReopen is how many times in a row a collector may be opened and read
+	// nothing before the stream is called finished. A container crash-looping
+	// writes something every time round, so this bounds the case where there is
+	// nothing to read rather than the case worth following.
+	maxReopen = 5
+)
+
+// follow reads one collector to its end, and opens it again where that end is
+// not the end of the thing being read.
+//
+// "kubectl logs -f" ends when the container does, so a restart looks exactly
+// like a finished stream: the view would go dead beside a pod that is running.
+// Reopening asks from the last line's time rather than from the top, which
+// costs a duplicate second at the seam — kubectl's --since-time is written to
+// the second — and never a lost line. A duplicate is a row the list already
+// folds; a hole in a log is not something the reader can find later.
+func (s *Stream) follow(ctx context.Context, cfg Config, cmd *exec.Cmd, stdout, stderr io.ReadCloser) error {
+	for attempt := 0; ; {
+		before := s.read()
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go s.scan(ctx, stdout, false, &wg)
+		go s.scan(ctx, stderr, true, &wg)
+		wg.Wait()
+		err := cmd.Wait()
+
+		switch {
+		case ctx.Err() != nil, !cfg.reopens():
+			return err
+		}
+		// Only what came back on stdout counts as having read something: a
+		// place that answers "no such resource" writes on stderr every time,
+		// and reopening it forever is a way to never say so.
+		if s.read() > before {
+			attempt = 0
+		} else {
+			attempt++
+			if attempt >= maxReopen {
+				return err
+			}
+		}
+
+		select {
+		case <-time.After(reopenAfter(attempt)):
+		case <-ctx.Done():
+			return err
+		}
+
+		var next *exec.Cmd
+		if next, stdout, stderr, err = spawnCommand(ctx, cfg.resume(s.since())); err != nil {
+			return err
+		}
+		cmd = next
+	}
 }
 
 // Config returns the config the stream was started with.
@@ -185,6 +291,9 @@ func (s *Stream) scan(ctx context.Context, r io.Reader, isErr bool, wg *sync.Wai
 		line := Line{Data: append([]byte(nil), data...), Stderr: isErr}
 		if s.cfg.Stamps() {
 			line.Data, line.At = unstamp(line.Data)
+		}
+		if !isErr {
+			s.saw(line)
 		}
 		select {
 		case s.lines <- line:
