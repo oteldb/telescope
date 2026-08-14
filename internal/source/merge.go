@@ -129,9 +129,9 @@ func startMerge(ctx context.Context, cfg Config, opt options) (*Stream, error) {
 			// reported where its lines would have been.
 			failed = append(failed, errors.Wrap(err, labels[i]))
 			notes = append(notes, Line{
-				Data:   []byte("telescope: " + labels[i] + ": " + err.Error()),
+				Kind:   KindOpenFailed,
+				Reason: err.Error(),
 				Stderr: true,
-				Note:   true,
 				Source: labels[i],
 			})
 			continue
@@ -247,9 +247,9 @@ func forward(ctx context.Context, idx int, sub *Stream, label string, items chan
 		// reported once every source has ended and a source can outlive the
 		// reader's interest in why another one stopped.
 		if !send(Line{
-			Data:   []byte("telescope: " + label + ": " + err.Error()),
+			Kind:   KindExited,
+			Reason: err.Error(),
 			Stderr: true,
-			Note:   true,
 		}) {
 			return
 		}

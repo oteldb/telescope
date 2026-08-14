@@ -19,9 +19,19 @@ func vlogsEntry(ts, msg string) string {
 // drain reads a stream into its lines and its exit error.
 func drain(t *testing.T, s *Stream) ([]string, error) {
 	t.Helper()
+	lines, err := drainLines(t, s)
 	var out []string
+	for _, l := range lines {
+		out = append(out, string(l.Data))
+	}
+	return out, err
+}
+
+func drainLines(t *testing.T, s *Stream) ([]Line, error) {
+	t.Helper()
+	var out []Line
 	for line := range s.Lines() {
-		out = append(out, string(line.Data))
+		out = append(out, line)
 	}
 	select {
 	case err := <-s.Done():

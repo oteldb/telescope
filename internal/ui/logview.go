@@ -486,7 +486,7 @@ func (m logModel) View() string {
 		switch {
 		case i == m.cursor:
 			row = cursorRow(row, inner)
-		case e.Note:
+		case e.Kind.IsNote():
 			row = noteRow(row, inner)
 		case e.Band:
 			row = bandRow(row, inner)

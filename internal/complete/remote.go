@@ -199,7 +199,14 @@ func run(ctx context.Context, r Request, src listSource, limit int) ([]Candidate
 	for line := range s.Lines() {
 		if line.Stderr {
 			if len(errOut) < 4 {
-				errOut = append(errOut, string(line.Data))
+				// A note carries its failure and not a line; what telescope
+				// would say around it is for a reader, and this is going into
+				// an error.
+				msg := string(line.Data)
+				if line.Kind.IsNote() {
+					msg = line.Reason
+				}
+				errOut = append(errOut, msg)
 			}
 			continue
 		}

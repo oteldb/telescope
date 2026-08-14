@@ -17,13 +17,18 @@ const maxLineSize = 8 * 1024 * 1024
 
 // Line is a single line read from a source.
 type Line struct {
+	// Data is the line as it was read. Empty for a note, which says what it has
+	// to say in Kind and Reason and is written out where lines are rendered.
 	Data   []byte
 	Stderr bool
-	// Note says the line is telescope's own words about the source — it could
-	// not be opened, it stopped reading, it exited — and not anything the source
-	// wrote. A collector's stderr is the source talking and stays a line like
-	// any other; this is the view's warrant to draw one differently.
-	Note bool
+	// Kind says whether the line is one the source wrote or telescope's own
+	// words about it. A collector's stderr is the source talking and stays a
+	// line like any other; this is the view's warrant to draw one differently.
+	Kind Kind
+	// Reason is why, for a note: the failure as it was reported, and nothing
+	// telescope wrote around it. A note reads as a sentence somewhere else
+	// entirely, since the same sentence has to reach the screen and the filter.
+	Reason string
 	// At is when the line was written, for a source that reports it out of
 	// band. Zero when the line is all there is, which is the usual case: a
 	// timestamp inside the line is the parser's business, not the source's.
@@ -181,7 +186,7 @@ func (s *Stream) scan(ctx context.Context, r io.Reader, isErr bool, wg *sync.Wai
 		// Surface read failures (most often a line over maxLineSize) in the
 		// stream itself instead of losing the rest of the output silently.
 		select {
-		case s.lines <- Line{Data: []byte("telescope: read: " + err.Error()), Stderr: true, Note: true}:
+		case s.lines <- Line{Kind: KindReadFailed, Reason: err.Error(), Stderr: true}:
 		case <-ctx.Done():
 		}
 	}

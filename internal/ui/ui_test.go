@@ -2172,9 +2172,10 @@ func TestANoteIsMarkedAsOne(t *testing.T) {
 	at := time.Date(2026, 8, 11, 15, 16, 36, 0, time.Local)
 	lg.append(source.Line{Data: []byte("serving"), At: at})
 	lg.append(source.Line{
-		Data:   []byte("telescope: prod: exit status 255"),
+		Kind:   source.KindExited,
+		Reason: "exit status 255",
+		Source: "prod",
 		Stderr: true,
-		Note:   true,
 		At:     at.Add(time.Second),
 	})
 	lg.cursor, lg.follow = 0, false

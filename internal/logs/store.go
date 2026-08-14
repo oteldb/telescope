@@ -23,9 +23,10 @@ type Entry struct {
 	Head   string
 	Extra  int
 	Stderr bool
-	// Note says the line is telescope reporting on the source rather than
-	// anything the source wrote, which is why the list marks it.
-	Note bool
+	// Kind says the line is telescope reporting on the source rather than
+	// anything the source wrote, and which report it is, which is why the list
+	// marks it.
+	Kind source.Kind
 	// Source names which stream the line came from, for a merge of several.
 	Source string
 	// Labels are what the source reported beside the line.
@@ -174,6 +175,9 @@ func (s *Store) Prepend(lines []source.Line) []*Entry {
 // belongs: what a line says is its own, and its sequence, shading and place in
 // the list are the store's.
 func (s *Store) render(l source.Line) *Entry {
+	if l.Kind.IsNote() {
+		return s.note(l)
+	}
 	rec := Parse(l.Data)
 	// What the line does not say about itself, the source may have said for
 	// it: a Loki entry is often a bare message with the severity in a label.
@@ -201,13 +205,7 @@ func (s *Store) render(l source.Line) *Entry {
 	// bytes, and a cursor movement inside a list is not a rendering.
 	text = Sanitize(text)
 
-	head, rest, multiline := strings.Cut(text, "\n")
-	extra := 0
-	if multiline {
-		extra = strings.Count(rest, "\n") + 1
-		// Splitting can cut a color sequence off from its reset.
-		head += ansiReset
-	}
+	head, extra := fold(text)
 
 	e := &Entry{
 		Raw:       l.Data,
@@ -215,7 +213,7 @@ func (s *Store) render(l source.Line) *Entry {
 		Head:      head,
 		Extra:     extra,
 		Stderr:    l.Stderr,
-		Note:      l.Note,
+		Kind:      l.Kind,
 		Source:    l.Source,
 		Labels:    l.Labels,
 		At:        rec.Time,
@@ -233,6 +231,43 @@ func (s *Store) render(l source.Line) *Entry {
 		e.At = time.Now()
 	}
 	return e
+}
+
+// note turns telescope's own words into an entry. Nothing here is parsed or
+// formatted: a note has no structure to find, and what it says is written from
+// its kind rather than read out of a line.
+func (s *Store) note(l source.Line) *Entry {
+	// The reason is an error as somebody else's tool reported it, so it reaches
+	// the screen the way every other line from outside does.
+	text := Sanitize(noteText(l))
+	head, extra := fold(text)
+	e := &Entry{
+		Raw:    []byte(text),
+		Text:   text,
+		Head:   head,
+		Extra:  extra,
+		Stderr: l.Stderr,
+		Kind:   l.Kind,
+		Source: l.Source,
+		At:     l.At,
+		Record: Record{Body: text},
+	}
+	if e.At.IsZero() {
+		e.At = time.Now()
+	}
+	return e
+}
+
+// fold splits a rendering into the row the list shows and how much of it is
+// folded away until the entry is opened.
+func fold(text string) (head string, extra int) {
+	head, rest, multiline := strings.Cut(text, "\n")
+	if multiline {
+		extra = strings.Count(rest, "\n") + 1
+		// Splitting can cut a color sequence off from its reset.
+		head += ansiReset
+	}
+	return head, extra
 }
 
 // Entries returns the retained entries, oldest first.

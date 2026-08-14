@@ -89,11 +89,15 @@ func TestMergeSurvivesOneSource(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	lines, err := drain(t, s)
+	lines, err := drainLines(t, s)
 	require.Len(t, lines, 2)
-	require.Contains(t, lines[0], "still here")
-	require.Contains(t, lines[1], "telescope: bad:", "and the one that failed says so where its lines would have been")
-	require.Contains(t, lines[1], "500")
+	require.Contains(t, string(lines[0].Data), "still here")
+	// The stream opened and the query behind it did not, so this is a source
+	// that stopped rather than one that never started.
+	require.Equal(t, KindExited, lines[1].Kind,
+		"and the one that failed says so where its lines would have been")
+	require.Equal(t, "bad", lines[1].Source)
+	require.Contains(t, lines[1].Reason, "500")
 	require.ErrorContains(t, err, "500", "and the reader is told again at the end")
 }
 
@@ -312,9 +316,10 @@ func TestMergeSaysWhyASourceStopped(t *testing.T) {
 	}
 	require.Len(t, got, 2)
 	require.Contains(t, string(got[0].Data), "Connection refused")
-	require.False(t, got[0].Note, "what the collector wrote is the collector talking")
-	require.Contains(t, string(got[1].Data), "telescope: s0: exit status 255")
-	require.True(t, got[1].Note, "and what telescope wrote is marked as its own")
+	require.False(t, got[0].Kind.IsNote(), "what the collector wrote is the collector talking")
+	require.Equal(t, KindExited, got[1].Kind, "and what telescope wrote is marked as its own")
+	require.Equal(t, "s0", got[1].Source)
+	require.Contains(t, got[1].Reason, "exit status 255")
 	require.ErrorContains(t, <-s.Done(), "exit status 255")
 }
 

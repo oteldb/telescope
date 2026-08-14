@@ -93,10 +93,19 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   that could not be reached is a place with something to say. The hold ends at
   the first line on stdout or at `openGrace`, since a container logging only to
   stderr is running and not refusing.
-- **`Line.Note` is telescope talking, not the source.** A collector's stderr is
-  the source's own output — `docker` and `ssh` fold an application's stderr into
-  it — so only what telescope writes itself is marked, and that is what `ui`
-  washes with `noteWash`.
+- **A note is telescope talking, not the source.** A collector's stderr is the
+  source's own output — `docker` and `ssh` fold an application's stderr into it
+  — so only what telescope writes itself is marked, and that is what `ui` washes
+  with `noteWash`. `source.Kind` says which report it is and `Line.Reason`
+  carries the failure alone: a place that never opened, a stream that broke
+  halfway and a collector that exited are three different things to be told, and
+  where the error arose is what separates them — an API child whose query
+  returns 500 opened, so it stopped rather than failed to start. The sentence is
+  written in `logs.noteText`, because it has to reach the screen and the filter
+  as the same words: a note has no fields and no severity, so what it reads as
+  is the only thing a query can match it by. It follows that `Line.Data` is
+  empty for a note, and anything reading a stream's bytes directly — `absent`,
+  `complete` — has to say what it means by a line that has none.
 - **Everything a source produces is somebody else's bytes.** Rendered lines go
   through `logs.Sanitize`, attribute values through `logs.Escape`. A background
   laid under a line has to be re-armed after every reset the line contains; see
