@@ -96,7 +96,7 @@ func readTrace(ctx context.Context, from, target string) (*trace.Tree, error) {
 	if err != nil {
 		return nil, err
 	}
-	return decodeTrace(data)
+	return trace.Decode(data)
 }
 
 func readFile(path string) ([]byte, error) {
@@ -121,7 +121,7 @@ func fetchTrace(ctx context.Context, from, id string) (*trace.Tree, error) {
 	if err != nil {
 		return nil, err
 	}
-	return decodeTrace(data)
+	return trace.Decode(data)
 }
 
 // traceEndpoint resolves what --from named. A URL is itself; anything else is
@@ -159,44 +159,4 @@ func traceEndpoint(from string) (source.Endpoint, error) {
 			"no place named %q: the ones that read traces are %s", from, strings.Join(named, ", "))
 	}
 	return source.Endpoint{}, errors.Errorf("no place named %q, and it is not a url either", from)
-}
-
-// decodeTrace reads whichever of the two formats arrived.
-//
-// Neither is asked for by name: a file has no content type, and somebody who
-// has a trace should not have to know which database wrote it.
-//
-// What decides is whether spans came out, not whether the decode returned an
-// error, and that is the whole subtlety here. A Jaeger response is JSON with a
-// "data" key, so the OTLP decoder reads it as a well-formed payload describing
-// no spans at all and reports no error — it is only unknown fields, and unknown
-// fields are how OTLP stays forwards-compatible. Dispatching on the error would
-// mean a Jaeger file opened as an empty trace.
-func decodeTrace(data []byte) (*trace.Tree, error) {
-	otlp, otlpErr := trace.DecodeOTLP(data)
-	if tree, ok := firstWithSpans(otlp); ok {
-		return tree, nil
-	}
-	jaeger, jaegerErr := trace.DecodeJaeger(data)
-	if tree, ok := firstWithSpans(jaeger); ok {
-		return tree, nil
-	}
-	// Both failed to find anything. The OTLP complaint is the one to report,
-	// since it is the format an endpoint answers with.
-	if otlpErr != nil {
-		return nil, otlpErr
-	}
-	if jaegerErr != nil {
-		return nil, jaegerErr
-	}
-	return nil, errors.New("no spans in that trace")
-}
-
-func firstWithSpans(found []*trace.Tree) (*trace.Tree, bool) {
-	for _, t := range found {
-		if t.Len() > 0 {
-			return t, true
-		}
-	}
-	return nil, false
 }

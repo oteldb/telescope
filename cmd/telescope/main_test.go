@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/oteldb/telescope/internal/trace"
 )
 
 // A file has no content type, so which format it holds is worked out from what
@@ -16,7 +18,7 @@ func TestATraceIsReadWhicheverFormatItIsIn(t *testing.T) {
 			data, err := os.ReadFile(filepath.Join("..", "..", "internal", "trace", "testdata", name))
 			require.NoError(t, err)
 
-			tree, err := decodeTrace(data)
+			tree, err := trace.Decode(data)
 			require.NoError(t, err)
 			require.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", tree.ID)
 			require.Equal(t, 6, tree.Len())
@@ -25,7 +27,7 @@ func TestATraceIsReadWhicheverFormatItIsIn(t *testing.T) {
 }
 
 func TestBytesThatAreNoTraceAreReported(t *testing.T) {
-	_, err := decodeTrace([]byte(`<html>502 Bad Gateway</html>`))
+	_, err := trace.Decode([]byte(`<html>502 Bad Gateway</html>`))
 	require.Error(t, err)
 }
 
