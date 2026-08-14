@@ -11,6 +11,7 @@ require (
 	github.com/go-faster/errors v0.8.0
 	github.com/go-faster/jx v1.2.0
 	github.com/go-faster/pl v0.5.0
+	github.com/go-faster/sdk v0.39.0
 	github.com/go-faster/yaml v0.4.6
 	github.com/muesli/termenv v0.16.0
 	github.com/sahilm/fuzzy v0.1.3

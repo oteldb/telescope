@@ -36,6 +36,7 @@ func root() *cobra.Command {
 		Long: "Opens one stream — a systemd unit, a Kubernetes workload, a container,\n" +
 			"any command, or a query against VictoriaLogs or Loki — and renders it as a\n" +
 			"filterable list.",
+		Version:       buildVersion(),
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: false,
@@ -44,6 +45,9 @@ func root() *cobra.Command {
 			return err
 		},
 	}
+	// cliversion writes the word "version" itself, and cobra's default template
+	// writes it too.
+	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 	cmd.AddCommand(traceCmd())
 	return cmd
 }
