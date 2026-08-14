@@ -3,14 +3,14 @@
 package config
 
 import (
-	"bytes"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/go-faster/errors"
-	"github.com/go-faster/yaml"
+	"github.com/go-faster/figureout"
+	fyaml "github.com/go-faster/figureout/source/yaml"
 
 	"github.com/oteldb/telescope/internal/source"
 )
@@ -28,10 +28,27 @@ const (
 type Config struct {
 	// Places are where logs can be read from, declared once and referred to by
 	// name.
-	Places []Place `yaml:"places,omitempty"`
+	Places []Place
 	// Groups are the places read as one stream.
-	Groups []Group `yaml:"groups,omitempty"`
+	Groups []Group
 }
+
+// Descriptor describes the config file. Decoding it, saying what is wrong with
+// one, and the JSON Schema an editor reads all derive from this one
+// declaration, so a key cannot be documented as something it does not accept.
+//
+// What it does not describe is what one key means for another: that a database
+// needs a url and a command cannot have one, that a group's places must exist.
+// Those are [New]'s, since a place built in Go never passed through a file.
+var Descriptor = figureout.MustDerive(func(c *Config, s *figureout.Schema[Config]) {
+	// Keyed by name so that what is wrong with an entry is reported as the
+	// entry's name rather than as its position: counting places in a file to
+	// find the broken one is work the message can do.
+	figureout.List(s, &c.Places, "places", placeDescriptor).MergeByKey("name").
+		Doc("Where logs are read from, declared once and referred to by name.")
+	figureout.List(s, &c.Groups, "groups", groupDescriptor).MergeByKey("name").
+		Doc("Places read as one stream.")
+})
 
 // Path is where the config file is read from, honoring XDG_CONFIG_HOME.
 func Path() string {
@@ -52,23 +69,62 @@ func loadFrom(path string) (Config, error) {
 	if path == "" {
 		return Config{}, nil
 	}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return Config{}, nil
-	}
+	c, _, err := Descriptor.Resolve(fyaml.File(path,
+		fyaml.Optional(),
+		// A key that is not a key is a mistake worth reporting: a config the
+		// reader half understands opens half the places it names and says
+		// nothing.
+		fyaml.DisallowUnknownFields(),
+	))
 	if err != nil {
-		return Config{}, errors.Wrap(err, "read config")
-	}
-
-	var c Config
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	// A key that is not a key is a mistake worth reporting: a config the reader
-	// half understands opens half the places it names and says nothing.
-	dec.KnownFields(true)
-	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
-		return Config{}, errors.Wrapf(err, "parse %s", path)
+		return Config{}, said(err)
 	}
 	return New(c.Places, c.Groups)
+}
+
+// said rewrites what the resolver reports into the sentences telescope writes
+// everywhere else. A diagnostic's code is for a program reading the report, and
+// the only reader here is somebody looking at a start screen that will not open.
+// noValue is how the resolver words an absent field with nothing to fall back
+// on, which is the one message worth rewriting: every other one is already a
+// sentence about the value.
+const noValue = "no value provided and no default"
+
+func said(err error) error {
+	var diags figureout.Diagnostics
+	if !errors.As(err, &diags) {
+		return err
+	}
+	var out []error
+	for _, d := range diags {
+		if d.Severity != figureout.SeverityError {
+			continue
+		}
+		var sb strings.Builder
+		switch {
+		case d.Message == noValue:
+			sb.WriteString(d.FieldPath)
+			sb.WriteString(" is required")
+		case strings.Contains(d.Message, d.FieldPath):
+			// A diagnostic about a whole collection names the entry it is
+			// about, which is more than the path can say.
+			sb.WriteString(d.Message)
+		default:
+			sb.WriteString(d.FieldPath)
+			sb.WriteString(": ")
+			sb.WriteString(d.Message)
+		}
+		if d.Origin != nil {
+			sb.WriteString(" (")
+			sb.WriteString(d.Origin.String())
+			sb.WriteString(")")
+		}
+		out = append(out, errors.New(sb.String()))
+	}
+	if len(out) == 0 {
+		return err
+	}
+	return errors.Join(out...)
 }
 
 // New resolves declarations that did not come from a file, which is how a test

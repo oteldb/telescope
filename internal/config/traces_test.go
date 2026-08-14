@@ -65,7 +65,7 @@ places:
 	// A place that is not usable as declared is a mistake in the file, and the
 	// file is refused for it the way an unknown `type:` is.
 	_, err := loadFrom(path)
-	require.ErrorContains(t, err, "unknown traces type")
+	require.ErrorContains(t, err, "must be one of")
 	require.ErrorContains(t, err, "tempo, jaeger")
 	require.ErrorContains(t, err, "prod", "the broken place is named")
 }

@@ -9,7 +9,8 @@ import (
 	"time"
 
 	"github.com/go-faster/errors"
-	"github.com/go-faster/yaml"
+	"github.com/go-faster/figureout"
+	fyaml "github.com/go-faster/figureout/source/yaml"
 )
 
 // Token says where a secret is read from. It never holds the secret itself, so
@@ -19,13 +20,26 @@ import (
 // Exactly one source may be named.
 type Token struct {
 	// Env names an environment variable.
-	Env string `yaml:"env,omitempty"`
+	Env string
 	// File names a file holding the token, "~" accepted.
-	File string `yaml:"file,omitempty"`
+	File string
 	// Exec runs a command and reads the token from its output, which is how a
 	// keyring, a password manager or anything else with a CLI is reached.
-	Exec Argv `yaml:"exec,omitempty"`
+	Exec Argv
 }
+
+// tokenDescriptor describes a [Token] as it is written in the file. That
+// exactly one source may be named is [Token.Validate]'s: it is a rule about the
+// three keys together, and the schema describes them one at a time.
+var tokenDescriptor = figureout.MustDerive(func(t *Token, s *figureout.Schema[Token]) {
+	figureout.Value(s, &t.Env, "env").
+		Doc("An environment variable holding the token.")
+	figureout.Value(s, &t.File, "file").
+		Doc(`A file holding the token, "~" accepted.`)
+	figureout.Value(s, &t.Exec, "exec", argvDecoder{}.option()).
+		Doc("A command whose first line of output is the token: a keyring, " +
+			"a password manager, anything with a CLI.")
+})
 
 // tokenTimeout bounds a token command. It is generous because unlocking a
 // keyring may mean answering a prompt.
@@ -97,30 +111,48 @@ func (t Token) Read(ctx context.Context) (string, error) {
 // arguments. The list form needs no quoting; the string form may use a pipe.
 type Argv []string
 
-// UnmarshalYAML accepts both forms.
-func (a *Argv) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind == yaml.ScalarNode {
-		var line string
-		if err := node.Decode(&line); err != nil {
-			return err
-		}
-		if strings.TrimSpace(line) == "" {
-			return errors.New("exec is empty")
+// argvDecoder reads both forms.
+//
+// It is a decoder rather than a [figureout.ScalarOr] because the alternative
+// spelling is a list, not an object, and a list has no descriptor to widen
+// into. The shapes it declares are what the generated schema says the key
+// accepts, so the two cannot drift.
+type argvDecoder struct{}
+
+func (argvDecoder) option() figureout.FieldOption {
+	str := figureout.Shape{Kind: figureout.ShapeString}
+	return figureout.WithDecoder(fyaml.Source, argvDecoder{},
+		str,
+		figureout.Shape{Kind: figureout.ShapeArray, Elem: &str},
+	)
+}
+
+// DecodeValue implements [figureout.Decoder].
+func (argvDecoder) DecodeValue(raw any) (any, error) {
+	switch v := raw.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil, errors.New("exec is empty")
 		}
 		// A line goes through a shell, since that is what it was written for:
 		// "pass show x | head -1" means nothing to exec(2).
-		*a = Argv{"sh", "-c", line}
-		return nil
+		return Argv{"sh", "-c", v}, nil
+	case []any:
+		args := make(Argv, 0, len(v))
+		for _, item := range v {
+			arg, ok := item.(string)
+			if !ok {
+				return nil, errors.Errorf("exec argument %v is not a string", item)
+			}
+			args = append(args, arg)
+		}
+		if len(args) == 0 {
+			return nil, errors.New("exec is empty")
+		}
+		return args, nil
+	default:
+		return nil, errors.Errorf("exec is a command line or a list of arguments, not %T", raw)
 	}
-	var args []string
-	if err := node.Decode(&args); err != nil {
-		return err
-	}
-	if len(args) == 0 {
-		return errors.New("exec is empty")
-	}
-	*a = args
-	return nil
 }
 
 // run executes the command and returns what it wrote to stdout.

@@ -30,7 +30,7 @@ about a workspace, re-run it with `GOWORK=off`.
 | `internal/source` | building and running collectors. `Config` describes a stream; `Command`/`Argv` turn it into a process; `Stream` yields `Line`s. `loki.go`/`victorialogs.go` query over HTTP instead, `merge.go` interleaves several streams, `endpoint.go` holds the HTTP endpoint and its token, `fields.go` asks a database what its lines are labeled with, `page.go` asks it for what came before a line, `pushdown.go` is what to ask instead when it will not read the compiled filter. |
 | `internal/logs` | what a line means and how it reads. `parse.go` turns JSON into a `Record`, `record.go`/`labels.go` say what a record and its labels are, `store.go` renders and retains entries and `fields.go` indexes what they were labeled with, `filter.go` pairs a parsed query with the level the view cycles, and keeps its incremental `View`, `highlight.go`/`escape.go` decide what reaches the screen. |
 | `internal/ui` | the bubbletea models. `app.go` is the root, `start.go` picks a place or a group and `saved.go` is what the config offers it, `logview.go` is the list and `gutter.go` the time column and the gaps down its left, `entryview.go` one entry and `entrydoc.go` the rows its cursor walks, `clipboard.go` copies a row and `locate.go`/`open.go`/`stack.go` open what one points at, `page.go` asks for the lines before the first one when the reader reaches it, `complete.go` finishes what either filter prompt is typing — the list's and the start screen's — and `help.go` writes the filter language out, `theme.go` the palette, `rows.go` the row backgrounds, `logo.go` the banner. |
-| `internal/config` | `config.yaml` and `history.yaml`. A `Place` is where logs are read from and how it is reached (`via:` for a command, `proxy:` for a database); a `Group` is several places read as one. `Load` resolves both; `New` does the same for declarations that did not come from a file. |
+| `internal/config` | `config.yaml` and `history.yaml`. A `Place` is where logs are read from and how it is reached (`via:` for a command, `proxy:` for a database); a `Group` is several places read as one. `Load` resolves both; `New` does the same for declarations that did not come from a file. Every key is declared once, as a `figureout` descriptor beside its type, and `schema.go` emits those declarations as the JSON Schema committed at `config.schema.json`. |
 | `internal/query` | the filter language: `Parse` builds an `Expr`, `Match` evaluates it against one `Record`. It sits below `source` so a query can be compiled into one a database answers itself. |
 | `internal/complete` | the suggestions the start screen offers, fetched by shelling out. |
 | `internal/trace` | a trace as it is read, and nothing that reads it: `span.go` is one operation, `tree.go` arranges them by their parent links, `skew.go` stops a child being drawn before the call that made it, `window.go` is the interval a view covers and the axis over it. `otlp.go` decodes what Tempo answers with, in either encoding, `jaeger.go` the Jaeger query API's response, `decode.go` reads whichever of the two arrived, and `search.go` is what a search answered with — a summary of a trace rather than its spans. Nothing here fetches — `source/tempo.go` does — and nothing here draws: `ui/gantt.go` does, `ui/traceview.go` is the model around it — the gantt, one span, and the service filter are modes of it — with `ui/spandoc.go` drawing a span as the rows the entry view already reads, `ui/servicepick.go` the filter, `ui/spanpalette.go` the colors and `ui/tracecache.go` what was already fetched. `ui/tracesearch.go` is the search form and its results, drawn by `ui/searchview.go`, asking through `source/search.go` and `source/tracequery.go`. |
@@ -43,6 +43,21 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
 
 ## What the code assumes
 
+- **A key is declared once, and the schema is that declaration.** The config
+  file is read by `figureout`, so what a key accepts, what it defaults to and
+  what it means live in one descriptor next to the type it fills in, and
+  `config.schema.json` is generated from it rather than written. A field table
+  in the README would be a second copy to keep right, which is the same reason
+  there is no key table there. It follows that the descriptor describes one key
+  at a time and nothing else: that a database needs a url, that a command
+  cannot have a token, that a group's places exist, are rules about keys
+  together, and they stay in `New` — a place built in Go never passed through a
+  file, and both paths have to reject the same things. `Config.Descriptor` is
+  what a reader is checked against and `said` puts what it reports back into
+  telescope's own sentences, since a diagnostic code is for a program and the
+  only reader here is somebody looking at a start screen that will not open.
+  The lists are keyed by `name` so a broken entry is reported as the entry's
+  name rather than as its position.
 - **A token never leaves memory.** It is resolved when the config is read, and
   never written to `history.yaml`, shown in a `Title()`, or passed to a child
   process. Check this whenever a config value gains a new path to the screen or

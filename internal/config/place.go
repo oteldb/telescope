@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-faster/errors"
+	"github.com/go-faster/figureout"
 
 	"github.com/oteldb/telescope/internal/source"
 )
@@ -30,43 +31,43 @@ const localVia = "local"
 // file or a command, so the config stays shareable and the secret keeps
 // whatever permissions it already has. See [Token].
 type Place struct {
-	Name string `yaml:"name"`
+	Name string
 	// Type is what speaks here: journalctl, kubectl, docker, command,
 	// victorialogs or loki.
-	Type string `yaml:"type"`
+	Type string
 	// Via is how the place is reached: "local", or "ssh://[user@]host" to run
 	// the collector over ssh. A place read over HTTP is dialed rather than
 	// entered, so it says Proxy instead.
-	Via string `yaml:"via,omitempty"`
+	Via string
 	// Sudo runs the collector under sudo -n.
-	Sudo bool `yaml:"sudo,omitempty"`
+	Sudo bool
 
-	Unit       string `yaml:"unit,omitempty"`
-	UserUnit   bool   `yaml:"user_unit,omitempty"`
-	Namespace  string `yaml:"namespace,omitempty"`
-	Target     string `yaml:"target,omitempty"`
-	Container  string `yaml:"container,omitempty"`
-	Args       string `yaml:"args,omitempty"`
-	KubeConfig string `yaml:"kubeconfig,omitempty"`
-	Context    string `yaml:"context,omitempty"`
+	Unit       string
+	UserUnit   bool
+	Namespace  string
+	Target     string
+	Container  string
+	Args       string
+	KubeConfig string
+	Context    string
 
-	URL string `yaml:"url,omitempty"`
+	URL string
 	// Datasource is a Grafana datasource uid. When set, URL is the Grafana
 	// itself and the datasource proxy path is appended to it.
-	Datasource string `yaml:"datasource,omitempty"`
+	Datasource string
 	// Token says where the bearer token is read from: an environment variable,
 	// a file, or a command such as a keyring lookup.
-	Token Token `yaml:"token,omitempty"`
+	Token Token
 	// Tenant selects one tenant of a multi-tenant database,
 	// "AccountID:ProjectID" for VictoriaLogs.
-	Tenant string            `yaml:"tenant,omitempty"`
-	Header map[string]string `yaml:"headers,omitempty"`
+	Tenant string
+	Header map[string]string
 	// Proxy reaches this place through a proxy of its own:
 	// "http://proxy.corp:3128" or "socks5h://127.0.0.1:1080". Unset takes the
 	// proxy from the environment.
-	Proxy string `yaml:"proxy,omitempty"`
+	Proxy string
 	// Insecure skips TLS verification, for a place behind a private CA.
-	Insecure bool `yaml:"insecure,omitempty"`
+	Insecure bool
 
 	// Traces is where this place's traces are read from, and which API answers
 	// there. It is separate from URL because logs and traces are rarely the same
@@ -75,17 +76,19 @@ type Place struct {
 	//
 	// It is not a `type`: nothing streams from it and it cannot be opened on
 	// its own, so it is a property of a place rather than another kind of one.
-	Traces TraceStore `yaml:"traces,omitempty"`
+	Traces TraceStore
 	// Range bounds the window read, as typed at the prompt: "1h", "today",
 	// "6h..1h". It is resolved when the place is opened, so a relative one means
 	// the same thing every run.
-	Range string `yaml:"range,omitempty"`
-	// Tail and Follow are pointers so that "tail: 0" and "follow: false" are
-	// distinguishable from being unset.
-	Tail   *int  `yaml:"tail,omitempty"`
-	Follow *bool `yaml:"follow,omitempty"`
+	Range string
+	// Tail and Follow carry their presence so that "tail: 0" and
+	// "follow: false" are distinguishable from being unset. The defaults are
+	// applied by [Place.Stream] rather than by the descriptor, since a place
+	// built by [New] never passed through one.
+	Tail   figureout.OptionalOf[int]
+	Follow figureout.OptionalOf[bool]
 	// Query pre-fills the filter.
-	Query string `yaml:"query,omitempty"`
+	Query string
 
 	// resolved is the endpoint this place queries, filled in by [Load], and
 	// resolveErr is why its token could not be read. The reason is kept rather
@@ -93,6 +96,71 @@ type Place struct {
 	resolved   source.Endpoint
 	resolveErr error
 }
+
+// placeDescriptor describes a [Place] as it is written in the file: what each
+// key accepts, what it means and what it falls back to. Decoding, validation
+// and the published JSON Schema all come out of it, so a key is declared once.
+var placeDescriptor = figureout.MustDerive(func(p *Place, s *figureout.Schema[Place]) {
+	figureout.Explicit(s, &p.Name, "name").NonEmpty().
+		Doc("Shown in the picker, and how a group names it.")
+	figureout.Explicit(s, &p.Type, "type").Enum(typeNames...).
+		Doc("What speaks here.")
+	figureout.Value(s, &p.Via, "via").DocumentDefault(localVia).
+		Doc(`How the place is reached: "local", or "ssh://[user@]host".`)
+	figureout.Value(s, &p.Sudo, "sudo").
+		Doc("Run the collector under sudo -n.")
+
+	figureout.Value(s, &p.Unit, "unit").
+		Doc(`systemd unit, the "user/" prefix accepted.`)
+	figureout.Value(s, &p.UserUnit, "user_unit").
+		Doc("Read the user journal.")
+	figureout.Value(s, &p.Namespace, "namespace").
+		Doc("Kubernetes namespace.")
+	figureout.Value(s, &p.Target, "target").
+		Doc("Pod name or label selector, ns/pod:container accepted; " +
+			"the LogsQL query for VictoriaLogs.")
+	figureout.Value(s, &p.Container, "container").
+		Doc("Container, for kubectl or docker.")
+	figureout.Value(s, &p.Args, "args").
+		Doc("Command line, for type: command.")
+	figureout.Value(s, &p.KubeConfig, "kubeconfig").
+		Doc("Passed to kubectl as --kubeconfig.")
+	figureout.Value(s, &p.Context, "context").
+		Doc("Passed to kubectl as --context.")
+
+	figureout.Value(s, &p.URL, "url").
+		Doc("The base the database's API paths hang off. Required for victorialogs and loki.")
+	figureout.Value(s, &p.Datasource, "datasource").
+		Doc("Grafana datasource uid, appended to url as a proxy path.")
+	figureout.Object(s, &p.Token, "token", tokenDescriptor).
+		Doc("Where the bearer token is read from. It is named rather than written, " +
+			"so the file stays shareable.")
+	figureout.Value(s, &p.Tenant, "tenant").
+		Doc("AccountID:ProjectID for VictoriaLogs, the org id for Loki.")
+	figureout.Value(s, &p.Header, "headers").
+		Doc("Anything else the database or its proxy needs.")
+	figureout.Value(s, &p.Proxy, "proxy").
+		Doc("Reach this database through http://… or socks5h://…. " +
+			"Unset takes the proxy from the environment.")
+	figureout.Value(s, &p.Insecure, "insecure").
+		Doc("Skip TLS verification, for a place behind a private CA.")
+
+	figureout.ScalarOr(s, &p.Traces, "traces", traceStoreDescriptor,
+		func(url string) TraceStore { return TraceStore{URL: url} }).
+		Doc("Where this place's traces are read from. A url on its own is a Tempo.")
+	figureout.Value(s, &p.Range, "range").
+		Doc("The window read: 1h, today, 6h..1h.")
+	figureout.Optional(s, &p.Tail, "tail").AtLeast(0).DocumentDefault(defaultTail).
+		Doc("Lines of history to open with, 0 for all; " +
+			"over a database it is also the size of a page.")
+	figureout.Optional(s, &p.Follow, "follow").DocumentDefault(defaultFollow).
+		Doc("Keep streaming.")
+	figureout.Value(s, &p.Query, "query").
+		Doc("Pre-fills the filter, and is what selects a Loki stream.")
+
+	figureout.IgnoreRecursive(s, &p.resolved, figureout.Reason("resolved at load"))
+	figureout.Ignore(s, &p.resolveErr, figureout.Reason("resolved at load"))
+})
 
 // typeNames are the types a place may declare, for the message that says so
 // when it declares something else.
@@ -155,14 +223,8 @@ func (p Place) Stream() (cfg source.Config, ready bool, err error) {
 		KubeConfig:  p.KubeConfig,
 		KubeContext: p.Context,
 		Elevate:     p.Sudo,
-		Tail:        defaultTail,
-		Follow:      defaultFollow,
-	}
-	if p.Tail != nil {
-		cfg.Tail = *p.Tail
-	}
-	if p.Follow != nil {
-		cfg.Follow = *p.Follow
+		Tail:        p.Tail.OrElse(defaultTail),
+		Follow:      p.Follow.OrElse(defaultFollow),
 	}
 	if cfg.Range, err = source.ParseRange(p.Range, time.Now()); err != nil {
 		return source.Config{}, false, err

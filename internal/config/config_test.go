@@ -149,10 +149,11 @@ places:
 }
 
 // TestPlaceErrorsAreNamed: an error names the place it is about, since a number
-// means counting entries in the file to find it.
+// means counting entries in the file to find it. It is why the list is keyed by
+// name rather than merged by position.
 func TestPlaceErrorsAreNamed(t *testing.T) {
 	_, err := loadFrom(write(t, "places:\n  - name: prod logs\n    target: pod\n"))
-	require.ErrorContains(t, err, `place "prod logs"`)
+	require.ErrorContains(t, err, "places[name=prod logs]")
 	require.ErrorContains(t, err, "type is required")
 }
 
@@ -161,6 +162,16 @@ func TestPlaceErrorsAreNamed(t *testing.T) {
 func TestLoadRejectsTheOldShape(t *testing.T) {
 	_, err := loadFrom(write(t, "sources:\n  - name: x\n    collector: docker\n    container: a\n"))
 	require.ErrorContains(t, err, "sources")
+}
+
+// TestLoadAcceptsTheSchemaKey: a file that names the schema describing it is
+// how an editor finds one, so the key is read as an annotation rather than as a
+// place that is not a place.
+func TestLoadAcceptsTheSchemaKey(t *testing.T) {
+	cfg, err := loadFrom(write(t,
+		"$schema: "+SchemaURL+"\nplaces:\n  - name: x\n    type: docker\n    container: a\n"))
+	require.NoError(t, err)
+	require.Len(t, cfg.Places, 1)
 }
 
 func TestLoadMissingFileIsEmpty(t *testing.T) {
@@ -181,15 +192,15 @@ func TestLoadRejectsBadPlaces(t *testing.T) {
 		content string
 		errText string
 	}{
-		{"no name", "places:\n  - type: docker\n    container: app\n", "name is required"},
+		{"no name", "places:\n  - type: docker\n    container: app\n", `places[0] must set "name"`},
 		{"no type", "places:\n  - name: x\n", "type is required"},
-		{"unknown type", "places:\n  - name: x\n    type: nope\n", "unknown type"},
+		{"unknown type", "places:\n  - name: x\n    type: nope\n", "must be one of"},
 		{"unknown via", "places:\n  - name: x\n    via: telnet://a\n    type: docker\n    container: a\n", "unknown via"},
 		{"ssh without host", "places:\n  - name: x\n    via: ssh://\n    type: journalctl\n", "needs a host"},
 		{"http reached over ssh", "places:\n  - name: x\n    type: loki\n    url: https://l\n    via: ssh://bastion\n", "reached over HTTP"},
 		{"a command with a token", "places:\n  - name: x\n    type: docker\n    container: a\n    token:\n      env: T\n", "means nothing to it"},
 		{"an http place with no url", "places:\n  - name: x\n    type: victorialogs\n", "requires a url"},
-		{"declared twice", "places:\n  - name: x\n    type: docker\n    container: a\n  - name: x\n    type: docker\n    container: b\n", "declared twice"},
+		{"declared twice", "places:\n  - name: x\n    type: docker\n    container: a\n  - name: x\n    type: docker\n    container: b\n", "places[1] repeats places[0]"},
 		{"malformed yaml", "places: [oops\n", "parse"},
 		{
 			"unreadable range",

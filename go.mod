@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/go-faster/errors v0.8.0
+	github.com/go-faster/figureout v0.6.1
 	github.com/go-faster/jx v1.2.0
 	github.com/go-faster/pl v0.5.0
 	github.com/go-faster/sdk v0.39.0

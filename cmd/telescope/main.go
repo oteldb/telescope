@@ -48,8 +48,30 @@ func root() *cobra.Command {
 	// cliversion writes the word "version" itself, and cobra's default template
 	// writes it too.
 	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
-	cmd.AddCommand(traceCmd())
+	cmd.AddCommand(traceCmd(), schemaCmd())
 	return cmd
+}
+
+func schemaCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "schema",
+		Short: "Print the JSON Schema of the config file",
+		Long: "Writes the JSON Schema every key of the config file is declared by, which\n" +
+			"is what an editor completes and checks one against. It is published at\n" +
+			config.SchemaURL + ", so a file can point at it\n" +
+			"with a $schema key rather than keeping a copy.",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: false,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			data, err := config.Schema()
+			if err != nil {
+				return err
+			}
+			_, err = cmd.OutOrStdout().Write(data)
+			return err
+		},
+	}
 }
 
 func traceCmd() *cobra.Command {

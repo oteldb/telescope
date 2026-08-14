@@ -209,36 +209,28 @@ groups:
 A place does not have to be complete: one that pins a host, a kubeconfig and
 `sudo` but no pod fills in what it knew and stops at the step still missing.
 
-| field | default | |
-| --- | --- | --- |
-| `name` | required | shown in the picker, and how a group names it |
-| `type` | required | `journalctl`, `kubectl`, `docker`, `command`, `victorialogs`, `loki` |
-| `via` | `local` | `local`, or `ssh://[user@]host` |
-| `unit` | | systemd unit, `user/` prefix accepted |
-| `user_unit` | `false` | read the user journal |
-| `namespace` | | Kubernetes namespace |
-| `target` | | pod name or label selector, `ns/pod:container` accepted; the LogsQL query for VictoriaLogs |
-| `container` | | container, for kubectl or docker |
-| `kubeconfig` | | passed as `--kubeconfig` |
-| `context` | | passed as `--context` |
-| `args` | | command line, for `type: command` |
-| `sudo` | `false` | run the collector under `sudo -n` |
-| `url` | required for a database | the base the API paths hang off |
-| `datasource` | | Grafana datasource uid, appended to `url` as a proxy path |
-| `token` | | where the bearer token is read from |
-| `tenant` | | `AccountID:ProjectID` for VictoriaLogs, the org id for Loki |
-| `headers` | | anything else the database or its proxy needs |
-| `proxy` | | reach this database through `http://…` or `socks5h://…` |
-| `insecure` | `false` | skip TLS verification |
-| `range` | | the window read: `1h`, `today`, `6h..1h` |
-| `tail` | `1000` | lines of history to open with, `0` for all; over a database it is also the size of a page |
-| `follow` | `true` | keep streaming |
-| `query` | | pre-fills the filter, and is what selects a Loki stream |
-
 A group takes `name`, `places`, and the same `range`, `tail`, `follow` and
 `query`. Fields a place cannot use — a `command` with a `token`, a database
 reached `via: ssh://…` — are reported as mistakes in the file rather than
 ignored, as is a key that is not a key at all.
+
+### What a key accepts
+
+Every key is declared once, in the code that reads it, and telescope publishes
+that declaration as a [JSON Schema][schema]. Point the file at it and an editor
+completes the keys, says what each one means and marks what it does not accept:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/oteldb/telescope/main/config.schema.json
+places:
+  - name: navidrome
+```
+
+The `$schema` key works too, for an editor that reads it, and telescope accepts
+it as the annotation it is. `telescope schema` writes the same document to
+standard output, for a schema store or an editor that wants a local copy.
+
+[schema]: https://github.com/oteldb/telescope/blob/main/config.schema.json
 
 ### Traces
 
@@ -321,12 +313,8 @@ every other request through it. Unset, the environment applies (`HTTPS_PROXY`,
 bastion is reached — `ssh -D 1080 bastion` and `proxy: socks5h://127.0.0.1:1080`.
 
 **The token is named, never written**, so the config file stays shareable:
-
-| `token:` | |
-| --- | --- |
-| `env: NAME` | an environment variable |
-| `file: PATH` | a file, `~` accepted |
-| `exec: …` | a command, whose first line of output is the token |
+`env:` an environment variable, `file:` a file with `~` accepted, or `exec:` a
+command whose first line of output is the token.
 
 `exec` takes a command line, run through `sh -c` so a pipe works, or a list of
 arguments, which needs no quoting:

@@ -101,7 +101,7 @@ places:
 groups:
   - name: everything
     places: [api]
-`, "a group reads two or more places"},
+`, "length must be at least 2"},
 		{"no name", `
 places:
   - name: api
@@ -109,7 +109,7 @@ places:
     container: api
 groups:
   - places: [api]
-`, "name is required"},
+`, `groups[0] must set "name"`},
 		{"declared twice", `
 places:
   - name: api
@@ -123,7 +123,7 @@ groups:
     places: [api, worker]
   - name: both
     places: [worker, api]
-`, `group "both" is declared twice`},
+`, "groups[1] repeats groups[0]"},
 		{"named after a place", `
 places:
   - name: api

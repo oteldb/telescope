@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/go-faster/errors"
-	"github.com/go-faster/yaml"
+	"github.com/go-faster/figureout"
 
 	"github.com/oteldb/telescope/internal/source"
 )
@@ -20,10 +20,10 @@ import (
 // knew, and would have to guess again the first time a proxy answered 404 for a
 // reason of its own.
 type TraceStore struct {
-	URL string `yaml:"url,omitempty"`
+	URL string
 	// Type is what answers there: "tempo" or "jaeger". Unset is Tempo, which is
 	// what `traces:` meant before it could say.
-	Type string `yaml:"type,omitempty"`
+	Type string
 }
 
 // traceTypeNames are the APIs a trace store may declare.
@@ -32,7 +32,8 @@ var traceTypeNames = []string{
 	string(source.CollectorJaeger),
 }
 
-// UnmarshalYAML accepts the url on its own as well as the mapping, since a
+// traceStoreDescriptor describes the mapping form. The url on its own is the
+// other one, and [figureout.ScalarOr] at the registration widens it, since a
 // Tempo — which is what the key used to mean and still defaults to — has
 // nothing else to say:
 //
@@ -40,23 +41,19 @@ var traceTypeNames = []string{
 //	traces:
 //	  url: https://victoria.example.com/select/jaeger
 //	  type: jaeger
-func (t *TraceStore) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind == yaml.ScalarNode {
-		return node.Decode(&t.URL)
-	}
-	type plain TraceStore
-	return node.Decode((*plain)(t))
-}
-
-// MarshalYAML writes the short form back when there is nothing but a url, so a
-// config telescope rewrites keeps the shape it was written in.
-func (t TraceStore) MarshalYAML() (any, error) {
-	if t.Type == "" {
-		return t.URL, nil
-	}
-	type plain TraceStore
-	return plain(t), nil
-}
+var traceStoreDescriptor = figureout.MustDerive(
+	func(t *TraceStore, s *figureout.Schema[TraceStore]) {
+		// Not Explicit: a nested object is materialized whether or not the file
+		// declares it, so requiring the url here would make every place that
+		// reads no traces a broken one. A store with no url reads no traces,
+		// which is what [TraceStore.IsZero] answers.
+		figureout.Value(s, &t.URL, "url").
+			Doc("The base the trace API's paths hang off.")
+		figureout.Value(s, &t.Type, "type").
+			Enum(traceTypeNames...).ApplyDefault(string(source.CollectorTempo)).
+			Doc("Which API answers there.")
+	},
+)
 
 // IsZero reports whether the place reads no traces.
 func (t TraceStore) IsZero() bool { return strings.TrimSpace(t.URL) == "" }

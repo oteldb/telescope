@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/go-faster/errors"
+	"github.com/go-faster/figureout"
 
 	"github.com/oteldb/telescope/internal/source"
 )
@@ -15,15 +16,15 @@ import (
 // and a view has one timeline. Every place it names has to open as it stands:
 // a group cannot stop to ask, and the prompt reads one thing at a time.
 type Group struct {
-	Name   string   `yaml:"name"`
-	Places []string `yaml:"places"`
+	Name   string
+	Places []string
 
-	Range  string `yaml:"range,omitempty"`
-	Tail   *int   `yaml:"tail,omitempty"`
-	Follow *bool  `yaml:"follow,omitempty"`
+	Range  string
+	Tail   figureout.OptionalOf[int]
+	Follow figureout.OptionalOf[bool]
 	// Query pre-fills the filter, which is the one query the whole group is
 	// read through.
-	Query string `yaml:"query,omitempty"`
+	Query string
 
 	// members are the places Places names, filled in by [Load], and resolveErr
 	// is why one of their tokens could not be read.
@@ -34,6 +35,27 @@ type Group struct {
 	// deployment usually has the same name on every cluster.
 	asks source.Collector
 }
+
+// groupDescriptor describes a [Group] as it is written in the file.
+var groupDescriptor = figureout.MustDerive(func(g *Group, s *figureout.Schema[Group]) {
+	figureout.Explicit(s, &g.Name, "name").NonEmpty().
+		Doc("Shown in the picker.")
+	figureout.Explicit(s, &g.Places, "places").MinItems(2).
+		Doc("The places read as one timeline, by name.")
+
+	figureout.Value(s, &g.Range, "range").
+		Doc("The window read: 1h, today, 6h..1h.")
+	figureout.Optional(s, &g.Tail, "tail").AtLeast(0).DocumentDefault(defaultTail).
+		Doc("Lines of history to open with, 0 for all.")
+	figureout.Optional(s, &g.Follow, "follow").DocumentDefault(defaultFollow).
+		Doc("Keep streaming.")
+	figureout.Value(s, &g.Query, "query").
+		Doc("Pre-fills the filter, which is the one query the whole group is read through.")
+
+	figureout.IgnoreRecursive(s, &g.members, figureout.Reason("resolved at load"))
+	figureout.Ignore(s, &g.resolveErr, figureout.Reason("resolved at load"))
+	figureout.Ignore(s, &g.asks, figureout.Reason("resolved at load"))
+})
 
 // Asks is what the group must be given before it can open, and whether it must
 // be given anything at all. It is a collector rather than a value because what
@@ -47,14 +69,8 @@ func (g Group) Stream() (cfg source.Config, ready bool, err error) {
 		Name:      g.Name,
 		Collector: source.CollectorMerge,
 		Merge:     g.members,
-		Tail:      defaultTail,
-		Follow:    defaultFollow,
-	}
-	if g.Tail != nil {
-		cfg.Tail = *g.Tail
-	}
-	if g.Follow != nil {
-		cfg.Follow = *g.Follow
+		Tail:      g.Tail.OrElse(defaultTail),
+		Follow:    g.Follow.OrElse(defaultFollow),
 	}
 	if cfg.Range, err = source.ParseRange(g.Range, time.Now()); err != nil {
 		return source.Config{}, false, err
