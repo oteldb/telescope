@@ -75,6 +75,10 @@ func send(t *testing.T, m tea.Model, msgs ...tea.Msg) tea.Model {
 			m, _ = m.Update(out)
 		case noteMsg:
 			m, _ = m.Update(out)
+		case openSearchMsg:
+			// Applied, but the listing it returns is not run: a test says what
+			// the store holds itself.
+			m, _ = m.Update(out)
 		}
 	}
 	return m
@@ -88,9 +92,11 @@ func navigates(msg tea.Msg) bool {
 	if !ok {
 		return false
 	}
-	// "T" opens a trace, which is navigation like the other two; it is named by
-	// its rune because it is the only letter that moves between screens.
-	return km.Type == tea.KeyEnter || km.Type == tea.KeyEsc || km.String() == "T"
+	// "T" opens a trace and alt+t a search of the store the traces come from;
+	// both are navigation like the other two, and both are named by their rune
+	// because they are the letters that move between screens.
+	return km.Type == tea.KeyEnter || km.Type == tea.KeyEsc ||
+		km.String() == "T" || km.String() == "alt+t"
 }
 
 func k(s string) tea.Msg {

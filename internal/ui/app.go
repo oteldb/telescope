@@ -29,6 +29,7 @@ const (
 	stateEntry
 	stateHelp
 	stateTrace
+	stateSearch
 )
 
 // Model is the root bubbletea model.
@@ -39,15 +40,19 @@ type Model struct {
 	// list or from the prompt and either is where it should return to.
 	back state
 
-	start startModel
-	logs  logModel
-	entry entryModel
-	help  helpModel
-	trace traceModel
+	start  startModel
+	logs   logModel
+	entry  entryModel
+	help   helpModel
+	trace  traceModel
+	search searchModel
 	// traceBack is where leaving the trace returns to. A trace telescope was
 	// started on has nothing under it, and a start screen that cannot reopen it
 	// would be a trapdoor rather than a way back — so that one quits.
 	traceBack state
+	// searchBack is the same for the search screen, which is reached from the
+	// start screen and from the command line both.
+	searchBack state
 	// traces is what has already been fetched, and asked is the last fetch, kept
 	// so a reload knows what to ask again. A trace read from a file leaves asked
 	// empty: there is nowhere to ask.
@@ -67,6 +72,16 @@ func New() Model {
 // to: the start screen picks a log source, and a trace did not come from one.
 func NewTrace(t *trace.Tree) Model {
 	return Model{state: stateTrace, traceBack: stateTrace, start: newStart(), trace: newTrace(t)}
+}
+
+// NewSearch returns the root model opened on one store's trace search, which is
+// what naming a place and no trace id does. As with a trace read from a file
+// there is no stream behind it, so leaving is quitting.
+func NewSearch(at source.Endpoint) Model {
+	return Model{
+		state: stateSearch, searchBack: stateSearch,
+		start: newStart(), search: newSearch(at),
+	}
 }
 
 // Init implements [tea.Model].
@@ -91,6 +106,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.entry.resize(msg.Width, msg.Height)
 		m.help.resize(msg.Width, msg.Height)
 		m.trace.resize(msg.Width, msg.Height)
+		m.search.resize(msg.Width, msg.Height)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -151,10 +167,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case filterMsg:
-		// A trace telescope was started on has no list under it to narrow, and
-		// dropping into an empty one would be worse than saying so.
-		if m.state == stateTrace && m.traceBack == stateTrace {
-			m.trace.note = "no logs here: this trace was opened on its own"
+		// A trace that was not opened out of a log list has none under it to
+		// narrow, and dropping into an empty one would be worse than saying so.
+		// What decides is whether a stream was ever opened, not which screen
+		// asked: a trace read from a file and one picked out of a search are the
+		// same want of a list.
+		if m.logs.cfg.Collector == "" {
+			m.say("no logs here: this trace was not opened out of a list")
 			return m, nil
 		}
 		// Narrowing is done to the list, so the list is where it lands: reading
@@ -183,7 +202,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.say(msg.text)
 		return m, nil
 
+	case openSearchMsg:
+		m.searchBack = m.state
+		m.search = newSearch(msg.at)
+		m.search.resize(m.w, m.h)
+		m.state = stateSearch
+		// What the store holds is asked for now rather than on the first
+		// keystroke: the service field is where somebody starts, and a list that
+		// arrives while they are still reading the form has cost nothing.
+		return m, listTraceNames(msg.at, fieldService, "")
+
+	case searchLoadedMsg, searchErrMsg, searchNamesMsg:
+		// Routed by hand rather than by which screen is up: a search answers
+		// after somebody has already opened one of its results, and an answer
+		// dropped for that would leave the list behind them empty.
+		var cmd tea.Cmd
+		m.search, cmd = m.search.Update(msg)
+		return m, cmd
+
 	case openTraceMsg:
+		if msg.at != nil {
+			// The store was named by whoever asked, which is what a search does:
+			// its results are that store's ids and there is no log line behind
+			// them to resolve one from.
+			m.traceBack = m.state
+			m.asked = traceAsk{endpoint: *msg.at, id: msg.id}
+			m.state = stateTrace
+			if msg.tree != nil {
+				// A Jaeger search answers with the traces themselves, so the
+				// list on screen was built out of the very bytes the gantt
+				// needs. Asking for them again would be the same document.
+				m.traces.put(msg.at.URL, msg.id, msg.tree)
+			}
+			if t, ok := m.traces.get(msg.at.URL, msg.id); ok {
+				m.trace = newTrace(t)
+				m.trace.resize(m.w, m.h)
+				return m, nil
+			}
+			m.trace = loadingTrace(msg.id)
+			m.trace.resize(m.w, m.h)
+			return m, fetchTrace(*msg.at, msg.id)
+		}
 		endpoint, ok := m.logs.cfg.TraceEndpoint(msg.from)
 		if !ok {
 			// Said where the reader is, rather than by opening a screen with
@@ -252,6 +311,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.quit()
 			}
 			m.state = m.traceBack
+		case stateSearch:
+			if m.searchBack == stateSearch {
+				return m, m.quit()
+			}
+			m.state = m.searchBack
 		case stateLogs:
 			m.stopStream()
 			m.state = stateStart
@@ -274,6 +338,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.help, cmd = m.help.Update(msg)
 	case stateTrace:
 		m.trace, cmd = m.trace.Update(msg)
+	case stateSearch:
+		m.search, cmd = m.search.Update(msg)
 	}
 	return m, cmd
 }
@@ -289,6 +355,8 @@ func (m Model) View() string {
 		return m.help.View()
 	case stateTrace:
 		return m.trace.View()
+	case stateSearch:
+		return m.search.View()
 	default:
 		return m.start.View()
 	}
@@ -320,6 +388,8 @@ func (m *Model) say(text string) {
 		m.entry.note = text
 	case stateTrace:
 		m.trace.note = text
+	case stateSearch:
+		m.search.note = text
 	default:
 		m.logs.note = text
 	}
@@ -346,7 +416,35 @@ type (
 	openEntryMsg struct{ entry *logs.Entry }
 	// openTraceMsg asks for the trace a line belongs to. from is the merge tag,
 	// which is what says whose trace store to ask.
-	openTraceMsg struct{ id, from string }
+	openTraceMsg struct {
+		id, from string
+		// at names the store instead, for a reader who is not standing in a log
+		// list: a search result is an id belonging to the store that answered
+		// and there is no line behind it to resolve one from.
+		at *source.Endpoint
+		// tree is the trace itself, when whoever asked already holds it. A
+		// Jaeger search answers with the traces rather than with a summary of
+		// them, so the row that was picked was drawn from the whole thing.
+		tree *trace.Tree
+	}
+	// openSearchMsg opens the trace search over one store.
+	openSearchMsg struct{ at source.Endpoint }
+	// searchLoadedMsg and searchErrMsg answer it. trees is what the store sent
+	// when it sent the traces themselves, keyed by id; it is empty for a store
+	// that answered with a summary.
+	searchLoadedMsg struct {
+		results []trace.Result
+		trees   map[string]*trace.Tree
+	}
+	searchErrMsg struct{ err error }
+	// searchNamesMsg is what the store says it holds, for one field of the
+	// form. service is which service the operations belong to, when the store
+	// indexes them that way.
+	searchNamesMsg struct {
+		field   searchField
+		service string
+		names   []string
+	}
 	// traceLoadedMsg and traceErrMsg answer it. A trace is a request over the
 	// network, so the screen is opened first and filled in when it lands.
 	traceLoadedMsg struct{ tree *trace.Tree }
@@ -383,16 +481,85 @@ func fetchTrace(endpoint source.Endpoint, id string) tea.Cmd {
 		if err != nil {
 			return traceErrMsg{err: err}
 		}
-		found, err := trace.DecodeOTLP(data)
+		// Read as whichever format came back rather than as the one the store
+		// declared: the declaration says what to ask, and a proxy or a gateway
+		// in front of it is free to answer in the other encoding.
+		tree, err := trace.Decode(data)
 		if err != nil {
 			return traceErrMsg{err: err}
 		}
-		for _, t := range found {
-			if t.Len() > 0 {
-				return traceLoadedMsg{tree: t}
-			}
+		if tree.Len() == 0 {
+			return traceErrMsg{err: errors.Errorf("trace %s has no spans", id)}
 		}
-		return traceErrMsg{err: errors.Errorf("trace %s has no spans", id)}
+		return traceLoadedMsg{tree: tree}
+	}
+}
+
+// searchTraces asks a store which traces match, off the update loop.
+//
+// Which decoder reads the answer follows from what the store said it is, since
+// the two APIs answer with different documents: Tempo with a summary of each
+// trace, Jaeger with the traces themselves. That is why this is not
+// [trace.Decode]'s "read whatever came out" — both answers are valid JSON to
+// the other's decoder and one of them would quietly come out empty.
+func searchTraces(at source.Endpoint, q source.TraceQuery) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
+		defer cancel()
+
+		data, err := at.SearchTraces(ctx, q)
+		if err != nil {
+			return searchErrMsg{err: err}
+		}
+		if at.Collector == source.CollectorJaeger {
+			found, err := trace.DecodeJaegerSearch(data)
+			if err != nil {
+				return searchErrMsg{err: err}
+			}
+			msg := searchLoadedMsg{trees: make(map[string]*trace.Tree, len(found))}
+			for _, t := range found {
+				r := trace.Summary(t)
+				msg.results = append(msg.results, r)
+				msg.trees[r.TraceID] = t
+			}
+			trace.SortResults(msg.results)
+			return msg
+		}
+		results, err := trace.DecodeSearch(data)
+		if err != nil {
+			return searchErrMsg{err: err}
+		}
+		trace.SortResults(results)
+		return searchLoadedMsg{results: results}
+	}
+}
+
+// listTraceNames asks a store what it holds, for one field of the search form.
+//
+// A store that will not say costs the suggestions and never the search, so a
+// failure here answers with nothing rather than with an error: the field is
+// typed into either way, and a role that may search but not list is ordinary.
+func listTraceNames(at source.Endpoint, f searchField, service string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		var (
+			names []string
+			err   error
+		)
+		if f == fieldService {
+			names, err = at.TraceServices(ctx)
+		} else {
+			names, err = at.TraceOperations(ctx, service)
+		}
+		if err != nil {
+			names = nil
+		}
+		// Answered even when empty, so the form remembers it asked and does not
+		// ask again on every keystroke.
+		if names == nil {
+			names = []string{}
+		}
+		return searchNamesMsg{field: f, service: service, names: names}
 	}
 }
 

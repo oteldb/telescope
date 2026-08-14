@@ -328,6 +328,27 @@ func (m startModel) pick(i int) (startModel, tea.Cmd) {
 	return m, nil
 }
 
+// searchTraces opens the trace search over the highlighted place's store.
+//
+// A place and not a group: a search asks one store and the ids that come back
+// mean nothing to another, so a group of four clusters is four searches and not
+// one. The same reason `T` carries a merge tag out of the log list.
+func (m startModel) searchTraces(i int) (startModel, tea.Cmd) {
+	place, ok := m.saved.place(i)
+	if !ok {
+		return m.refuse(m.saved.name(i) + " is a group: search the traces of one of its places")
+	}
+	at, ok, err := place.TraceEndpoint()
+	switch {
+	case err != nil:
+		return m.refuse(err.Error())
+	case !ok:
+		return m.refuse(place.Name + " reads no traces: give it a traces: url")
+	}
+	m.err = nil
+	return m, func() tea.Msg { return openSearchMsg{at: at} }
+}
+
 // refuse reports why something could not be picked, leaving the list as it was.
 func (m startModel) refuse(msg string) (startModel, tea.Cmd) {
 	m.err = errors.New(msg)
@@ -1205,6 +1226,12 @@ func (m startModel) Update(msg tea.Msg) (startModel, tea.Cmd) {
 			if m.step == stepSaved && len(m.filtered) > 0 {
 				return m.pick(m.savedIdx[max(m.sel, 0)])
 			}
+		case "alt+t":
+			// t for trace, as `T` is everywhere else. Plain t is a letter here:
+			// the saved list is filtered by typing into it.
+			if m.step == stepSaved && len(m.filtered) > 0 {
+				return m.searchTraces(m.savedIdx[max(m.sel, 0)])
+			}
 		case "ctrl+r":
 			return m, m.refresh()
 		case "ctrl+s":
@@ -1593,13 +1620,18 @@ func (m startModel) help() string {
 		if len(m.picked) > 1 {
 			open = "open " + strconv.Itoa(len(m.picked)) + " merged"
 		}
-		return strings.Join([]string{
+		parts := []string{
 			key("↑↓", "move"),
 			key("enter", open),
 			key("ctrl+a", "add to merge"),
-			key("tab", "new source"),
-			key("esc", "quit"),
-		}, styleHint.Render(" · "))
+		}
+		// Offered only where something can answer it: a config with no trace
+		// store has no use for the key and no way to find out what it does.
+		if m.saved.readsTraces() {
+			parts = append(parts, key("alt+t", "search traces"))
+		}
+		parts = append(parts, key("tab", "new source"), key("esc", "quit"))
+		return strings.Join(parts, styleHint.Render(" · "))
 	}
 	if (m.step == stepQuery || m.filtersInPlace()) && m.detail == detailNone {
 		parts := []string{
