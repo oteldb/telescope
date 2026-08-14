@@ -21,6 +21,10 @@ const (
 	KindReadFailed
 	// KindExited is a source that stopped with an error.
 	KindExited
+	// KindRestarted is a container the source is reading from coming back: not
+	// a failure of the stream, and the one note here that is about the thing
+	// being read rather than about the reading of it.
+	KindRestarted
 )
 
 // IsNote reports whether the line is telescope talking rather than the source.

@@ -38,6 +38,8 @@ func noteVerb(k source.Kind) string {
 		return "read failed"
 	case source.KindExited:
 		return "stopped"
+	case source.KindRestarted:
+		return "restarted"
 	default:
 		return "note"
 	}
