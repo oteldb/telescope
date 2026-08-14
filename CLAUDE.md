@@ -30,7 +30,7 @@ about a workspace, re-run it with `GOWORK=off`.
 | `internal/config` | `config.yaml` and `history.yaml`. A `Place` is where logs are read from and how it is reached (`via:` for a command, `proxy:` for a database); a `Group` is several places read as one. `Load` resolves both; `New` does the same for declarations that did not come from a file. |
 | `internal/query` | the filter language: `Parse` builds an `Expr`, `Match` evaluates it against one `Record`. It sits below `source` so a query can be compiled into one a database answers itself. |
 | `internal/complete` | the suggestions the start screen offers, fetched by shelling out. |
-| `internal/trace` | a trace as it is read, and nothing that reads it: `span.go` is one operation, `tree.go` arranges them by their parent links, `skew.go` stops a child being drawn before the call that made it, `window.go` is the interval a view covers and the axis over it. `otlp.go` decodes what Tempo answers with, in either encoding, and `jaeger.go` the Jaeger query API's response. Nothing here fetches — `source/tempo.go` does — and nothing here draws: `ui/gantt.go` does, `ui/traceview.go` is the model around it — the gantt, one span, and the service filter are modes of it — with `ui/spandoc.go` drawing a span as the rows the entry view already reads, `ui/servicepick.go` the filter and `ui/spanpalette.go` the colors. |
+| `internal/trace` | a trace as it is read, and nothing that reads it: `span.go` is one operation, `tree.go` arranges them by their parent links, `skew.go` stops a child being drawn before the call that made it, `window.go` is the interval a view covers and the axis over it. `otlp.go` decodes what Tempo answers with, in either encoding, and `jaeger.go` the Jaeger query API's response. Nothing here fetches — `source/tempo.go` does — and nothing here draws: `ui/gantt.go` does, `ui/traceview.go` is the model around it — the gantt, one span, and the service filter are modes of it — with `ui/spandoc.go` drawing a span as the rows the entry view already reads, `ui/servicepick.go` the filter, `ui/spanpalette.go` the colors and `ui/tracecache.go` what was already fetched. |
 
 The dependency order is `query` → `source` → `logs` → `ui`, and `config` feeds
 `ui`. It does not run the other way: when `source` needed to date a line by
@@ -98,6 +98,16 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   same path and land in the same place. Neither invents a second way to do
   what the other does. A trace opened on its own refuses the second: there is
   no list under it, and dropping into an empty one says less than saying so.
+- **A trace is held by where it was read from, not by its id.** The jump goes
+  both ways and usually more than once, so `ui.traceCache` keeps what was
+  fetched and `openTraceMsg` draws from it rather than asking again. The key is
+  the endpoint's url and the id together: the same id names one request to one
+  system and nothing at all to another, and a merge is several systems. It
+  follows that the cache has to be droppable — a trace still being served grows
+  after it was first read, and only the reader knows whether it has, which is
+  what `r` and `reloadTraceMsg` are for. What is remembered is the tree and
+  never the view over it: reopening a trace to find it folded the way it was
+  left says the reading was kept when only the bytes were.
 - **A filter over services may not rewrite the tree.** A span whose service is
   filtered out is still drawn when something under it is not: removing it would
   leave its children hanging under a span that never called them, and the tree

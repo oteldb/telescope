@@ -289,7 +289,9 @@ request; from a span it narrows by whichever row the cursor is on, so a
 `service.name` or an `http.route` selects the lines that share it. Narrowing
 lands on the list, and the term is anded onto whatever filter was already
 there — so a jump out and back leaves you reading the request you went looking
-for.
+for. Walking that loop asks the trace store once: a trace already read opens
+again without a request. `r` asks for it afresh, which is what to press for a
+request still being served.
 
 | key | |
 | --- | --- |
@@ -304,6 +306,7 @@ for.
 | `z` | zoom to the selected span |
 | `0` | back to the whole trace |
 | `y` | copy the selected span's id; `Y` the trace's |
+| `r` | read the trace again, for one still being written |
 | `esc` | back |
 | `q`, `ctrl+c` | quit |
 

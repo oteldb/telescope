@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,8 +21,15 @@ import (
 
 const jumpTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
 
+// tempo is a trace store that counts what it was asked, which is the whole of
+// what a cache can be checked against: the screen looks the same either way.
+type tempo struct {
+	*httptest.Server
+	asked atomic.Int64
+}
+
 // tempoServer answers a trace fetch the way Tempo's v2 path does.
-func tempoServer(t *testing.T) *httptest.Server {
+func tempoServer(t *testing.T) *tempo {
 	t.Helper()
 	id := func(s string) []byte {
 		raw, err := stdhex.DecodeString(s)
@@ -61,16 +69,18 @@ func tempoServer(t *testing.T) *httptest.Server {
 	}})
 	require.NoError(t, err)
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	store := &tempo{}
+	store.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, jumpTraceID) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+		store.asked.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"trace":` + string(payload) + `}`))
 	}))
-	t.Cleanup(srv.Close)
-	return srv
+	t.Cleanup(store.Close)
+	return store
 }
 
 // tracingLogs is a log view whose place reads traces from url.

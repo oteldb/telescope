@@ -170,6 +170,12 @@ func (m traceModel) updateGantt(km tea.KeyMsg) (traceModel, tea.Cmd) {
 			Key: "trace_id", Op: query.OpEq, Value: m.g.tree.ID,
 		})
 
+	case "r":
+		// What is on screen is what the trace store said when it was asked, and a
+		// request still being served will have grown since. The reader is the only
+		// one who knows whether it has.
+		return m, func() tea.Msg { return reloadTraceMsg{} }
+
 	case "y":
 		if n := m.g.at(); n != nil {
 			return m, copyCmd("span_id", n.SpanID)
@@ -361,7 +367,7 @@ func (m traceModel) footer() string {
 }
 
 const (
-	traceKeys   = "enter span · space fold · C/E all · s services · f logs · +/- zoom · h/l pan · z focus · esc back"
+	traceKeys   = "enter span · space fold · C/E all · s services · f logs · +/- zoom · h/l pan · z focus · r reload · esc back"
 	spanKeys    = "↑↓ select · f logs · y copy · o open · esc back"
 	serviceKeys = "space toggle · a all · esc back"
 )

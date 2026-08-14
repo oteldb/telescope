@@ -48,6 +48,11 @@ type Model struct {
 	// started on has nothing under it, and a start screen that cannot reopen it
 	// would be a trapdoor rather than a way back — so that one quits.
 	traceBack state
+	// traces is what has already been fetched, and asked is the last fetch, kept
+	// so a reload knows what to ask again. A trace read from a file leaves asked
+	// empty: there is nowhere to ask.
+	traces traceCache
+	asked  traceAsk
 
 	stream *source.Stream
 }
@@ -199,15 +204,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.traceBack = m.state
+		m.asked = traceAsk{endpoint: endpoint, id: msg.id}
+		m.state = stateTrace
+
+		// The walk between a request and the lines it explains goes both ways and
+		// usually more than once, and the trace at the end of it is the one that
+		// was just read. Asking for it again would be the same bytes, decoded
+		// again, off a screen that already drew them.
+		if t, ok := m.traces.get(endpoint.URL, msg.id); ok {
+			m.trace = newTrace(t)
+			m.trace.resize(m.w, m.h)
+			return m, nil
+		}
 		m.trace = loadingTrace(msg.id)
 		m.trace.resize(m.w, m.h)
-		m.state = stateTrace
 		return m, fetchTrace(endpoint, msg.id)
 
 	case traceLoadedMsg:
+		m.traces.put(m.asked.endpoint.URL, msg.tree.ID, msg.tree)
 		m.trace = newTrace(msg.tree)
 		m.trace.resize(m.w, m.h)
 		return m, nil
+
+	case reloadTraceMsg:
+		// A trace still being written gains spans after it was first read, so what
+		// the cache holds has to be droppable. A trace that came from a file has
+		// nowhere to ask.
+		if m.asked.id == "" {
+			m.trace.note = "nothing to reload: this trace did not come from a trace store"
+			return m, nil
+		}
+		m.traces.drop(m.asked.endpoint.URL, m.asked.id)
+		m.trace = loadingTrace(m.asked.id)
+		m.trace.resize(m.w, m.h)
+		return m, fetchTrace(m.asked.endpoint, m.asked.id)
 
 	case traceErrMsg:
 		m.trace.err = msg.err
@@ -312,6 +342,9 @@ type (
 	// network, so the screen is opened first and filled in when it lands.
 	traceLoadedMsg struct{ tree *trace.Tree }
 	traceErrMsg    struct{ err error }
+	// reloadTraceMsg asks for the trace on screen again, past whatever was
+	// remembered of it.
+	reloadTraceMsg struct{}
 	// openHelpMsg opens the filter reference over whatever asked for it.
 	openHelpMsg struct{}
 	backMsg     struct{}
