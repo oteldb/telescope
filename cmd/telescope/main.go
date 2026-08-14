@@ -49,25 +49,46 @@ func root() *cobra.Command {
 }
 
 func traceCmd() *cobra.Command {
-	var from string
+	var from, api string
 	cmd := &cobra.Command{
-		Use:   "trace [flags] <trace-id | file | ->",
-		Short: "Draw one trace as a gantt",
+		Use:   "trace [flags] [trace-id | file | -]",
+		Short: "Draw one trace as a gantt, or search for one",
 		Long: "Reads a trace and draws it as a gantt: the spans in the order they were\n" +
 			"called, how long each took, and when it ran against the request as a whole.\n\n" +
-			"With --from, the argument is a trace id to fetch. Without it, the argument\n" +
-			"is a file holding a response already, or - to read one on standard input.\n" +
-			"Tempo's OTLP and Jaeger's query API are both understood, in either encoding.",
+			"With --from, the argument is a trace id to fetch, and no argument opens a\n" +
+			"search of that store instead. Without --from, the argument is a file holding\n" +
+			"a response already, or - to read one on standard input. Tempo's OTLP and\n" +
+			"Jaeger's query API are both understood, in either encoding.",
 		Example: "  telescope trace --from https://tempo.example.com 4bf92f3577b34da6a3ce929d0e0e4736\n" +
 			"  telescope trace --from prod 4bf92f3577b34da6a3ce929d0e0e4736\n" +
+			"  telescope trace --from prod\n" +
 			"  telescope trace ./saved.json\n" +
 			"  curl -s \"$TEMPO/api/traces/$ID\" | telescope trace -",
-		Args:          cobra.ExactArgs(1),
+		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: false,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// A store and no id is somebody who does not know the id yet, which
+			// is the ordinary case: an id is copied off a log line, and a search
+			// is how one is found when there is no line to copy it from.
+			if len(args) == 0 {
+				if strings.TrimSpace(from) == "" {
+					return errors.New(
+						"name a trace to read, or a place to search with --from")
+				}
+				endpoint, err := traceEndpoint(from)
+				if err != nil {
+					return err
+				}
+				if endpoint, err = withAPI(endpoint, api); err != nil {
+					return err
+				}
+				_, err = tea.NewProgram(ui.NewSearch(endpoint), tea.WithAltScreen()).Run()
+				return err
+			}
+
 			target := args[0]
-			tree, err := readTrace(cmd.Context(), from, target)
+			tree, err := readTrace(cmd.Context(), from, api, target)
 			if err != nil {
 				return err
 			}
@@ -82,15 +103,17 @@ func traceCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&from, "from", "",
-		"a Tempo url, or the name of a place in the config that declares one")
+		"a trace store url, or the name of a place in the config that declares one")
+	cmd.Flags().StringVar(&api, "api", "",
+		"what answers there: tempo or jaeger. A named place declares its own")
 	return cmd
 }
 
 // readTrace reads a trace from wherever it was named: an endpoint, if one was,
 // and a file or standard input otherwise.
-func readTrace(ctx context.Context, from, target string) (*trace.Tree, error) {
+func readTrace(ctx context.Context, from, api, target string) (*trace.Tree, error) {
 	if strings.TrimSpace(from) != "" {
-		return fetchTrace(ctx, from, target)
+		return fetchTrace(ctx, from, api, target)
 	}
 	data, err := readFile(target)
 	if err != nil {
@@ -106,9 +129,12 @@ func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-func fetchTrace(ctx context.Context, from, id string) (*trace.Tree, error) {
+func fetchTrace(ctx context.Context, from, api, id string) (*trace.Tree, error) {
 	endpoint, err := traceEndpoint(from)
 	if err != nil {
+		return nil, err
+	}
+	if endpoint, err = withAPI(endpoint, api); err != nil {
 		return nil, err
 	}
 	if ctx == nil {
@@ -122,6 +148,23 @@ func fetchTrace(ctx context.Context, from, id string) (*trace.Tree, error) {
 		return nil, err
 	}
 	return trace.Decode(data)
+}
+
+// withAPI applies --api, which is how a url says what answers at it. A place
+// named in the config has said already, and saying it twice is more likely to
+// be a mistake than an override.
+func withAPI(e source.Endpoint, api string) (source.Endpoint, error) {
+	api = strings.TrimSpace(api)
+	if api == "" {
+		return e, nil
+	}
+	switch source.Collector(api) {
+	case source.CollectorTempo, source.CollectorJaeger:
+		e.Collector = source.Collector(api)
+		return e, nil
+	default:
+		return e, errors.Errorf("unknown --api %q: want tempo or jaeger", api)
+	}
 }
 
 // traceEndpoint resolves what --from named. A URL is itself; anything else is
