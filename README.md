@@ -1,4 +1,4 @@
-# telescope [![Go Reference](https://img.shields.io/badge/go-pkg-00ADD8)](https://pkg.go.dev/github.com/oteldb/telescope#section-documentation) [![alpha](https://img.shields.io/badge/-alpha-orange)](https://go-faster.org/docs/projects/status#alpha)
+# telescope [![Go Reference](https://img.shields.io/badge/go-pkg-00ADD8)](https://pkg.go.dev/github.com/oteldb/telescope#section-documentation) [![alpha](https://img.shields.io/badge/-alpha-orange)](https://go-faster.org/docs/projects/status#alpha) [![x](https://github.com/oteldb/telescope/actions/workflows/x.yml/badge.svg)](https://github.com/oteldb/telescope/actions/workflows/x.yml)
 
 A terminal log viewer for the [oteldb](https://github.com/oteldb/oteldb) project.
 
@@ -10,9 +10,41 @@ with timestamps, levels, numbers and paths highlighted.
 
 ![telescope](demo/demo.gif)
 
+## Installation
+
+A [release][releases] carries a binary for Linux, macOS and Windows on `amd64`
+and `arm64`. It is one static file and depends on nothing — unpack it and put it
+on `$PATH`:
+
+```console
+$ tar -xzf telescope_0.1.0_linux_amd64.tar.gz telescope
+$ install -m755 telescope ~/.local/bin/
 ```
-go run ./cmd/telescope
+
+The same releases carry `.deb`, `.rpm`, `.apk` and Arch packages, and a
+`checksums.txt` signed with [cosign][cosign]:
+
+```console
+$ cosign verify-blob --bundle checksums.txt.sigstore.json \
+    --certificate-identity-regexp 'https://github.com/oteldb/telescope/.*' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    checksums.txt
 ```
+
+With a Go toolchain, no release is needed:
+
+```console
+$ go install github.com/oteldb/telescope/cmd/telescope@latest
+```
+
+And from a checkout, which is also how it is developed:
+
+```console
+$ go run ./cmd/telescope
+```
+
+[releases]: https://github.com/oteldb/telescope/releases
+[cosign]: https://docs.sigstore.dev/cosign/system_config/installation/
 
 Nothing has to be configured: the start screen lists the units, pods and
 containers it can find. Declaring the places you read daily saves picking them
