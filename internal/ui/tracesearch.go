@@ -357,6 +357,10 @@ func (m searchModel) run() (searchModel, tea.Cmd) {
 		m.err, m.searching = err, false
 		return m, nil
 	}
+	// The window is resolved before it is asked for, so the line under the form
+	// says the interval the results actually came out of rather than the one
+	// that was typed — which, for a blank range, was nothing at all.
+	q.Range = q.Window(time.Now())
 	m.err, m.searching, m.ran, m.asked = nil, true, true, q
 	m.sug = -1
 	return m, searchTraces(m.at, q)

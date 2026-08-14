@@ -194,3 +194,24 @@ func TestATempoQueryIsEscapedIntoTheURL(t *testing.T) {
 	require.Equal(t, `q=%7Bresource.service.name%3D%22api%22%7D`,
 		url.Values{"q": got["q"]}.Encode(), "the braces and quotes reach the server as the query")
 }
+
+// The window is one value said twice: once as the duration a request is
+// bounded by, once as the words the screen shows for it.
+func TestTheDefaultWindowReadsAsWhatItSearches(t *testing.T) {
+	now := time.Unix(1786694400, 0).UTC()
+
+	got := TraceQuery{}.Window(now)
+	require.Equal(t, searchWindowSpec, got.Spec)
+	require.Equal(t, now.Add(-searchWindow), got.Since)
+	require.Equal(t, now, got.Until)
+
+	spelled, err := ParseRange(searchWindowSpec, now)
+	require.NoError(t, err)
+	require.Equal(t, now.Add(-searchWindow), spelled.Since,
+		"the spec shown and the window asked for have drifted apart")
+
+	// A window somebody typed is kept as they wrote it.
+	typed := TraceQuery{Range: Range{Spec: "6h..1h", Since: now.Add(-6 * time.Hour), Until: now.Add(-time.Hour)}}
+	require.Equal(t, "6h..1h", typed.Window(now).Spec)
+	require.Equal(t, now.Add(-time.Hour), typed.Window(now).Until)
+}

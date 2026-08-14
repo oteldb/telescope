@@ -53,11 +53,18 @@ type TraceTag struct {
 	Value string
 }
 
-// searchWindow is how far back a search with no range reaches. Jaeger requires
-// a window and Tempo defaults to one of its own, so telescope picks it instead:
+// searchWindow is how far back a search with no range reaches, and
+// searchWindowSpec is how that is written where it is shown. Jaeger requires a
+// window and Tempo defaults to one of its own, so telescope picks it instead:
 // the same form typed at two backends has to search the same interval or the
 // results cannot be compared.
-const searchWindow = time.Hour
+//
+// They are one value said twice, once for the request and once for the screen,
+// and a test holds them to it.
+const (
+	searchWindow     = time.Hour
+	searchWindowSpec = "1h"
+)
 
 // searchLimit is how many traces a search asks for when nothing says. It is
 // jaeger-ui's default, and about a screenful.
@@ -244,6 +251,21 @@ func (q TraceQuery) tempoParams(now time.Time) url.Values {
 		"end":   {strconv.FormatInt(until.Unix(), 10)},
 		"limit": {strconv.Itoa(q.limit())},
 	}
+}
+
+// Window is the interval the query covers, resolved.
+//
+// It exists so that what a search asks for and what the screen says it asked
+// for cannot drift apart: a form with the range left blank searches the last
+// hour, and saying "all" there would be claiming a history nobody looked
+// through.
+func (q TraceQuery) Window(now time.Time) Range {
+	since, until := q.window(now)
+	spec := q.Range.Spec
+	if spec == "" && q.Range.IsZero() {
+		spec = searchWindowSpec
+	}
+	return Range{Spec: spec, Since: since, Until: until}
 }
 
 // window resolves the interval searched, filling in whichever end was left

@@ -123,6 +123,26 @@ func TestSearchRowsCountWhatTheStoreCounted(t *testing.T) {
 	require.Contains(t, out, "✗2")
 }
 
+// The line under the form says the window the results came out of. A blank
+// range field searches the last hour, so saying "all" there would claim a
+// history nobody looked through.
+func TestASearchSaysTheWindowItLookedIn(t *testing.T) {
+	m := searchScreen(t, tempoStore())
+	m = send(t, m, k("enter"))
+	m, _ = m.Update(searchLoadedMsg{results: []trace.Result{{TraceID: "abc"}}})
+
+	out := screen(t, m)
+	require.Contains(t, out, "in last 1h")
+	require.NotContains(t, out, "in all", "the last hour is not all of history")
+
+	// A window somebody typed is shown the way they wrote it.
+	typed := send(t, searchScreen(t, tempoStore()), k("tab"), k("tab"), k("tab"), k("tab"), k("tab"))
+	typed = typeSearch(t, typed, "6h..1h")
+	typed = send(t, typed, k("enter"))
+	typed, _ = typed.Update(searchLoadedMsg{results: []trace.Result{{TraceID: "abc"}}})
+	require.Contains(t, screen(t, typed), "6h..1h")
+}
+
 // A search that matched nothing is an answer, and the question is the only
 // thing left to doubt, so it is repeated back.
 func TestSearchSaysWhatMatchedNothing(t *testing.T) {
