@@ -22,6 +22,11 @@ jobs:
   commit:
     uses: go-faster/x/.github/workflows/commit.yml@main
   codeql:
+    # Granted here rather than left to the repository default, which is read.
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
     uses: go-faster/x/.github/workflows/codeql.yml@main
     with:
       go: stable
