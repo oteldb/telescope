@@ -1,0 +1,312 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "groups": {
+      "description": "Places read as one stream.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "follow": {
+            "default": true,
+            "description": "Keep streaming.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Shown in the picker.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "places": {
+            "description": "The places read as one timeline, by name.",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "type": "array"
+          },
+          "query": {
+            "description": "Pre-fills the filter, which is the one query the whole group is read through.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "range": {
+            "description": "The window read: 1h, today, 6h..1h.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tail": {
+            "default": 1000,
+            "description": "Lines of history to open with, 0 for all.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "places"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "places": {
+      "description": "Where logs are read from, declared once and referred to by name.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "description": "Command line, for type: command.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "container": {
+            "description": "Container, for kubectl or docker.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "description": "Passed to kubectl as --context.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "datasource": {
+            "description": "Grafana datasource uid, appended to url as a proxy path.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "follow": {
+            "default": true,
+            "description": "Keep streaming.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Anything else the database or its proxy needs.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "insecure": {
+            "description": "Skip TLS verification, for a place behind a private CA.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "kubeconfig": {
+            "description": "Passed to kubectl as --kubeconfig.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Shown in the picker, and how a group names it.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "namespace": {
+            "description": "Kubernetes namespace.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proxy": {
+            "description": "Reach this database through http://… or socks5h://…. Unset takes the proxy from the environment.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "query": {
+            "description": "Pre-fills the filter, and is what selects a Loki stream.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "range": {
+            "description": "The window read: 1h, today, 6h..1h.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sudo": {
+            "description": "Run the collector under sudo -n.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tail": {
+            "default": 1000,
+            "description": "Lines of history to open with, 0 for all; over a database it is also the size of a page.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "target": {
+            "description": "Pod name or label selector, ns/pod:container accepted; the LogsQL query for VictoriaLogs.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tenant": {
+            "description": "AccountID:ProjectID for VictoriaLogs, the org id for Loki.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token": {
+            "additionalProperties": false,
+            "description": "Where the bearer token is read from. It is named rather than written, so the file stays shareable.",
+            "properties": {
+              "env": {
+                "description": "An environment variable holding the token.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "exec": {
+                "description": "A command whose first line of output is the token: a keyring, a password manager, anything with a CLI.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "string",
+                  "array",
+                  "null"
+                ]
+              },
+              "file": {
+                "description": "A file holding the token, \"~\" accepted.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "traces": {
+            "description": "Where this place's traces are read from. A url on its own is a Tempo.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "default": "tempo",
+                    "description": "Which API answers there.",
+                    "enum": [
+                      "tempo",
+                      "jaeger"
+                    ],
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "url": {
+                    "description": "The base the trace API's paths hang off.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              }
+            ]
+          },
+          "type": {
+            "description": "What speaks here.",
+            "enum": [
+              "journalctl",
+              "kubectl",
+              "docker",
+              "command",
+              "victorialogs",
+              "loki"
+            ],
+            "type": "string"
+          },
+          "unit": {
+            "description": "systemd unit, the \"user/\" prefix accepted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "The base the database's API paths hang off. Required for victorialogs and loki.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_unit": {
+            "description": "Read the user journal.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "via": {
+            "default": "local",
+            "description": "How the place is reached: \"local\", or \"ssh://[user@]host\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "title": "telescope",
+  "type": "object"
+}
