@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,14 +11,20 @@ import (
 	"github.com/oteldb/telescope/internal/trace"
 )
 
-// configHome points config.Path at dir, so a test never reads the developer's
-// own config: what a name resolves to is whatever the test wrote. Both variables
-// are set because os.UserConfigDir reads XDG_CONFIG_HOME on unix and %AppData%
-// on Windows.
-func configHome(t *testing.T, dir string) {
+// configHome moves the config somewhere of this test's own, so a test never
+// reads the developer's own: what a name resolves to is whatever it wrote there.
+// It returns the directory the file goes in, since os.UserConfigDir reads a
+// different variable on each platform and answers with a different shape.
+func configHome(t *testing.T) string {
 	t.Helper()
+	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("AppData", dir)
+	t.Setenv("HOME", dir)
+	if runtime.GOOS == "darwin" {
+		dir = filepath.Join(dir, "Library", "Application Support")
+	}
+	return filepath.Join(dir, "telescope")
 }
 
 // A file has no content type, so which format it holds is worked out from what
@@ -44,7 +51,7 @@ func TestBytesThatAreNoTraceAreReported(t *testing.T) {
 // A url is itself; anything else has to be declared, and saying so is more use
 // than a connection refused to whatever the name resolved to.
 func TestFromTakesAUrlOrTheNameOfAPlace(t *testing.T) {
-	configHome(t, t.TempDir())
+	configHome(t)
 
 	e, err := traceEndpoint("https://tempo.example.com/")
 	require.NoError(t, err)
@@ -57,9 +64,9 @@ func TestFromTakesAUrlOrTheNameOfAPlace(t *testing.T) {
 // A place declares where its traces are read from beside where its logs are,
 // since they are rarely the same server even when they are the same system.
 func TestAPlaceLendsItsTraceEndpointItsWayIn(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "telescope"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "telescope", "config.yaml"), []byte(
+	dir := configHome(t)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(
 		"places:\n"+
 			"  - name: prod\n"+
 			"    type: victorialogs\n"+
@@ -68,7 +75,6 @@ func TestAPlaceLendsItsTraceEndpointItsWayIn(t *testing.T) {
 			"    traces: https://tempo.example.com\n"+
 			"  - name: nearby\n"+
 			"    type: journalctl\n"), 0o644))
-	configHome(t, dir)
 
 	e, err := traceEndpoint("prod")
 	require.NoError(t, err)
