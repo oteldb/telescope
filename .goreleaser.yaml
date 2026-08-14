@@ -1,0 +1,87 @@
+version: 2
+
+project_name: telescope
+
+builds:
+  - id: telescope
+    main: ./cmd/telescope
+    binary: telescope
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    # Not the default `-X main.version=…`: cliversion reads the version and the
+    # commit off the build info Go stamps itself, so there is nothing to write in.
+    ldflags: ["-s -w"]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    # A terminal is where this is unpacked, and tar is not one of the things a
+    # Windows terminal has.
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    builds_info:
+      group: root
+      owner: root
+    files:
+      - README.md
+      - LICENSE
+
+nfpms:
+  - id: telescope
+    package_name: telescope
+    ids: [telescope]
+    homepage: https://github.com/oteldb/telescope
+    maintainer: tdakkota <tdakkota@users.noreply.github.com>
+    description: |
+      A terminal log viewer. Opens one stream — a systemd unit, a Kubernetes
+      workload, a container, any command, or a query against VictoriaLogs or
+      Loki — and renders it as a filterable list.
+    license: Apache 2.0
+    formats: [apk, deb, rpm, archlinux]
+    deb:
+      lintian_overrides:
+        - statically-linked-binary
+        - changelog-file-missing-in-native-package
+
+checksum:
+  name_template: "checksums.txt"
+
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - --yes
+    artifacts: checksum
+
+sboms:
+  - id: archive
+    artifacts: archive
+  - id: source
+    artifacts: source
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^chore:"
+      - "^test:"
+      - "^docs:"
+
+release:
+  github:
+    owner: oteldb
+    name: telescope
+  mode: replace
+  draft: false
+  prerelease: auto
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
