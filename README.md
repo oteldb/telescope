@@ -146,6 +146,7 @@ targets you have opened before are offered first.
 | `?` | the filter language, written out |
 | `f` | toggle follow |
 | `l` | cycle minimum level: all, info, warn, error |
+| `c` | toggle clamping repeated lines |
 | `t` | cycle the time column: clock, full date, age |
 | `T` | open the trace this line was written inside |
 | `esc` | back to the picker |
@@ -208,6 +209,12 @@ its date and offset, or how long before the view opened the line was written.
 That last one is measured from when the lines were fetched and not from now, so
 a list being read does not renumber itself. A line a database reported the
 severity of rather than saying it itself gets a level column beside the time.
+
+A line repeated straight after itself is drawn once, with `×n` for how many
+times running it was said, and the top bar counts what that took off the screen.
+A repetition is the same message from the same source with no silence in
+between, so a heartbeat once an hour stays a line an hour. `c` turns it off and
+shows every line as it arrived.
 
 A line written inside a trace is marked `◆` beside its time, colored by the
 trace it belongs to, so the lines of one request stand out among everything

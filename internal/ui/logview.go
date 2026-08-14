@@ -27,12 +27,19 @@ type logModel struct {
 	store *logs.Store
 	view  *logs.View
 
+	// cursor and top count rows and not lines: a run of one line repeated is
+	// one row, and a cursor that could land inside a folded run would be
+	// somewhere the reader cannot see.
 	cursor int
-	// top is the first entry drawn, kept as real state so the cursor can move
+	// top is the first row drawn, kept as real state so the cursor can move
 	// within the window without the window moving under it.
 	top    int
 	hoff   int
 	follow bool
+	// clamped folds a line repeated straight after itself into the row above.
+	// On by default: a log that says the same thing four hundred times is
+	// saying one thing, and the list should read as one.
+	clamped bool
 
 	// tags is how each source of a merge is marked in the gutter, keyed by the
 	// label its lines carry. Empty when there is only one source.
@@ -84,14 +91,15 @@ func newLogs(cfg source.Config, store *logs.Store, query string) logModel {
 	ti.SetValue(query)
 
 	return logModel{
-		cfg:    cfg,
-		tags:   mergeTags(cfg),
-		store:  store,
-		view:   logs.NewView(logs.Filter{Query: query}),
-		follow: true,
-		origin: time.Now(),
-		search: ti,
-		status: "connecting",
+		cfg:     cfg,
+		tags:    mergeTags(cfg),
+		store:   store,
+		view:    logs.NewView(logs.Filter{Query: query}),
+		follow:  true,
+		clamped: true,
+		origin:  time.Now(),
+		search:  ti,
+		status:  "connecting",
 	}
 }
 
@@ -231,6 +239,16 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 	}
 	m.note = ""
 	entries := m.view.Entries(m.store)
+	runs := clampRuns(entries, m.clamped)
+	// at is the line a row draws, which is what every key that works from the
+	// cursor wants: the row is how the list is counted and never what it is
+	// about.
+	at := func(i int) *logs.Entry {
+		if i < 0 || i >= len(runs) {
+			return nil
+		}
+		return entries[runs[i].first]
+	}
 
 	switch km.String() {
 	case "q":
@@ -251,8 +269,7 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 	case "?":
 		return m, openHelp
 	case "enter":
-		if i := m.cursor; i >= 0 && i < len(entries) {
-			e := entries[i]
+		if e := at(m.cursor); e != nil {
 			return m, func() tea.Msg { return openEntryMsg{entry: e} }
 		}
 	case "f":
@@ -260,39 +277,46 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 		m.syncFollow()
 	case "t":
 		m.times = m.times.next()
+	case "c":
+		// The cursor is on a line and not on a row, so it stays on the line it
+		// was on: folding the rows under it must not move the reader.
+		line := 0
+		if m.cursor >= 0 && m.cursor < len(runs) {
+			line = runs[m.cursor].first
+		}
+		m.clamped = !m.clamped
+		m.cursor = runAt(clampRuns(entries, m.clamped), line)
 	case "l":
 		f := m.view.Filter()
 		f.MinLevel = f.MinLevel.Next()
 		m.view.SetFilter(f)
 		m.cursor, m.top = 0, 0
 	case "up", "k":
-		m.move(-1, len(entries))
+		m.move(-1, len(runs))
 	case "down", "j":
-		m.move(1, len(entries))
+		m.move(1, len(runs))
 	case "pgup":
-		m.move(-m.bodyHeight(), len(entries))
+		m.move(-m.bodyHeight(), len(runs))
 	case "pgdown":
-		m.move(m.bodyHeight(), len(entries))
+		m.move(m.bodyHeight(), len(runs))
 	case "home", "g":
 		m.follow = false
 		m.cursor, m.top = 0, 0
 	case "end", "G":
 		m.follow = true
-		m.cursor = max(len(entries)-1, 0)
+		m.cursor = max(len(runs)-1, 0)
 	case "H":
 		// Top and bottom of what is on screen, as in less and vim.
 		m.follow = false
 		m.cursor = m.top
 	case "L":
 		m.cursor = m.top + m.bodyHeight() - 1
-		m.follow = m.cursor >= len(entries)-1
+		m.follow = m.cursor >= len(runs)-1
 	case "T":
 		// The trace this line was written inside. A line that was not in one
 		// says so rather than opening a screen with nothing on it.
-		if i := m.cursor; i >= 0 && i < len(entries) {
-			if e := entries[i]; e.Record.TraceID != "" {
-				return m, openTrace(e)
-			}
+		if e := at(m.cursor); e != nil && e.Record.TraceID != "" {
+			return m, openTrace(e)
 		}
 		return m, note("this line is not in a trace")
 	case "left":
@@ -434,7 +458,7 @@ func (m *logModel) syncFollow() {
 	if !m.follow {
 		return
 	}
-	if n := len(m.view.Entries(m.store)); n > 0 {
+	if n := len(clampRuns(m.view.Entries(m.store), m.clamped)); n > 0 {
 		m.cursor = n - 1
 	}
 	m.clamp()
@@ -457,22 +481,24 @@ func (m *logModel) move(d, n int) {
 // two lines shorter than a screenful of one that did not.
 func (m *logModel) clamp() {
 	entries := m.view.Entries(m.store)
-	n := len(entries)
+	runs := clampRuns(entries, m.clamped)
+	n := len(runs)
 	h := m.bodyHeight()
 
 	m.cursor = min(max(m.cursor, 0), max(n-1, 0))
 	m.top = min(max(m.top, 0), m.cursor)
-	for m.top < m.cursor && m.rows(entries, m.top, m.cursor) > h {
+	for m.top < m.cursor && m.rows(entries, runs, m.top, m.cursor) > h {
 		m.top++
 	}
 }
 
-// rows is how much of the screen the entries from..to take, the gaps between
-// them included.
-func (m logModel) rows(entries []*logs.Entry, from, to int) int {
+// rows is how much of the screen the rows from..to take, the gaps between them
+// included. A run is one row however many lines it stands for, and the silence
+// before it is measured from the last of the run above and not the first.
+func (m logModel) rows(entries []*logs.Entry, runs []run, from, to int) int {
 	n := to - from + 1
-	for i := from + 1; i <= to && i < len(entries); i++ {
-		if _, ok := gap(entries[i-1], entries[i]); ok {
+	for i := from + 1; i <= to && i < len(runs); i++ {
+		if _, ok := gap(entries[runs[i-1].last()], entries[runs[i].first]); ok {
 			n++
 		}
 	}
@@ -481,26 +507,28 @@ func (m logModel) rows(entries []*logs.Entry, from, to int) int {
 
 func (m logModel) View() string {
 	entries := m.view.Entries(m.store)
+	runs := clampRuns(entries, m.clamped)
 	m.clamp()
 
 	height := m.bodyHeight()
 
 	inner := max(m.width()-2, 10)
 	body := make([]string, 0, height)
-	for i := m.top; i < len(entries) && len(body) < height; i++ {
-		e := entries[i]
+	for i := m.top; i < len(runs) && len(body) < height; i++ {
+		r := runs[i]
+		e := entries[r.first]
 		// The silence before a line is drawn above it, and only where the line
 		// above is on screen: a gap at the top of the window is the window's
 		// own edge and says nothing about the log.
 		if i > m.top {
-			if d, ok := gap(entries[i-1], e); ok {
+			if d, ok := gap(entries[runs[i-1].last()], e); ok {
 				body = append(body, gapRow(d, e.At, inner))
 				if len(body) == height {
 					break
 				}
 			}
 		}
-		row := renderLine(e, m.tags[e.Source], m.gutter(e), i == m.cursor, m.hoff, inner)
+		row := renderLine(e, m.tags[e.Source], m.gutter(e), r.n, i == m.cursor, m.hoff, inner)
 		switch {
 		case i == m.cursor:
 			row = cursorRow(row, inner)
@@ -516,7 +544,7 @@ func (m logModel) View() string {
 	}
 
 	screen := []string{
-		m.topBar(entries),
+		m.topBar(entries, len(entries)-len(runs)),
 		styleBox.Width(m.width()).Render(strings.Join(body, "\n")),
 		m.filterBar(),
 	}
@@ -607,7 +635,7 @@ func (m logModel) filterBar() string {
 // The tag and the gutter are drawn outside the horizontal offset: where a line
 // came from and when it was written are the last things that should scroll away
 // from it.
-func renderLine(e *logs.Entry, tag, gutter string, selected bool, hoff, width int) string {
+func renderLine(e *logs.Entry, tag, gutter string, repeat int, selected bool, hoff, width int) string {
 	marker := "  "
 	if selected {
 		marker = styleSelected.Render("▎ ")
@@ -624,13 +652,22 @@ func renderLine(e *logs.Entry, tag, gutter string, selected bool, hoff, width in
 		// A stacktrace would otherwise take over the list; the entry view has it.
 		text += styleDim.Render(fmt.Sprintf(" ⏎%d", e.Extra))
 	}
+	if repeat > 1 {
+		// What the line said, and how many times running it said it. The count
+		// is the row's and not the line's, which is why it is drawn here and
+		// not folded into the rendering when the line arrived.
+		text += styleDim.Render(fmt.Sprintf(" ×%d", repeat))
+	}
 	if hoff > 0 {
 		text = ansi.TruncateLeft(text, hoff, "")
 	}
 	return marker + ansi.Truncate(text, max(width-lipgloss.Width(marker), 1), styleDim.Render("→"))
 }
 
-func (m logModel) topBar(entries []*logs.Entry) string {
+// topBar carries what the list is not showing as well as what it is: folded is
+// how many lines the clamp took out of it, and a list that quietly stood for
+// four hundred lines with one row would be lying about the log.
+func (m logModel) topBar(entries []*logs.Entry, folded int) string {
 	title := styleTitle.Render(m.cfg.Title())
 
 	var (
@@ -641,6 +678,9 @@ func (m logModel) topBar(entries []*logs.Entry) string {
 	stats = append(stats, fmt.Sprintf("%d lines", m.store.Len()))
 	if d := m.store.Dropped(); d > 0 {
 		stats = append(stats, fmt.Sprintf("%d dropped", d))
+	}
+	if folded > 0 {
+		stats = append(stats, fmt.Sprintf("%d clamped", folded))
 	}
 	if r := timeRange(entries); r != "" {
 		stats = append(stats, r)
@@ -689,6 +729,7 @@ func (m logModel) footer(entries []*logs.Entry) string {
 		key("?", "syntax"),
 		key("f", "follow"),
 		key("l", "level"),
+		key("c", "clamp"),
 		key("t", "time"),
 		key("←→", "scroll"),
 		key("home/end", "ends"),

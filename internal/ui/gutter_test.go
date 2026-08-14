@@ -122,10 +122,11 @@ func TestAGapCostsARow(t *testing.T) {
 
 	lg := m.(Model).logs
 	entries := lg.view.Entries(lg.store)
-	require.Equal(t, lg.cursor, len(entries)-1, "following leaves the cursor on the last line")
-	require.LessOrEqual(t, lg.rows(entries, lg.top, lg.cursor), lg.bodyHeight(),
+	runs := clampRuns(entries, lg.clamped)
+	require.Equal(t, lg.cursor, len(runs)-1, "following leaves the cursor on the last line")
+	require.LessOrEqual(t, lg.rows(entries, runs, lg.top, lg.cursor), lg.bodyHeight(),
 		"the window is counted in rows, gaps included")
-	require.Greater(t, lg.rows(entries, lg.top-1, lg.cursor), lg.bodyHeight(),
+	require.Greater(t, lg.rows(entries, runs, lg.top-1, lg.cursor), lg.bodyHeight(),
 		"and filled: one line further up would not fit")
 	require.Less(t, lg.cursor-lg.top+1, lg.bodyHeight(), "which is fewer lines than rows")
 }

@@ -95,9 +95,10 @@ func (m *logModel) takePage(msg pageMsg) {
 	m.pageErr = nil
 
 	entries := m.view.Entries(m.store)
+	runs := clampRuns(entries, m.clamped)
 	var anchor *logs.Entry
-	if m.cursor < len(entries) {
-		anchor = entries[m.cursor]
+	if m.cursor < len(runs) {
+		anchor = entries[runs[m.cursor].first]
 	}
 
 	page := m.store.Prepend(msg.lines)
@@ -110,9 +111,13 @@ func (m *logModel) takePage(msg pageMsg) {
 
 	entries = m.view.Entries(m.store)
 	if anchor != nil {
+		// The page can join the run the cursor is on — the lines before a
+		// repetition are usually more of it — so the row is looked up from the
+		// line rather than counted from the top.
 		if i := slices.Index(entries, anchor); i >= 0 {
-			m.top += i - m.cursor
-			m.cursor = i
+			row := runAt(clampRuns(entries, m.clamped), i)
+			m.top += row - m.cursor
+			m.cursor = row
 		}
 	}
 	m.clamp()

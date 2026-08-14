@@ -208,6 +208,20 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
 - **Ordering-sensitive state is computed once, on arrival.** `Entry.Band` is
   worked out in `Store.Append` because a view that scrolls or filters cannot
   work it out again without disagreeing with itself.
+- **What repeats is a property of the screen, not of the log, so it is worked
+  out at render time.** `ui.clampRuns` groups a line with the ones straight
+  after it that said the same thing, and the cursor counts those runs rather
+  than entries — a cursor that could land inside a fold would be somewhere the
+  reader cannot see, which is why `takePage` carries it by the line it is on and
+  looks the row up again with `runAt`. It is the mirror of the rule above and
+  not an exception to it: two lines a filter has just brought together are a
+  repetition and the same two with a third between them are not, so there is
+  nothing worth keeping and keeping it would mean keeping something that goes
+  stale on the next keystroke. `gapRow` is derived the same way and for the same
+  reason. It follows that a run never spans a silence — folding a heartbeat
+  would take the gap off the screen — and that the top bar counts what was
+  folded: a row standing for four hundred lines without saying so is the same
+  lie as a truncation nobody logged.
 - `Config.Labels()` names the children of a merge; `Config.SourceLabels(from)`
   describes where a stream comes from. They are different things with similar
   names.
