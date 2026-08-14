@@ -221,7 +221,8 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   reason. It follows that a run never spans a silence — folding a heartbeat
   would take the gap off the screen — and that the top bar counts what was
   folded: a row standing for four hundred lines without saying so is the same
-  lie as a truncation nobody logged.
+  lie as a truncation nobody logged. A run does not span two trace ids either,
+  since the row draws one line and `T` opens that line's trace.
 - `Config.Labels()` names the children of a merge; `Config.SourceLabels(from)`
   describes where a stream comes from. They are different things with similar
   names.

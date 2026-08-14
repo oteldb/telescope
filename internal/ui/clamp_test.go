@@ -166,3 +166,22 @@ func TestANoteIsNeverFolded(t *testing.T) {
 	m := timedModel(t, entryAt(at, "serving"), note(time.Second), note(2*time.Second))
 	require.Equal(t, 2, countRows(rowsOf(t, m), "token too long"), "both are said")
 }
+
+// TestOneMessageUnderTwoRequestsIsTwoRows: the row draws one line and T opens
+// that line's trace, so a fold that spanned trace ids would open the wrong one.
+func TestOneMessageUnderTwoRequestsIsTwoRows(t *testing.T) {
+	at := time.Date(2026, 8, 11, 15, 16, 36, 0, time.Local)
+	line := func(trace string) *logs.Entry {
+		return &logs.Entry{
+			At: at, HasTime: true,
+			Record: logs.Record{Body: "checkout failed", TraceID: trace},
+		}
+	}
+	runs := clampRuns([]*logs.Entry{line("aaa"), line("aaa"), line("bbb")}, true)
+	require.Len(t, runs, 2)
+	require.Equal(t, 2, runs[0].n, "the same request saying it twice is one row")
+	require.Equal(t, 1, runs[1].n)
+
+	// A line outside a trace still folds into another one outside it.
+	require.Len(t, clampRuns([]*logs.Entry{line(""), line("")}, true), 1)
+}

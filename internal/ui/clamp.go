@@ -61,6 +61,12 @@ func repeats(a, b *logs.Entry) bool {
 		return false
 	case a.Source != b.Source:
 		return false
+	case a.Record.TraceID != b.Record.TraceID:
+		// One message logged under two requests is two requests failing the
+		// same way, and the row has to keep the one the reader is looking at:
+		// T opens the trace of the line the row draws, and a fold that spanned
+		// ids would open the oldest of them whatever the cursor was on.
+		return false
 	case a.Record.Body == "":
 		// A line with nothing to compare — blank, or a rendering the parser
 		// found no message in — is not a copy of anything.
