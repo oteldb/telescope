@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 
@@ -296,4 +297,31 @@ func TestTheRoundTripEndsWhereItStarted(t *testing.T) {
 	// And out of the narrowed list into the same trace again.
 	m = send(t, m, k("T"))
 	require.Equal(t, stateTrace, m.(Model).state)
+}
+
+// TestAPlaceWithNoTraceStoreSaysSoWhereTheKeyWasPressed: T is on the list and
+// on an entry both, and a refusal drawn on the screen the reader is not looking
+// at is a key that did nothing.
+func TestAPlaceWithNoTraceStoreSaysSoWhereTheKeyWasPressed(t *testing.T) {
+	const missing = "no trace store here"
+
+	// A place that reads logs and was never told where its traces are.
+	cfg := source.Config{Collector: source.CollectorDocker, Container: "app", Follow: true}
+	open := func(t *testing.T) tea.Model {
+		t.Helper()
+		m := send(t, New(), size(), connectMsg{cfg: cfg})
+		return send(t, m, linesMsg{lines: []source.Line{{Data: []byte(tracedLine)}}, closed: true})
+	}
+
+	t.Run("from the list", func(t *testing.T) {
+		m := pressRoot(t, open(t), "T")
+		require.Contains(t, ansi.Strip(m.View()), missing)
+	})
+
+	t.Run("from an entry", func(t *testing.T) {
+		m := pressRoot(t, open(t), "enter")
+		require.Contains(t, ansi.Strip(m.View()), "checkout failed", "the entry is open")
+		m = pressRoot(t, m, "T")
+		require.Contains(t, ansi.Strip(m.View()), missing)
+	})
 }

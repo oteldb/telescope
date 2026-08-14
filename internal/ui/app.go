@@ -180,16 +180,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case noteMsg:
-		// A note belongs to the screen that asked for it, and the trace screen
-		// is reached from two of them.
-		switch m.state {
-		case stateLogs:
-			m.logs, _ = m.logs.Update(msg)
-		case stateEntry:
-			m.entry, _ = m.entry.Update(msg)
-		case stateTrace:
-			m.trace, _ = m.trace.Update(msg)
-		}
+		m.say(msg.text)
 		return m, nil
 
 	case openTraceMsg:
@@ -200,7 +191,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// trace that could not be read. Set rather than sent, since a
 			// command is for work that happens off the loop and this is
 			// already known.
-			m.logs.note = "no trace store here: give the place a traces: url"
+			m.say("no trace store here: give the place a traces: url")
 			return m, nil
 		}
 		m.traceBack = m.state
@@ -316,6 +307,24 @@ func (m *Model) quit() tea.Cmd {
 }
 
 // Messages exchanged between the views and the stream.
+// say puts a remark on the screen that is being read.
+//
+// A note is the evidence that a key was pressed, so it has to land where the
+// reader is. The keys that produce one are on more than one screen — T opens a
+// trace from the list and from an entry both, and the trace screen is reached
+// from either — and a note left on the list while an entry is open is read by
+// nobody and cleared by the next key.
+func (m *Model) say(text string) {
+	switch m.state {
+	case stateEntry:
+		m.entry.note = text
+	case stateTrace:
+		m.trace.note = text
+	default:
+		m.logs.note = text
+	}
+}
+
 type (
 	streamStartedMsg struct{ stream *source.Stream }
 	streamErrMsg     struct{ err error }
