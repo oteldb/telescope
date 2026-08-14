@@ -88,6 +88,16 @@ linters:
       - linters:
           - unparam
         path: _test\.go
+      # The stub trace store writes down what it was asked for, which is most
+      # of what it is for: watching a search arrive as a query. The URL is
+      # somebody else's bytes there as everywhere else and logAsked drops the
+      # control characters that would forge a second line, which is what the
+      # taint analysis cannot see.
+      - linters:
+          - gosec
+        path: ^demo/
+        text: G706
+
       # A loop that only advances an index over a byte class is the scan; its
       # body is empty because the condition is the whole of it.
       - linters:

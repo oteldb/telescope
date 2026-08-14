@@ -285,6 +285,15 @@ to be compilable into LogsQL or LogQL without `source` reaching up into `logs`.
   describes where a stream comes from. They are different things with similar
   names.
 
+`demo/` is what the README recording is made from, and what a screen can be
+driven by hand against: `emit.sh` stands in for a service writing logs and
+`tracestub/` for the store its traces went to. The stub serves both trace APIs
+at once and the caller picks with `--api`, since the point of it is that the two
+answer the same question differently. Its traces come out of a counter rather
+than a seeded generator: a fixture whose traces move between runs cannot be
+compared against yesterday's screenshot, and the ids `emit.sh` writes have to
+land on the same traces every time.
+
 ## Tests
 
 - `internal/ui` renders models and asserts on the output. `TestMain` forces a
