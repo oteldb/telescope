@@ -5,8 +5,11 @@ workload, a container, any command, or a query against VictoriaLogs or Loki,
 locally or over ssh — and renders it as a filterable list. A `merge` reads
 several of them as one timeline. `README.md` is written for users and is the
 best description of what the thing does; read it before changing behavior, and
-keep it that way — it says what a feature is and how to configure it, never how
-it works inside. Why the code is the way it is belongs here.
+keep it that way — it says how to install it, how to configure it, and points
+out the features on top; never how it works inside, and never what the screen
+already says. Every view writes its own keys along the bottom, so a key table in
+the README is a second copy to keep right. Why the code is the way it is belongs
+here.
 
 ## Commands
 

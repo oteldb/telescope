@@ -47,8 +47,9 @@ $ go run ./cmd/telescope
 [cosign]: https://docs.sigstore.dev/cosign/system_config/installation/
 
 Nothing has to be configured: the start screen lists the units, pods and
-containers it can find. Declaring the places you read daily saves picking them
-again — see [Configuration](#configuration).
+containers it can find. Every screen writes its keys along the bottom, so this
+file does not. Declaring the places you read daily saves picking them again —
+see [Configuration](#configuration).
 
 ## Sources
 
@@ -103,16 +104,7 @@ groups:
 The places need not be alike — `kubectl` on a cluster, `journalctl` over ssh,
 and a database in another region read as one stream. The window, tail and follow
 belong to the group. A place that fails to open, or stops reading, is reported
-where its lines would have been and marked as telescope's own words rather than
-the log's; the rest keep streaming.
-
-A place that simply does not have what the group named — the deployment runs in
-one cluster of the four — says nothing at all. It has no lines to contribute,
-and that is the whole of what there is to say about it.
-
-When every place in a group leaves the same thing open — four clusters and no
-pod on any of them — picking the group asks once and gives the answer to all of
-them.
+where its lines would have been; the rest keep streaming.
 
 ### Time range
 
@@ -130,109 +122,34 @@ them.
 A range with an end is not followed. `kubectl` has no end bound, and a
 free-form `command` has no range at all — bound it in the command itself.
 
-## Keys
+## Features
 
-### Start screen
+**The filter** (`/`) is a small query: `reset` or `"connection reset"` for a
+substring, `/res[ei]t/` for a regular expression, `pod=api-7`, `pod~api`,
+`level>=warn` for fields, and `and`, `or`, `not`, `-` and parentheses over the
+lot. Terms next to each other are and-ed, so a query that is only words reads as
+the grep it replaces. `?` writes the language out in full, and `tab` completes
+field names and values — including the ones only the database has seen yet. Over
+a log database as much of the filter as the server can answer is sent to it.
 
-| key | |
-| --- | --- |
-| `↑` `↓`, `ctrl+p` `ctrl+n` | move through suggestions |
-| `pgup` `pgdown`, `home` `end` | page, first, last |
-| `tab` | accept the highlighted suggestion, else switch source type |
-| `enter` | accept the highlighted suggestion, else go to the next step |
-| `esc` | drop the highlight, leave the editor, go back a step, then quit |
-| `ctrl+a` | pick a saved place to group; opening more than one merges them |
-| `alt+t` | search the traces of the place under the cursor |
-| `ctrl+r` | re-run the current listing, ignoring the cache |
-| `ctrl+s` | toggle `sudo -n` |
-| `ctrl+k`, `ctrl+x` | kubeconfig path, context (kubectl) |
-| `ctrl+e` | pick the endpoint (victorialogs, loki) |
-| `ctrl+o` | ssh host, empty for this machine |
-| `ctrl+g` | time range |
-| `ctrl+f` | toggle follow |
-| `ctrl+t` | cycle tail: 100, 1000, 10000, all |
-| `ctrl+c` | quit |
+**Reading backwards.** Over a database the tail is where reading starts and not
+how far back it goes: scroll to the first line and the ones before it are
+fetched.
 
-Suggestions are matched fuzzily, so `ksdns` finds
-`kube-system/coredns-7d764666f9-5gq2n`. A query may also carry `field:value`
-terms, in the shape GitHub and Sourcegraph use — `ns:oteldb -kind:pod api` —
-over `ns` (`namespace`), `kind` (`type`), `name` (`pod`, `unit`), `container`,
-`image`, `scope`, `state`, depending on what is being listed.
+**An entry** (`enter`) is shown whole — the labels, the fields, the raw bytes.
+`y` copies a value as it arrived, `f` narrows the list by it, and `o` opens what
+it points at: a URL in the browser, a file in `$EDITOR` at the right line, or,
+where the value is a stacktrace, the innermost frame that is in the checkout.
+Go, zap, the JVM, CPython and V8 traces are understood.
 
-Everything is listed wherever the logs will be read, with the same privileges
-and kubeconfig, so picking a remote node lists that node's units and containers.
-Results are cached for the session; `ctrl+r` refreshes. Hosts, kubeconfigs and
-targets you have opened before are offered first.
+**Traces.** `T` opens the trace a line was written inside and draws it as a
+gantt; `f` goes back the other way, narrowing the list by the whole trace or by
+the row the cursor is on in a span.
 
-### Log view
+**Repetition and silence.** A line repeated straight after itself is drawn once
+with `×n`, and a gap in the log is drawn as the gap it is.
 
-| key | |
-| --- | --- |
-| `↑` `k`, `↓` `j` | move |
-| `pgup` `pgdown` | page |
-| `home` `g`, `end` `G` | ends of the list |
-| `H`, `L` | top, bottom of the window |
-| `←` `→` | scroll sideways, `0` resets |
-| `enter` | open the entry |
-| `/` | filter (`enter` applies, `esc` cancels) |
-| `tab` | complete the field or value being typed, `↑` `↓` pick |
-| `?` | the filter language, written out |
-| `f` | toggle follow |
-| `l` | cycle minimum level: all, info, warn, error |
-| `c` | toggle clamping repeated lines |
-| `t` | cycle the time column: clock, full date, age |
-| `T` | open the trace this line was written inside |
-| `esc` | back to the picker |
-| `q`, `ctrl+c` | quit |
-
-The filter is a small query:
-
-| written | means |
-| --- | --- |
-| `reset`, `"connection reset"` | a case-insensitive substring |
-| `/res[ei]t/` | a regular expression, always case-insensitive |
-| `pod=api-7`, `pod!=api-7` | a field, compared exactly |
-| `pod~api` | a field, matched as a regular expression |
-| `level>=warn` | severity |
-| `a b`, `a and b`, `a or b`, `not a`, `-a`, `(a b) or c` | the rest |
-
-### Entry view
-
-| key | |
-| --- | --- |
-| `↑` `k`, `↓` `j`, `pgup` `pgdown`, `home` `g`, `end` `G` | select |
-| `y` | copy the selected value, as it arrived |
-| `Y` | copy the whole entry |
-| `o` | open the selected value: a URL in a browser, a file in `$EDITOR` |
-| `T` | open the trace this line was written inside |
-| `f` | narrow the list by the selected value |
-| `?` | the filter language, written out |
-| `esc`, `enter`, `backspace` | back |
-| `q`, `ctrl+c` | quit |
-
-The entry is shown whole: time, level, trace and body, then the labels of the
-stream and of the line, the full rendering, the structured fields and the raw
-bytes it arrived as.
-
-`o` opens what a value points at. A file goes to `$VISUAL` or `$EDITOR` at the
-right line, with telescope standing aside until it exits; only `http` and
-`https` URLs are handed to the browser. The path a logger writes is rarely the
-path the file is at, so `o` tries it as written, then relative to the
-repository, then looks for a tracked file it is the tail of — which is why
-`caller` opens the right file in a fresh checkout. Where the value names no
-file, `o` reads it as a stacktrace and opens the innermost frame that is in the
-checkout; Go, zap, the JVM, CPython and V8 traces are all understood, and an
-entry carrying one under `stacktrace`, `stack_trace`, `stack`,
-`exception.stacktrace` or `error.stack` opens it from any of its rows.
-
-`f` takes the value back to the list as a filter term, anded onto whatever is
-already there — read one entry, spot the pod, press `f`.
-
-The clipboard is the one on the machine telescope runs on (`wl-copy`, `xclip`,
-`pbcopy`). Over ssh it falls back to OSC 52, which under tmux needs
-`set -g set-clipboard on`.
-
-### Trace view
+### Traces from the command line
 
 ```console
 $ telescope trace --from https://tempo.example.com 4bf92f3577b34da6a3ce929d0e0e4736
@@ -242,14 +159,12 @@ $ telescope trace ./saved.json
 $ curl -s "$TEMPO/api/traces/$ID" | telescope trace -
 ```
 
-`telescope trace` draws a trace as a gantt: the spans down the left in the
-order they were called, how long each took, and a bar showing when it ran
-against the request as a whole.
-
 `--from` names a trace store, either as a url or as the name of a place that
-declares one, and the argument is then the trace id. With no argument it opens
-a search of that store instead. Without `--from` the argument is a file holding
-a response already, or `-` to read one on standard input.
+declares one, and the argument is then the trace id. With no argument it opens a
+search of that store instead — a form over service, operation, tags and
+duration, which `alt+t` on the start screen opens too. Without `--from` the
+argument is a file holding a response already, or `-` to read one on standard
+input.
 
 Two APIs are read, and a store says which it speaks: Tempo's — the one oteldb
 and Grafana's Tempo datasource speak — and Jaeger's query API, which Jaeger and
@@ -257,104 +172,6 @@ VictoriaTraces serve. For a url, `--api tempo` or `--api jaeger` says so; a
 place says it in the config. A file says nothing and needs to: which format it
 holds is worked out from what comes out of it, and OTLP arrives as JSON or as
 protobuf with both understood.
-
-### Searching for a trace
-
-An id is usually copied off a log line. When there is no line to copy it from,
-`alt+t` on the start screen searches the traces of the place under the cursor,
-and `telescope trace --from <place>` opens the same screen.
-
-```
-service    api
-operation  GET /v1/orders
-tags       http.status_code=500 error=true
-min        250ms
-max
-range      6h..1h
-limit      20
-```
-
-It is a form and not a query language: a service, what it was called to do, the
-tags its spans carry, how long the whole trace took, and the window to look in.
-`tags` is `key=value` pairs separated by spaces, quoted when a value has one in
-it. Empty fields ask for less; an empty form is everything in the window, which
-is the last hour unless `range` says otherwise.
-
-What the store is actually asked is compiled from that — TraceQL for a Tempo,
-query parameters for a Jaeger — and the line under the form shows it. A Tempo
-can be asked for everything; a Jaeger indexes per service and will not search
-without one, and says so rather than sending a request it knows will be
-refused. The `service` and `operation` fields offer what the store says it
-holds, as the filter prompt does with log fields.
-
-`enter` runs the search and `enter` on a result opens it as a gantt, `esc`
-coming back to the results and `esc` again to the form. `y` copies a trace id.
-
-A row is when the trace started, its root service and operation, how long it
-took, and how big it is — `38 spans ✗2` where the store returned the trace
-itself, `3 matched` where it returned a summary and can only say how many spans
-the query selected.
-
-| key | |
-| --- | --- |
-| `tab`, `shift+tab` | next field, previous — past the last one is the results |
-| `enter` | search; on a result, open it; on a suggestion, accept it |
-| `↑` `↓` | move through results, or through the suggestions under a field |
-| `ctrl+r` | search again |
-| `y` | copy the trace id under the cursor |
-| `esc` | out of the results into the form, out of the form back |
-| `ctrl+c` | quit |
-
-**From a log line, and back.** `T` in the list or in an entry opens the trace
-that line was written inside, for any line carrying a `trace_id`. It asks the
-place's `traces:` endpoint — in a merge, the endpoint of the place that line
-came from — and `esc` comes back to where you were. A place with no `traces:`
-says so rather than opening an empty screen.
-
-`f` goes the other way: from the chart it narrows the list to
-`trace_id=<this trace>`, which is every line written anywhere inside that
-request; from a span it narrows by whichever row the cursor is on, so a
-`service.name` or an `http.route` selects the lines that share it. Narrowing
-lands on the list, and the term is anded onto whatever filter was already
-there — so a jump out and back leaves you reading the request you went looking
-for. Walking that loop asks the trace store once: a trace already read opens
-again without a request. `r` asks for it afresh, which is what to press for a
-request still being served.
-
-| key | |
-| --- | --- |
-| `↑` `k`, `↓` `j`, `pgup` `pgdown`, `home` `g`, `end` `G` | select |
-| `enter` | open the span: its status, its timing and every attribute |
-| `f` | narrow the log list: by the trace here, by the selected row in a span |
-| `space` | fold a span's children away, or bring them back |
-| `C`, `E` | fold everything to the top level, or unfold it all |
-| `s` | the services the trace touched; `space` filters one out, `a` restores |
-| `+` `-` | zoom, around the selected span |
-| `←` `h`, `→` `l` | pan |
-| `z` | zoom to the selected span |
-| `0` | back to the whole trace |
-| `y` | copy the selected span's id; `Y` the trace's |
-| `r` | read the trace again, for one still being written |
-| `esc` | back |
-| `q`, `ctrl+c` | quit |
-
-In the span view, `y` copies the value under the cursor as it arrived, `o`
-opens what it points at, and `f` narrows by it — the same three as in a log
-entry. The rows describing the span itself, its start and its duration, narrow
-nothing: a line does not carry them.
-
-Each service gets its own color, and a span that failed is marked `✗` and drawn
-in red. A fold says how many spans it hid and whether one of them failed, so
-folding a subtree away cannot hide the thing you opened the trace for.
-
-Filtering out a service hides its spans, except where one of them is holding up
-a span that is still shown — that one stays, drawn as the structure it is, since
-removing it would leave its children hanging under a span that never called
-them. Filtering out everything filters out nothing.
-
-Where a span names a parent that is not in the response — sampled away, or not
-written yet — the header says how many, since a duration read off a partial
-trace is not the whole story.
 
 ## Configuration
 
@@ -451,10 +268,6 @@ places:
       type: jaeger
 ```
 
-It is declared rather than discovered, for the reason a place declares whether
-it is Loki or VictoriaLogs: the paths, the query language and what comes back
-all differ.
-
 Either way the store borrows the place's token, tenant, proxy and TLS settings,
 since a system's traces usually sit behind the same door as its logs.
 
@@ -527,8 +340,7 @@ arguments, which needs no quoting:
 
 That covers a keyring, `pass`, Bitwarden, 1Password — anything with a CLI. It
 runs once per run, before the screen is taken over, so a manager that needs a
-passphrase can still ask. A place whose token cannot be read says so where it is
-chosen, and takes down nothing else.
+passphrase can still ask.
 
 ### History
 
