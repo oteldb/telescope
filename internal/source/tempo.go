@@ -27,8 +27,10 @@ const maxTraceBody = 64 << 20
 // page decoded as protobuf is a worse message than the one it replaced. Both
 // carry the same payload, so falling back costs a round trip and nothing else.
 //
-// This is Tempo's API, which is what oteldb and Grafana's Tempo datasource
-// speak. Jaeger's query API is a different one on a different path.
+// Which of the two APIs is asked is the store's own declaration, not something
+// worked out from what came back. A Jaeger store serves one trace on the same
+// path Tempo's older one does and answers with a different document, so there
+// is nothing in the path to tell them apart and a fallback would be a guess.
 func (e Endpoint) Trace(ctx context.Context, id string) ([]byte, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -38,6 +40,10 @@ func (e Endpoint) Trace(ctx context.Context, id string) ([]byte, error) {
 	// path it is.
 	if strings.ContainsAny(id, "/?#%") {
 		return nil, errors.Errorf("trace id %q is not an id", id)
+	}
+
+	if e.traceAPI() == CollectorJaeger {
+		return e.fetchTrace(ctx, jaegerSearchPath+"/"+id, acceptJSON)
 	}
 
 	data, err := e.fetchTrace(ctx, "/api/v2/traces/"+id, acceptJSON)
@@ -77,7 +83,7 @@ func (e Endpoint) fetchTrace(ctx context.Context, path, accept string) ([]byte, 
 		return nil, err
 	}
 	req.Header.Set("Accept", accept)
-	e.setTenant(req, "X-Scope-OrgID")
+	e.setTenant(req, e.traceTenantHeaders()...)
 
 	resp, err := httpClient(e).Do(req)
 	if err != nil {

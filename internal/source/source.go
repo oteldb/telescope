@@ -23,7 +23,10 @@ const (
 	TransportSSH   Transport = "ssh"
 )
 
-// Collector is the program that emits the logs.
+// Collector is the program that emits the logs, or the API they are read
+// from. A trace store is named the same way and by the same type: it is one
+// more API an [Endpoint] can speak, and an endpoint has one field for what
+// speaks there.
 type Collector string
 
 // Supported collectors.
@@ -36,6 +39,18 @@ const (
 	CollectorLoki         Collector = "loki"
 	CollectorMerge        Collector = "merge"
 )
+
+// The trace APIs. Neither streams anything, so neither is a collector a
+// [Config] may name: they say what answers at a `traces:` url and nothing else.
+const (
+	CollectorTempo  Collector = "tempo"
+	CollectorJaeger Collector = "jaeger"
+)
+
+// IsTraceAPI reports whether the collector reads traces rather than logs.
+func (c Collector) IsTraceAPI() bool {
+	return c == CollectorTempo || c == CollectorJaeger
+}
 
 // IsRemoteAPI reports whether the collector reads from a log database over
 // HTTP. Such a collector runs no command, so the transport, sudo and the
