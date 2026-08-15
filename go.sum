@@ -31,6 +31,8 @@ github.com/go-faster/errors v0.8.0 h1:9T9eJrM+72dFk7n4DfhuaDDe6cyuFCSW2oNUkN77Yq
 github.com/go-faster/errors v0.8.0/go.mod h1:5ySTjWFiphBs07IKuiL69nxdfd5+fzh1u7FPGZP2quo=
 github.com/go-faster/figureout v0.6.1 h1:utWhepgPDFeiIwI+TkcjnUbQqWbnjM0GBXGEDmmw7y4=
 github.com/go-faster/figureout v0.6.1/go.mod h1:xhtyYUARqsG7IAwSRJJraB9t2orPzJHF79VHO6dV1AA=
+github.com/go-faster/figureout v0.6.2 h1:nR/umITGSTcD+9VO55Xce7QgGp1k7Hfng1BSjcj2/XQ=
+github.com/go-faster/figureout v0.6.2/go.mod h1:xhtyYUARqsG7IAwSRJJraB9t2orPzJHF79VHO6dV1AA=
 github.com/go-faster/jx v1.2.0 h1:T2YHJPrFaYu21fJtUxC9GzmluKu8rVIFDwwGBKTDseI=
 github.com/go-faster/jx v1.2.0/go.mod h1:UWLOVDmMG597a5tBFPLIWJdUxz5/2emOpfsj9Neg0PE=
 github.com/go-faster/pl v0.5.0 h1:1MszP53Z6Mq5XwBDKjRo2aI8IN6RwOmAk+BUVwaslR8=
