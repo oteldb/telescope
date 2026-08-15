@@ -149,6 +149,11 @@ the row the cursor is on in a span.
 **Repetition and silence.** A line repeated straight after itself is drawn once
 with `×n`, and a gap in the log is drawn as the gap it is.
 
+**Log volume** is drawn above the list as bars over time, stacked by severity,
+with the bucket the cursor is reading marked underneath. It counts the lines
+that have been read and follows the filter in force, so it never disagrees with
+the list below it. `v` folds it away when the rows are wanted for the log.
+
 ### Traces from the command line
 
 ```console

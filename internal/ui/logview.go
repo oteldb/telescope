@@ -41,6 +41,11 @@ type logModel struct {
 	// saying one thing, and the list should read as one.
 	clamped bool
 
+	// volume draws the log volume panel above the list. On by default: how much
+	// of a log there was and when is the first thing read about one, and it
+	// costs rows only where there are rows to spare — see [logModel.volumeShown].
+	volume bool
+
 	// tags is how each source of a merge is marked in the gutter, keyed by the
 	// label its lines carry. Empty when there is only one source.
 	tags map[string]string
@@ -97,6 +102,7 @@ func newLogs(cfg source.Config, store *logs.Store, query string) logModel {
 		view:    logs.NewView(logs.Filter{Query: query}),
 		follow:  true,
 		clamped: true,
+		volume:  true,
 		origin:  time.Now(),
 		search:  ti,
 		status:  "connecting",
@@ -203,7 +209,7 @@ func (m *logModel) resize(w, h int) {
 func (m logModel) bodyHeight() int {
 	// 4 lines of top bar (2 borders, 2 rows), 2 lines of log frame border,
 	// 1 filter bar, 1 help line.
-	if h := m.h - 8 - len(m.promptRows()); h > 0 {
+	if h := m.h - 8 - m.volumeHeight() - len(m.promptRows()); h > 0 {
 		return h
 	}
 	return 1
@@ -277,6 +283,8 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 		m.syncFollow()
 	case "t":
 		m.times = m.times.next()
+	case "v":
+		m.volume = !m.volume
 	case "c":
 		// The cursor is on a line and not on a row, so it stays on the line it
 		// was on: folding the rows under it must not move the reader.
@@ -543,11 +551,20 @@ func (m logModel) View() string {
 		body = append(body, "")
 	}
 
-	screen := []string{
-		m.topBar(entries, len(entries)-len(runs)),
+	screen := []string{m.topBar(entries, len(entries)-len(runs))}
+	if m.volumeShown() {
+		// The cursor is passed in so the chart can mark where in the log the
+		// reader is: the panel is above the list it belongs to, not beside it.
+		var at *logs.Entry
+		if m.cursor >= 0 && m.cursor < len(runs) {
+			at = entries[runs[m.cursor].first]
+		}
+		screen = append(screen, m.volumePanel(entries, at))
+	}
+	screen = append(screen,
 		styleBox.Width(m.width()).Render(strings.Join(body, "\n")),
 		m.filterBar(),
-	}
+	)
 	screen = append(screen, m.promptRows()...)
 	return padScreen(strings.Join(append(screen, m.footer(entries)), "\n"))
 }
@@ -731,6 +748,7 @@ func (m logModel) footer(entries []*logs.Entry) string {
 		key("l", "level"),
 		key("c", "clamp"),
 		key("t", "time"),
+		key("v", "volume"),
 		key("←→", "scroll"),
 		key("home/end", "ends"),
 		key("esc", "sources"),
