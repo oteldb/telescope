@@ -149,7 +149,10 @@ Go, zap, the JVM, CPython and V8 traces are understood.
 
 **Traces.** `T` opens the trace a line was written inside and draws it as a
 gantt; `f` goes back the other way, narrowing the list by the whole trace or by
-the row the cursor is on in a span.
+the row the cursor is on in a span. `/` filters the chart itself, in the same
+language and with the same completion as the log filter, over what the spans
+say: their service, their name and whatever they were labeled with. What holds
+up a match is kept, so the tree still says who called whom.
 
 **Which stream wrote it.** A view reading more than one — the containers of a
 pod, the pods of a deployment, the services of a namespace, the places of a
@@ -180,7 +183,9 @@ $ curl -s "$TEMPO/api/traces/$ID" | telescope trace -
 `--from` names a trace store, either as a url or as the name of a place that
 declares one, and the argument is then the trace id. With no argument it opens a
 search of that store instead — a form over service, operation, tags and
-duration, which `alt+t` on the start screen opens too. Without `--from` the
+duration, which `alt+t` on the start screen opens too. The store is asked what
+it holds, so the services, the operations and the tag keys and values are
+offered rather than remembered, as far as that store will say. Without `--from` the
 argument is a file holding a response already, or `-` to read one on standard
 input.
 

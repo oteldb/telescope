@@ -3,7 +3,9 @@ package ui
 import (
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/oteldb/telescope/internal/logs"
@@ -22,15 +24,16 @@ const (
 	panStep = 0.15
 )
 
-// What the trace screen is showing. The gantt is the view; the other two are
-// read over it and dismissed, which is why they are a mode here rather than
-// screens of their own in the root model.
+// What the trace screen is showing. The gantt is the view; the others are read
+// over it and dismissed, which is why they are a mode here rather than screens
+// of their own in the root model.
 type traceMode int
 
 const (
 	traceGantt traceMode = iota
 	traceSpan
 	traceServices
+	traceFilter
 )
 
 // traceModel is one trace on screen.
@@ -47,6 +50,16 @@ type traceModel struct {
 	// pick is the service filter, built once since a trace's services do not
 	// change while it is being read.
 	pick servicePick
+
+	// filter is the prompt over the spans, filterErr why what is being typed is
+	// not a query yet, and sug which of what it is offering is highlighted.
+	// fields is what the spans are labeled with, which is where the suggestions
+	// come from: the whole trace is in hand, so there is nothing to ask.
+	filter    textinput.Model
+	filterErr error
+	sug       int
+	fields    map[string][]string
+
 	// sel is which row of the span detail the cursor is on, and off is where
 	// that document is scrolled to.
 	sel, off int
@@ -64,7 +77,12 @@ type traceModel struct {
 }
 
 func newTrace(t *trace.Tree) traceModel {
-	return traceModel{g: newGantt(t), pick: newServicePick(t)}
+	return traceModel{
+		g:      newGantt(t),
+		pick:   newServicePick(t),
+		filter: newFilterPrompt(),
+		fields: spanFields(t),
+	}
 }
 
 // loadingTrace is the screen while a trace is being fetched, so that pressing
@@ -74,11 +92,21 @@ func loadingTrace(id string) traceModel {
 	return traceModel{loading: id}
 }
 
-func (m *traceModel) resize(w, h int) { m.w, m.h = w, h }
+func (m *traceModel) resize(w, h int) {
+	m.w, m.h = w, h
+	// bubbles scrolls a long query within its Width and draws the placeholder
+	// only as far as it, so a Width nobody set is a prompt one rune wide. The
+	// extra column is bubbles' own: the cursor sitting past the end of the text.
+	m.filter.Width = max(m.bodyWidth()-lipgloss.Width(m.filter.Prompt)-1, 10)
+}
 
-// bodyHeight is what is left inside the frame, after the border and the key
-// line under it.
-func (m traceModel) bodyHeight() int { return max(m.h-4, 1) }
+// bodyHeight is what is left inside the frame, after the border, the key line
+// under it, and whatever the prompt has taken.
+//
+// The prompt comes out of the chart rather than out of the terminal, so the
+// frame stays where it is while a filter is typed: a chart that jumped every
+// time the prompt offered something would be unreadable.
+func (m traceModel) bodyHeight() int { return max(m.h-4-len(m.filterRows()), 1) }
 
 func (m traceModel) bodyWidth() int { return max(m.w-2*screenPad-2, 20) }
 
@@ -109,6 +137,8 @@ func (m traceModel) Update(msg tea.Msg) (traceModel, tea.Cmd) {
 		return m.updateServices(km)
 	case traceSpan:
 		return m.updateSpan(km)
+	case traceFilter:
+		return m.updateFilter(km)
 	default:
 		return m.updateGantt(km)
 	}
@@ -147,6 +177,14 @@ func (m traceModel) updateGantt(km tea.KeyMsg) (traceModel, tea.Cmd) {
 		}
 	case "s":
 		m.mode = traceServices
+	case "/":
+		// The service picker narrows by who ran a span; this narrows by anything
+		// one says. They are both filters and both stay: picking a service off a
+		// list is not a query anybody should have to type.
+		m.mode, m.sug = traceFilter, 0
+		m.filter.Focus()
+		m.filter.CursorEnd()
+		return m, textinput.Blink
 
 	case "+", "=":
 		m.g.zoom(zoomIn)
@@ -290,8 +328,9 @@ func (m traceModel) View() string {
 	default:
 		body = m.g.View(width, height)
 	}
-	frame := styleBox.Width(width).Render(body)
-	return padScreen(frame + "\n" + ansi.Truncate(m.footer(), m.w, ""))
+	rows := []string{styleBox.Width(width).Render(body)}
+	rows = append(rows, m.filterRows()...)
+	return padScreen(strings.Join(append(rows, ansi.Truncate(m.footer(), m.w, "")), "\n"))
 }
 
 // spanView draws the span document, scrolled so the selected row is in frame.
@@ -344,6 +383,8 @@ func (m traceModel) footer() string {
 		return styleHint.Render(serviceKeys)
 	case traceSpan:
 		return styleHint.Render(spanKeys)
+	case traceFilter:
+		return styleHint.Render(filterKeys)
 	}
 
 	n := m.g.at()
@@ -367,9 +408,10 @@ func (m traceModel) footer() string {
 }
 
 const (
-	traceKeys   = "enter span · space fold · C/E all · s services · f logs · +/- zoom · h/l pan · z focus · r reload · esc back"
+	traceKeys   = "enter span · space fold · C/E all · / filter · s services · f logs · +/- zoom · h/l pan · z focus · r reload · esc back"
 	spanKeys    = "↑↓ select · f logs · y copy · o open · esc back"
 	serviceKeys = "space toggle · a all · esc back"
+	filterKeys  = "enter apply · tab complete · ↑↓ pick · f1 syntax · esc cancel"
 )
 
 // openTrace asks for the trace a line was written inside.
