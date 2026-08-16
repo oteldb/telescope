@@ -1,8 +1,6 @@
 package logs
 
 import (
-	"strings"
-
 	"go.uber.org/zap/zapcore"
 
 	"github.com/oteldb/telescope/internal/query"
@@ -42,6 +40,14 @@ func (l MinLevel) Next() MinLevel {
 		return LevelAll
 	}
 	return l + 1
+}
+
+// String names the level as the status bar writes it.
+func (l MinLevel) String() string {
+	if l <= LevelAll {
+		return "all"
+	}
+	return l.Level().CapitalString()
 }
 
 // Filter selects entries by query and minimum level. The level is the one the
@@ -86,23 +92,19 @@ func (f Filter) Equal(o Filter) bool {
 	return f.Query == o.Query && f.MinLevel == o.MinLevel
 }
 
-// Describe renders the filter for the status bar, as the query it would be
-// typed as rather than as what was typed: a filter reads back canonically.
+// Describe renders the query for the status bar, as the query it would be
+// typed as rather than as what was typed: a filter reads back canonically. The
+// minimum level is not in it: the bar draws that in the level's own color, and
+// a word here would be a second, colorless copy of it.
 func (f Filter) Describe() string {
-	var parts []string
 	switch {
 	case f.err != nil:
-		parts = append(parts, "bad query: "+f.err.Error())
+		return "bad query: " + f.err.Error()
 	case f.expr != nil:
-		parts = append(parts, f.expr.String())
-	}
-	if f.MinLevel > LevelAll {
-		parts = append(parts, "level≥"+f.MinLevel.Level().String())
-	}
-	if len(parts) == 0 {
+		return f.expr.String()
+	default:
 		return "no filter"
 	}
-	return strings.Join(parts, " · ")
 }
 
 // View is an incrementally maintained filtered projection of a [Store].

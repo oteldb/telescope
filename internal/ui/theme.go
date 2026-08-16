@@ -67,6 +67,16 @@ var (
 	// styleMatch marks the characters a query matched inside a suggestion.
 	styleMatch = lipgloss.NewStyle().Foreground(colorMatch).Bold(true)
 
+	// styleStat colors the figures in the status line. The words around them
+	// stay dim so the eye lands on the counts, which is the only thing in that
+	// line read at a glance; coloring the words too would leave it a rainbow
+	// with nothing standing out of it.
+	styleStat = lipgloss.NewStyle().Foreground(colorText).Bold(true)
+
+	// styleOn marks a toggle that is in force. A count of what a toggle did
+	// never says whether it is still doing it.
+	styleOn = lipgloss.NewStyle().Foreground(colorOK).Bold(true)
+
 	styleTitle    = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	styleSelected = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	styleLabel    = lipgloss.NewStyle().Foreground(colorMuted)
