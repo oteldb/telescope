@@ -112,7 +112,8 @@
             "type": [
               "object",
               "null"
-            ]
+            ],
+            "writeOnly": true
           },
           "insecure": {
             "description": "Skip TLS verification, for a place behind a private CA.",
