@@ -289,6 +289,11 @@ func (s *Stream) scan(ctx context.Context, r io.Reader, isErr bool, wg *sync.Wai
 		// comes from the pty forced for ssh follow mode.
 		data := bytes.TrimSuffix(sc.Bytes(), []byte("\r"))
 		line := Line{Data: append([]byte(nil), data...), Stderr: isErr}
+		// Which pod wrote it comes off before the timestamp does: kubectl writes
+		// its prefix in front of the line the API server already stamped.
+		if s.cfg.Prefixes() {
+			line.Data, line.Labels = unprefix(line.Data)
+		}
 		if s.cfg.Stamps() {
 			line.Data, line.At = unstamp(line.Data)
 		}

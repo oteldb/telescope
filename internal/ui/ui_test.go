@@ -626,7 +626,7 @@ func TestCompletionFilterTerms(t *testing.T) {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 	m = send(t, m, k("enter"), k("enter"))
-	require.Equal(t, "kubectl logs -n oteldb deploy/api --tail 1000 -f", m.(Model).logs.cfg.Command())
+	require.Equal(t, "kubectl logs -n oteldb deploy/api --prefix --tail 1000 -f", m.(Model).logs.cfg.Command())
 }
 
 // TestUnknownFilterFieldIsSearchedFor: a colon in a value is the container
