@@ -22,7 +22,10 @@ func TestHighlightFieldReadsWellKnownKeys(t *testing.T) {
 		{"a method is a method", "http.request.method", "POST", ansiMethod + "POST" + ansiReset},
 		{"kubectl spells it verb", "verb", "GET", ansiMethod + "GET" + ansiReset},
 		{"a route reads as a path", "http.route", "/v1/users/:id", ansiPath + "/v1/users/:id" + ansiReset},
-		{"a duration is a number", "duration_ms", "12.5", ansiNum + "12.5" + ansiReset},
+		{"a duration is written as one", "duration_ms", "12.5", ansiNum + "12.5ms" + ansiReset},
+		{"the conventions count in seconds", "http.server.request.duration", "0.00166", ansiNum + "1.66ms" + ansiReset},
+		{"a duration whose unit nobody stated is left as it was", "duration", "12.5", ansiNum + "12.5" + ansiReset},
+		{"nor is one that already carries its unit rewritten", "latency_ms", "1.2s", ansiNum + "1.2s" + ansiReset},
 
 		{"a grpc code carries its name", "rpc.grpc.status_code", "5", ansiErr + "5 NOT_FOUND" + ansiReset},
 		{"zero is the one that worked", "grpc_code", "0", ansiOK + "0 OK" + ansiReset},
@@ -60,4 +63,30 @@ func TestNormalizeKeyFoldsSpelling(t *testing.T) {
 	for _, key := range []string{"k8s.pod.name", "k8s_pod_name", "K8S-POD-NAME", "k8s.pod_name"} {
 		require.Equal(t, semPod, semanticOf(key), key)
 	}
+}
+
+// TestAFamilyIsClassedByWhereItStarts: nobody can list what `process.*` will be
+// filled with, and everything under it describes the process all the same.
+func TestAFamilyIsClassedByWhereItStarts(t *testing.T) {
+	for _, key := range []string{
+		"service.name", "service.version", "service.instance.id",
+		"telemetry.sdk.language", "telemetry.distro.version",
+		"process.runtime.name", "process_pid",
+		"os.description", "os.type",
+		"host.name", "host.arch",
+	} {
+		require.Equal(t, semResource, semanticOf(key), key)
+	}
+	for _, key := range []string{"code.function.name", "code_filepath", "code.lineno"} {
+		require.Equal(t, semCode, semanticOf(key), key)
+	}
+	// A name that only starts the same way is not in the family.
+	for _, key := range []string{"hostname", "processed", "codec"} {
+		require.Equal(t, semNone, semanticOf(key), key)
+	}
+	// And classing a key does not start coloring it: neither family says
+	// anything about how its value should be read.
+	got, ok := HighlightField("service.name", "checkout-api")
+	require.False(t, ok)
+	require.Equal(t, "checkout-api", got)
 }
