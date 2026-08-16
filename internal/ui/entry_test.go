@@ -249,6 +249,23 @@ func TestClipboardToolFollowsTheDisplay(t *testing.T) {
 	require.Equal(t, []string{"wl-copy"}, clipboardTool(), "wayland wins where both are set")
 }
 
+// TestEntryColorsWhatALabelSaysItIs: a pod name is drawn here the same as it is
+// wherever else it turns up, since it is the color that says two lines are
+// about one pod.
+func TestEntryColorsWhatALabelSaysItIs(t *testing.T) {
+	labels := []source.Label{
+		{Key: "k8s.pod.name", Value: "nginx-7d8f"},
+		{Key: "http.response.status_code", Value: "503"},
+	}
+	view := entryOf(t, `{"msg":"served"}`, labels...).View()
+
+	for _, l := range labels {
+		want, ok := logs.HighlightField(l.Key, l.Value)
+		require.True(t, ok, l.Key)
+		require.Contains(t, view, want, l.Key)
+	}
+}
+
 // TestEntryTallValueShowsItsHead: a stacktrace is one row and taller than the
 // frame, and scrolling to its end would put its first line off the top.
 func TestEntryTallValueShowsItsHead(t *testing.T) {

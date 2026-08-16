@@ -130,6 +130,12 @@ func renderValue(key, value string) string {
 	case logs.KindTime:
 		return styleDim.Render(value)
 	}
+	// What a well-known key says its value is, colored the same here as it is
+	// down in the list: a namespace read in one place and in the other is the
+	// same namespace.
+	if colored, ok := logs.HighlightField(key, value); ok {
+		return colored
+	}
 	return logs.Highlight(value)
 }
 

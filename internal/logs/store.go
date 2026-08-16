@@ -198,7 +198,12 @@ func (s *Store) render(l source.Line) *Entry {
 		return nil
 	}
 	// pl passes unstructured lines through verbatim; those are ours to color.
-	if !rec.Structured && text == string(l.Data) {
+	// A structured line pl colored itself still says nothing about what its
+	// fields mean, which is where the status codes and the pod names are.
+	switch {
+	case rec.Structured:
+		text = highlightRecord(text, rec.Fields)
+	case text == string(l.Data):
 		text = Highlight(text)
 	}
 	// Whatever produced the rendering, part of it came from somebody else's
