@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -30,9 +31,13 @@ func TestSchemaIsCommitted(t *testing.T) {
 
 	want, err := os.ReadFile(schemaPath())
 	require.NoError(t, err)
-	require.Equal(t, string(want), string(got),
+	// A checkout on Windows rewrites the line endings of a text file, and what
+	// this compares is the document rather than the bytes it was checked out as.
+	require.Equal(t, lines(want), lines(got),
 		"run go test ./internal/config -update-schema")
 }
+
+func lines(data []byte) string { return strings.ReplaceAll(string(data), "\r\n", "\n") }
 
 // TestSchemaRequiresOnlyWhatAPlaceMustName: a place needs a name and a type and
 // nothing else, so neither its token nor its trace store may be marked
