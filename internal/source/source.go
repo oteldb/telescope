@@ -339,7 +339,10 @@ func (c Config) Command() string {
 		if t := c.Range.Since; !t.IsZero() {
 			args = append(args, "--since-time="+t.Format(time.RFC3339))
 		}
-		if c.Tail > 0 {
+		// Written whenever it is set rather than only when it is positive: a
+		// page asks for [allLines], which kubectl spells -1 and needs told,
+		// since a selector it was not told about defaults to ten.
+		if c.Tail != 0 {
 			args = append(args, "--tail", strconv.Itoa(c.Tail))
 		}
 		if c.following() {
@@ -351,11 +354,14 @@ func (c Config) Command() string {
 		if c.Stamps() {
 			args = append(args, "--timestamps")
 		}
+		// To the nanosecond, which docker reads and a whole second does not: a
+		// page ends just short of the line the reader is holding, and rounded
+		// down to the second that end would fall below lines it must not lose.
 		if t := c.Range.Since; !t.IsZero() {
-			args = append(args, "--since", t.Format(time.RFC3339))
+			args = append(args, "--since", t.Format(time.RFC3339Nano))
 		}
 		if t := c.Range.Until; !t.IsZero() {
-			args = append(args, "--until", t.Format(time.RFC3339))
+			args = append(args, "--until", t.Format(time.RFC3339Nano))
 		}
 		if c.Tail > 0 {
 			args = append(args, "--tail", strconv.Itoa(c.Tail))

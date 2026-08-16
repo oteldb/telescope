@@ -16,7 +16,7 @@ import (
 // reading that asked for it is scrolling.
 const pageSize = 1000
 
-// pageMsg carries what a database answered about what came before the oldest
+// pageMsg carries what the source answered about what came before the oldest
 // line held.
 type pageMsg struct {
 	// cfg identifies the stream that was asked, so a page arriving after the
@@ -68,7 +68,10 @@ func (m *logModel) wantPage() tea.Cmd {
 
 func pageCmd(cfg source.Config, before time.Time, limit int) tea.Cmd {
 	return func() tea.Msg {
-		lines, err := cfg.Page(context.Background(), before, limit)
+		// A collector hands over a bare line, and a page has to be dated to be
+		// joined to what is on the screen: same reason the stream is opened
+		// with this, same function doing the reading.
+		lines, err := cfg.Page(context.Background(), before, limit, source.WithTimeFunc(logs.LineTime))
 		return pageMsg{cfg: cfg.Title(), lines: lines, err: err}
 	}
 }

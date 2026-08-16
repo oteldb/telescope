@@ -68,15 +68,30 @@ func TestPageAtTheTop(t *testing.T) {
 		"and the reader is left on the line they were reading")
 }
 
-// TestPageOnlyWhereItCanBeAsked: a command has written what it wrote.
+// TestPageOnlyWhereItCanBeAsked: a free-form command is somebody else's line and
+// telescope has nowhere to put a bound in it.
 func TestPageOnlyWhereItCanBeAsked(t *testing.T) {
+	cfg := source.Config{Collector: source.CollectorCommand, Args: "tail -F /var/log/app.log"}
+	m := send(t, New(), size(), connectMsg{cfg: cfg})
+	m = send(t, m, linesMsg{lines: []source.Line{
+		{Data: []byte(`{"ts":"2026-08-10T10:00:00Z","msg":"first"}`)},
+		{Data: []byte(`{"ts":"2026-08-10T10:00:05Z","msg":"second"}`)},
+	}, closed: true})
+
+	_, cmd := m.Update(k("up"))
+	require.Nil(t, cmd)
+	require.NotContains(t, screen(t, m), "at the start")
+}
+
+// TestACollectorIsAskedForOlderLinesToo: the tools telescope writes the command
+// for take a window that ends, so reaching the top asks them for one.
+func TestACollectorIsAskedForOlderLinesToo(t *testing.T) {
 	m := logsModel(t,
 		`{"ts":"2026-08-10T10:00:00Z","msg":"first"}`,
 		`{"ts":"2026-08-10T10:00:05Z","msg":"second"}`,
 	)
 	_, cmd := m.Update(k("up"))
-	require.Nil(t, cmd)
-	require.NotContains(t, screen(t, m), "at the start")
+	require.NotNil(t, cmd, "docker bounds both ends of what it shows")
 }
 
 // TestPageEmptyIsTheStart: a database that answers with nothing has nothing

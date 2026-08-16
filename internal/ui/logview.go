@@ -74,7 +74,7 @@ type logModel struct {
 	fields map[string][]string
 	asked  map[string]bool
 
-	// paging is a page of older lines in flight, atStart is a database that
+	// paging is a page of older lines in flight, atStart is a source that
 	// answered there are none, atCap is the store with no room for another and
 	// pageErr is why the last one did not arrive. See [logModel.wantPage].
 	paging  bool

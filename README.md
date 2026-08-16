@@ -135,9 +135,11 @@ the grep it replaces. `?` writes the language out in full, and `tab` completes
 field names and values — including the ones only the database has seen yet. Over
 a log database as much of the filter as the server can answer is sent to it.
 
-**Reading backwards.** Over a database the tail is where reading starts and not
-how far back it goes: scroll to the first line and the ones before it are
-fetched.
+**Reading backwards.** The tail is where reading starts and not how far back it
+goes: scroll to the first line and the ones before it are fetched. A database
+answers directly, and journalctl, docker and kubectl are run again over the
+window below the screen. A `command:` place is the exception — telescope did not
+write that line and cannot bound it.
 
 **An entry** (`enter`) is shown whole — the labels, the fields, the raw bytes.
 `y` copies a value as it arrived, `f` narrows the list by it, and `o` opens what
