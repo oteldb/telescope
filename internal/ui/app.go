@@ -149,6 +149,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, l := range msg.lines {
 			m.logs.append(l)
 		}
+		m.logs.resolve()
 		m.logs.syncFollow()
 		if msg.closed {
 			return m, nil

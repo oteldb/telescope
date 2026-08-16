@@ -31,12 +31,12 @@ func (r run) last() int { return r.first + r.n - 1 }
 // heartbeat and not chatter, and folding the two together would take the gap
 // between them off the screen: the clamp is there to spend fewer rows on one
 // thing being said, never to make the log look busier than it was.
-func clampRuns(entries []*logs.Entry, on bool) []run {
+func clampRuns(entries []*logs.Entry, on bool, o logs.Origins) []run {
 	runs := make([]run, 0, len(entries))
 	var prev *logs.Entry
 	for i, e := range entries {
 		n := len(runs)
-		if _, quiet := gap(prev, e); on && n > 0 && !quiet && repeats(entries[runs[n-1].first], e) {
+		if _, quiet := gap(prev, e); on && n > 0 && !quiet && repeats(entries[runs[n-1].first], e, o) {
 			runs[n-1].n++
 			prev = e
 			continue
@@ -53,13 +53,13 @@ func clampRuns(entries []*logs.Entry, on bool) []run {
 // whenever it happened, so the time is not part of it; the source is, because
 // two pods of one deployment saying the same thing are two of them saying it
 // and not one saying it twice.
-func repeats(a, b *logs.Entry) bool {
+func repeats(a, b *logs.Entry, o logs.Origins) bool {
 	switch {
 	case a.Kind.IsNote() || b.Kind.IsNote():
 		// Telescope says a thing for a reason, and says it once. A second one
 		// is a second failure and has its own row.
 		return false
-	case a.Source != b.Source:
+	case a.Source != b.Source, !o.Same(a, b):
 		return false
 	case a.Record.TraceID != b.Record.TraceID:
 		// One message logged under two requests is two requests failing the

@@ -122,7 +122,7 @@ func TestAGapCostsARow(t *testing.T) {
 
 	lg := m.(Model).logs
 	entries := lg.view.Entries(lg.store)
-	runs := clampRuns(entries, lg.clamped)
+	runs := clampRuns(entries, lg.clamped, lg.origins)
 	require.Equal(t, lg.cursor, len(runs)-1, "following leaves the cursor on the last line")
 	require.LessOrEqual(t, lg.rows(entries, runs, lg.top, lg.cursor), lg.bodyHeight(),
 		"the window is counted in rows, gaps included")

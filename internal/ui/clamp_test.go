@@ -109,7 +109,7 @@ func TestClampingLeavesTheCursorOnItsLine(t *testing.T) {
 	m = pressRoot(t, m, "c")
 	lg = m.(Model).logs
 	entries = lg.view.Entries(lg.store)
-	runs := clampRuns(entries, lg.clamped)
+	runs := clampRuns(entries, lg.clamped, lg.origins)
 	require.Less(t, lg.cursor, len(runs))
 	require.Equal(t, "retrying", entries[runs[lg.cursor].first].Record.Body,
 		"and on the row that line is now drawn in")
@@ -141,13 +141,13 @@ func TestTwoSourcesAreNotOneRepeatingItself(t *testing.T) {
 		line("api-1", "ready"),
 		line("api-2", "ready"),
 		line("api-2", "ready"),
-	}, true)
+	}, true, logs.Origins{})
 	require.Len(t, runs, 2)
 	require.Equal(t, 1, runs[0].n)
 	require.Equal(t, 2, runs[1].n, "the same pod saying it twice is one row")
 
 	// A line with nothing to compare is not a copy of the one before it.
-	blank := clampRuns([]*logs.Entry{line("api-1", ""), line("api-1", "")}, true)
+	blank := clampRuns([]*logs.Entry{line("api-1", ""), line("api-1", "")}, true, logs.Origins{})
 	require.Len(t, blank, 2)
 }
 
@@ -177,13 +177,13 @@ func TestOneMessageUnderTwoRequestsIsTwoRows(t *testing.T) {
 			Record: logs.Record{Body: "checkout failed", TraceID: trace},
 		}
 	}
-	runs := clampRuns([]*logs.Entry{line("aaa"), line("aaa"), line("bbb")}, true)
+	runs := clampRuns([]*logs.Entry{line("aaa"), line("aaa"), line("bbb")}, true, logs.Origins{})
 	require.Len(t, runs, 2)
 	require.Equal(t, 2, runs[0].n, "the same request saying it twice is one row")
 	require.Equal(t, 1, runs[1].n)
 
 	// A line outside a trace still folds into another one outside it.
-	require.Len(t, clampRuns([]*logs.Entry{line(""), line("")}, true), 1)
+	require.Len(t, clampRuns([]*logs.Entry{line(""), line("")}, true, logs.Origins{}), 1)
 }
 
 // TestALineWithNoMessageIsStillARow: a database answering with records that

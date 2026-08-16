@@ -46,11 +46,13 @@ type logModel struct {
 	// costs rows only where there are rows to spare — see [logModel.volumeShown].
 	volume bool
 
-	// tags is how each source of a merge is marked in the gutter, keyed by the
-	// label its lines carry. Empty when there is only one source.
-	tags map[string]string
-	// cols are the gutter columns this stream has turned out to need.
-	cols columns
+	// cols are the gutter columns this stream has turned out to need, and
+	// origins what tells its streams apart where it turned out to be several.
+	cols    columns
+	origins logs.Origins
+	// resolved is how many lines origins was worked out from, so that a view
+	// drawn from a store somebody else appended to still names them.
+	resolved int
 	// times is how the time column is written, and origin is what an age in it
 	// is measured from: when the view was opened, and so when what it holds was
 	// asked for.
@@ -97,7 +99,6 @@ func newLogs(cfg source.Config, store *logs.Store, query string) logModel {
 
 	return logModel{
 		cfg:     cfg,
-		tags:    mergeTags(cfg),
 		store:   store,
 		view:    logs.NewView(logs.Filter{Query: query}),
 		follow:  true,
@@ -138,6 +139,20 @@ func (m *logModel) observe(e *logs.Entry) {
 	m.cols.level = m.cols.level || e.Record.HasLevel
 }
 
+// resolve works out again what tells the streams apart, which can only change
+// when a line arrives: a place turns out to be several streams as they speak,
+// and which label separates them is not named anywhere before that.
+func (m *logModel) resolve() {
+	if seen := m.store.Len() + m.store.Dropped(); seen != m.resolved {
+		m.origins, m.resolved = m.store.Origins(), seen
+	}
+}
+
+// runs are the rows the list draws, which is not one per line: see [clampRuns].
+func (m logModel) runs(entries []*logs.Entry) []run {
+	return clampRuns(entries, m.clamped, m.origins)
+}
+
 // gutter renders the columns of one entry, blank where it has nothing to say.
 //
 // The time is drawn here for every line, structured or not, rather than left to
@@ -168,24 +183,6 @@ func (m logModel) gutter(e *logs.Entry) string {
 		b.WriteByte(' ')
 	}
 	return b.String()
-}
-
-// mergeTags marks each source of a merge, padded to a single column so the
-// lines beside them line up whatever they came from.
-func mergeTags(cfg source.Config) map[string]string {
-	if cfg.Collector != source.CollectorMerge {
-		return nil
-	}
-	labels := cfg.Labels()
-	width := 0
-	for _, l := range labels {
-		width = max(width, lipgloss.Width(l))
-	}
-	out := make(map[string]string, len(labels))
-	for i, l := range labels {
-		out[l] = tagStyle(i).Render(l + strings.Repeat(" ", width-lipgloss.Width(l)))
-	}
-	return out
 }
 
 func (m *logModel) resize(w, h int) {
@@ -245,7 +242,7 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 	}
 	m.note = ""
 	entries := m.view.Entries(m.store)
-	runs := clampRuns(entries, m.clamped)
+	runs := m.runs(entries)
 	// at is the line a row draws, which is what every key that works from the
 	// cursor wants: the row is how the list is counted and never what it is
 	// about.
@@ -293,7 +290,7 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 			line = runs[m.cursor].first
 		}
 		m.clamped = !m.clamped
-		m.cursor = runAt(clampRuns(entries, m.clamped), line)
+		m.cursor = runAt(m.runs(entries), line)
 	case "l":
 		f := m.view.Filter()
 		f.MinLevel = f.MinLevel.Next()
@@ -466,7 +463,7 @@ func (m *logModel) syncFollow() {
 	if !m.follow {
 		return
 	}
-	if n := len(clampRuns(m.view.Entries(m.store), m.clamped)); n > 0 {
+	if n := len(m.runs(m.view.Entries(m.store))); n > 0 {
 		m.cursor = n - 1
 	}
 	m.clamp()
@@ -489,7 +486,7 @@ func (m *logModel) move(d, n int) {
 // two lines shorter than a screenful of one that did not.
 func (m *logModel) clamp() {
 	entries := m.view.Entries(m.store)
-	runs := clampRuns(entries, m.clamped)
+	runs := m.runs(entries)
 	n := len(runs)
 	h := m.bodyHeight()
 
@@ -514,8 +511,9 @@ func (m logModel) rows(entries []*logs.Entry, runs []run, from, to int) int {
 }
 
 func (m logModel) View() string {
+	m.resolve()
 	entries := m.view.Entries(m.store)
-	runs := clampRuns(entries, m.clamped)
+	runs := m.runs(entries)
 	m.clamp()
 
 	height := m.bodyHeight()
@@ -536,7 +534,7 @@ func (m logModel) View() string {
 				}
 			}
 		}
-		row := renderLine(e, m.tags[e.Source], m.gutter(e), r.n, i == m.cursor, m.hoff, inner)
+		row := renderLine(e, originCell(m.origins, e), m.gutter(e), r.n, i == m.cursor, m.hoff, inner)
 		switch {
 		case i == m.cursor:
 			row = cursorRow(row, inner)
@@ -616,11 +614,11 @@ func (m logModel) suggestRows() []string {
 // chips label where the stream comes from and what it reads.
 func (m logModel) chips() string {
 	if m.cfg.Collector == source.CollectorMerge {
-		// The sources are the legend for the tags down the gutter, so they are
-		// colored to match rather than by what they are.
+		// The places are the legend for the column down the gutter, so they are
+		// colored the way it colors them rather than by what they are.
 		var out strings.Builder
-		for i, l := range m.cfg.Labels() {
-			out.WriteString(tagStyle(i).Render(" " + l + " "))
+		for _, l := range m.cfg.Labels() {
+			out.WriteString(originStyle(l).Render(" " + l + " "))
 		}
 		return out.String()
 	}
