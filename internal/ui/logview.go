@@ -531,7 +531,7 @@ func (m logModel) View() string {
 				}
 			}
 		}
-		row := renderLine(e, m.store.Row(e), originCell(m.origins, e), m.gutter(e), r.n, i == m.cursor, m.hoff, inner)
+		row := renderLine(e, originRow(m.origins, m.store.Row(e)), originCell(m.origins, e), m.gutter(e), r.n, i == m.cursor, m.hoff, inner)
 		switch {
 		case i == m.cursor:
 			row = cursorRow(row, inner)

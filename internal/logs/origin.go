@@ -170,6 +170,19 @@ func (o Origins) Of(e *Entry) (label, id string) {
 	return cut(strings.Join(short, "/"), o.width), strings.Join(full, "/")
 }
 
+// Names says the column already draws this key, so a row that repeats it is
+// writing the same thing twice — and writing it longer, since the column drops
+// the part every stream shares and the row cannot.
+func (o Origins) Names(key string) bool {
+	norm := normalizeKey(key)
+	for _, k := range o.keys {
+		if normalizeKey(k.key) == norm {
+			return true
+		}
+	}
+	return false
+}
+
 // Same reports whether two entries came from the same stream. It is what a
 // clamp asks before folding a line into the one above it: the same words from
 // two pods are two of them saying it, not one saying it twice.
