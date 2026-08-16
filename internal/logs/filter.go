@@ -107,7 +107,10 @@ func (f Filter) Describe() string {
 
 // View is an incrementally maintained filtered projection of a [Store].
 type View struct {
-	filter  Filter
+	filter Filter
+	// entries are the matches among the entries the store has settled. The tail
+	// it has not is matched again on every ask, since a line arriving late lands
+	// among those and an incremental scan counts what it walked past.
 	entries []*Entry
 	// scanned is how many store entries have been considered so far.
 	scanned int
@@ -135,21 +138,35 @@ func (v *View) SetFilter(f Filter) {
 	v.base = 0
 }
 
-// Entries returns the entries of s matching the filter. Appends to the store
-// are folded in incrementally; eviction triggers a rescan.
+// Entries returns the entries of s matching the filter, in the order the store
+// holds them. Appends are folded in incrementally; eviction triggers a rescan,
+// and so does the first line that arrives out of order, after which the store's
+// unsettled tail is matched afresh each time.
 func (v *View) Entries(s *Store) []*Entry {
 	all := s.Entries()
+	settled := s.Settled()
 	if len(all) > 0 && all[0].Seq != v.base {
 		v.entries, v.scanned, v.base = nil, 0, all[0].Seq
 	}
-	if v.scanned > len(all) {
+	if v.scanned > settled {
 		v.entries, v.scanned = nil, 0
 	}
-	for _, e := range all[v.scanned:] {
+	for _, e := range all[v.scanned:settled] {
 		if v.filter.Match(e) {
 			v.entries = append(v.entries, e)
 		}
 	}
-	v.scanned = len(all)
-	return v.entries
+	v.scanned = settled
+	if settled == len(all) {
+		return v.entries
+	}
+	// Capped, so matching the tail appends into a slice of its own and leaves
+	// what is settled alone.
+	out := v.entries[:len(v.entries):len(v.entries)]
+	for _, e := range all[settled:] {
+		if v.filter.Match(e) {
+			out = append(out, e)
+		}
+	}
+	return out
 }

@@ -67,6 +67,10 @@ type Store struct {
 	// dropped counts entries evicted by the cap.
 	dropped int
 
+	// reordered says a line has arrived out of order, which is what makes the
+	// tail of the store something that can still change. See [reorderWindow].
+	reordered bool
+
 	// band and bandAt alternate the shading of each second, worked out as
 	// entries arrive: which second a line belongs to is settled once, and a
 	// view that scrolled or filtered could not work it out again.
@@ -95,15 +99,11 @@ func (s *Store) Append(l source.Line) *Entry {
 	if e == nil {
 		return nil
 	}
-	if sec := e.At.Truncate(time.Second); !sec.Equal(s.bandAt) {
-		s.band, s.bandAt = !s.band, sec
-	}
-	e.Band = s.band
 	e.Seq = s.seq
 	s.seq++
 	s.index.index(e)
 
-	s.entries = append(s.entries, e)
+	s.insert(e)
 	if len(s.entries) > s.max {
 		n := len(s.entries) - s.max
 		s.entries = append(s.entries[:0], s.entries[n:]...)
@@ -321,6 +321,7 @@ func (s *Store) Reset() {
 	s.entries = nil
 	s.seq = 0
 	s.dropped = 0
+	s.reordered = false
 	s.band, s.bandAt = false, time.Time{}
 	s.index = fieldIndex{}
 }
