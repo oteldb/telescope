@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // semantic is what a well-known key says its value is about. It is a coarser
@@ -27,6 +28,13 @@ const (
 	semPod
 	semContainer
 	semNode
+	// semResource and semCode are the two classes a row is better without. What
+	// a service is called, what it was built with and what machine it runs on
+	// is the same on every line it writes, and where in the source a line was
+	// logged from is a question asked of one line rather than of a screenful.
+	// Both are still worth reading in the entry view, which is where they stay.
+	semResource
+	semCode
 )
 
 // semanticKeys maps a normalized key to what it carries.
@@ -142,9 +150,28 @@ var semanticKeys = map[string]semantic{
 	"node":                 semNode,
 }
 
-// semanticOf classifies a key by what it is called.
+// classPrefixes are the families a key belongs to by the namespace it starts
+// in. They are prefixes rather than names because a resource is open-ended:
+// nobody can list what `process.*` will be filled with, and everything under it
+// describes the process all the same.
+var classPrefixes = map[string]semantic{
+	"service":   semResource,
+	"telemetry": semResource,
+	"process":   semResource,
+	"os":        semResource,
+	"host":      semResource,
+	"code":      semCode,
+}
+
+// semanticOf classifies a key by what it is called, falling back to the family
+// it is written in.
 func semanticOf(key string) semantic {
-	if s, ok := semanticKeys[normalizeKey(key)]; ok {
+	key = normalizeKey(key)
+	if s, ok := semanticKeys[key]; ok {
+		return s
+	}
+	head, _, _ := strings.Cut(key, "_")
+	if s, ok := classPrefixes[head]; ok {
 		return s
 	}
 	return semNone
@@ -167,7 +194,7 @@ func HighlightField(key, value string) (string, bool) {
 	if value == "" {
 		return value, false
 	}
-	text, color := semanticOf(key).render(value)
+	text, color := semanticOf(key).render(key, value)
 	if color == "" {
 		return value, false
 	}
@@ -177,7 +204,7 @@ func HighlightField(key, value string) (string, bool) {
 // render is the value as it should be drawn and the color to draw it in. An
 // empty color means the value did not turn out to be what the key claimed:
 // `status` is a severity as often as it is a status code.
-func (s semantic) render(value string) (text, color string) {
+func (s semantic) render(key, value string) (text, color string) {
 	switch s {
 	case semHTTPStatus:
 		return value, httpStatusColor(value)
@@ -187,7 +214,9 @@ func (s semantic) render(value string) (text, color string) {
 		return value, ansiMethod
 	case semHTTPRoute:
 		return value, ansiPath
-	case semDuration, semNumber:
+	case semDuration:
+		return humanDuration(key, value), ansiNum
+	case semNumber:
 		return value, ansiNum
 	case semRPCName, semDestination:
 		return value, ansiName
@@ -226,6 +255,70 @@ func httpStatusColor(value string) string {
 	default:
 		return ""
 	}
+}
+
+// durationUnits are the units a key spells out at its end, and what one of them
+// is worth. Only the unambiguous ones are here: a bare `duration` is seconds to
+// one library and milliseconds to the next, and a number rewritten under the
+// wrong guess is worse than the number.
+var durationUnits = []struct {
+	suffix string
+	unit   time.Duration
+}{
+	{"_nanoseconds", time.Nanosecond},
+	{"_nanos", time.Nanosecond},
+	{"_ns", time.Nanosecond},
+	{"_microseconds", time.Microsecond},
+	{"_micros", time.Microsecond},
+	{"_us", time.Microsecond},
+	{"_milliseconds", time.Millisecond},
+	{"_millis", time.Millisecond},
+	{"_ms", time.Millisecond},
+	{"_seconds", time.Second},
+	{"_secs", time.Second},
+	{"_sec", time.Second},
+	{"_s", time.Second},
+}
+
+// otelDurations are the conventions' own timings, which are seconds by
+// definition and do not say so in the name.
+var otelDurations = []string{
+	"http_server_request_duration",
+	"http_client_request_duration",
+}
+
+// humanDuration writes an elapsed time as a time rather than as a number, where
+// the key says what the number counts. `0.00166` is a duration nobody reads at
+// a glance and `1.66ms` is one everybody does.
+func humanDuration(key, value string) string {
+	unit, ok := durationUnit(key)
+	if !ok {
+		return value
+	}
+	// A value that already carries its unit is one the writer humanized, and a
+	// second reading of it would be a guess about the first.
+	n, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil {
+		return value
+	}
+	d := time.Duration(n * float64(unit))
+	if d == 0 {
+		return value
+	}
+	return d.String()
+}
+
+func durationUnit(key string) (time.Duration, bool) {
+	key = normalizeKey(key)
+	if slices.Contains(otelDurations, key) {
+		return time.Second, true
+	}
+	for _, u := range durationUnits {
+		if strings.HasSuffix(key, u.suffix) {
+			return u.unit, true
+		}
+	}
+	return 0, false
 }
 
 func firstToken(s string) string {
