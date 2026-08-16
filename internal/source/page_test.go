@@ -12,18 +12,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestPageOnlyDatabases: a command has already written what it wrote, so there
-// is nothing to ask it for.
-func TestPageOnlyDatabases(t *testing.T) {
-	for _, c := range []Collector{CollectorJournal, CollectorKubectl, CollectorDocker, CollectorCommand} {
-		cfg := Config{Collector: c}
-		require.False(t, cfg.CanPage(), c)
-		lines, err := cfg.Page(t.Context(), time.Now(), 100)
-		require.NoError(t, err, c)
-		require.Empty(t, lines, c)
+// TestPagingIsPerTool: what a source can be asked for is what the tool behind it
+// will bound, which is a question about the tool and not about its shape.
+func TestPagingIsPerTool(t *testing.T) {
+	for _, c := range []Collector{
+		CollectorJournal, CollectorKubectl, CollectorDocker,
+		CollectorLoki, CollectorVictoriaLogs,
+	} {
+		require.True(t, Config{Collector: c}.CanPage(), c)
 	}
-	require.True(t, Config{Collector: CollectorLoki}.CanPage())
-	require.True(t, Config{Collector: CollectorVictoriaLogs}.CanPage())
+
+	// A line telescope did not write has nowhere to put a bound.
+	cfg := Config{Collector: CollectorCommand, Args: "tail -F /var/log/app.log"}
+	require.False(t, cfg.CanPage())
+	lines, err := cfg.Page(t.Context(), time.Now(), 100)
+	require.NoError(t, err)
+	require.Empty(t, lines)
 }
 
 // TestLokiPage: the page is the stream's own query against an end just before
@@ -246,7 +250,7 @@ func TestMergePageSurvivesAChild(t *testing.T) {
 // the timeline reads as a source that was quiet then.
 func TestAMergePagesOnlyWhereEveryChildDoes(t *testing.T) {
 	db := vlogsConfig("http://127.0.0.1:0", false)
-	command := Config{Collector: CollectorDocker, Container: "app"}
+	command := Config{Collector: CollectorCommand, Args: "tail -F /var/log/app.log"}
 
 	require.True(t, mergeOf(db, db).CanPage())
 	require.False(t, mergeOf(db, command).CanPage())

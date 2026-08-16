@@ -36,21 +36,31 @@ func (c Config) backfill() int {
 
 // CanPage reports whether the source can be asked for what came before a line.
 //
-// Only a log database can. A collector is a process writing to a pipe: what it
-// has already written is gone, and what it will write next is the only thing
-// left to read. That is why the tail of a command is a number chosen up front
-// and the tail of a database need not be.
+// A log database always can. A collector can where the tool it runs will bound
+// a window that ends: journalctl takes --until and docker takes --until, so
+// both are simply run again over the window below the one on the screen.
+// "kubectl logs" takes no end bound and is paged anyway, by reading from
+// earlier and stopping by hand — see [Config.kubePage] for what that costs and
+// why it is still worth doing.
+//
+// A free-form command is the one that cannot. It is somebody else's line and
+// telescope has nowhere to put a bound in it: what such a process has already
+// written is gone, and what it writes next is the only thing left to read.
 //
 // A merge pages only where every child does. One that cannot would contribute
 // nothing to the page, and a stream missing from a stretch of the timeline
 // reads as a stream that was quiet then — which is the one thing a merge must
 // never say on a source's behalf.
 func (c Config) CanPage() bool {
-	if c.Collector == CollectorMerge {
+	switch c.Collector {
+	case CollectorMerge:
 		return len(c.Merge) > 0 && !slices.ContainsFunc(c.Children(),
 			func(sub Config) bool { return !sub.CanPage() })
+	case CollectorJournal, CollectorDocker, CollectorKubectl:
+		return true
+	default:
+		return c.Collector.IsRemoteAPI()
 	}
-	return c.Collector.IsRemoteAPI()
 }
 
 // Page reads at most limit entries older than before, oldest first, so a view
@@ -65,25 +75,33 @@ func (c Config) CanPage() bool {
 // empty page inside that window means the window is empty, not that the
 // database is: what the bound is when nothing was named is each collector's
 // own, since it is their rule and not ours.
-func (c Config) Page(ctx context.Context, before time.Time, limit int) ([]Line, error) {
+//
+// A collector that hands over a bare line takes [WithTimeFunc] for the same
+// reason a stream does: the page has to be dated to be joined to what is on the
+// screen, and reading the date means parsing the line.
+func (c Config) Page(ctx context.Context, before time.Time, limit int, opts ...Option) ([]Line, error) {
 	if limit <= 0 || before.IsZero() || !c.CanPage() {
 		return nil, nil
 	}
 	if t := c.Range.Since; !t.IsZero() && !before.After(t) {
 		return nil, nil
 	}
+	var opt options
+	for _, o := range opts {
+		o(&opt)
+	}
 	ctx, cancel := context.WithTimeout(ctx, pageTimeout)
 	defer cancel()
 
-	if c.Collector == CollectorMerge {
-		return c.mergePage(ctx, before, limit)
-	}
-	client := httpClient(c.Endpoint)
 	switch c.Collector {
+	case CollectorMerge:
+		return c.mergePage(ctx, before, limit, opts...)
 	case CollectorLoki:
-		return c.lokiPage(ctx, client, before, limit)
+		return c.lokiPage(ctx, httpClient(c.Endpoint), before, limit)
 	case CollectorVictoriaLogs:
-		return c.vlogsPage(ctx, client, before, limit)
+		return c.vlogsPage(ctx, httpClient(c.Endpoint), before, limit)
+	case CollectorJournal, CollectorDocker, CollectorKubectl:
+		return c.commandPage(ctx, before, limit, opt)
 	default:
 		return nil, nil
 	}
@@ -100,7 +118,7 @@ func (c Config) Page(ctx context.Context, before time.Time, limit int) ([]Line, 
 //
 // A child that fails costs its own lines and not the page, the way an
 // unreachable source costs its own lines and not the merge.
-func (c Config) mergePage(ctx context.Context, before time.Time, limit int) ([]Line, error) {
+func (c Config) mergePage(ctx context.Context, before time.Time, limit int, opts ...Option) ([]Line, error) {
 	var (
 		children = c.Children()
 		labels   = c.Labels()
@@ -110,7 +128,7 @@ func (c Config) mergePage(ctx context.Context, before time.Time, limit int) ([]L
 	)
 	for i, child := range children {
 		wg.Go(func() {
-			lines, err := child.Page(ctx, before, limit)
+			lines, err := child.Page(ctx, before, limit, opts...)
 			for j := range lines {
 				lines[j].Source = labels[i]
 			}
