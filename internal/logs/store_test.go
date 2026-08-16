@@ -51,7 +51,7 @@ func TestStoreFoldsMultilineRenders(t *testing.T) {
 	require.True(t, strings.HasSuffix(e.Head, ansiReset), "no color leaks past the cut")
 
 	single := s.Append(line(`{"level":"info","msg":"fine"}`))
-	require.Equal(t, single.Text, single.Head)
+	require.Contains(t, single.Text, "fine")
 	require.Zero(t, single.Extra)
 }
 

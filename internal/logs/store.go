@@ -32,7 +32,12 @@ type Entry struct {
 	Source string
 	// Labels are what the source reported beside the line.
 	Labels []source.Label
-	At     time.Time // Record time, falling back to arrival time
+	// Row is what this line has to show beside its message, in the order a
+	// reader scans it. How many of them fit is the view's, and which of them
+	// still say anything is [Store.Row]'s — that changes as lines arrive, so it
+	// cannot be settled here.
+	Row []RowField
+	At  time.Time // Record time, falling back to arrival time
 	// HasTime says At is when the line was written rather than when it turned
 	// up here, which is the difference between a time worth showing and one
 	// that only says the view is running.
@@ -80,6 +85,9 @@ type Store struct {
 	// index is what the prompt completes by, built here for the same reason the
 	// band is: on arrival, once.
 	index fieldIndex
+	// vary is which of a line's fields are worth a column, which is the one
+	// thing about a row that is not settled when the line arrives.
+	vary varyIndex
 }
 
 // NewStore returns a store retaining at most limit entries.
@@ -102,6 +110,7 @@ func (s *Store) Append(l source.Line) *Entry {
 	e.Seq = s.seq
 	s.seq++
 	s.index.index(e)
+	s.vary.index(e)
 
 	s.insert(e)
 	if len(s.entries) > s.max {
@@ -145,6 +154,7 @@ func (s *Store) Prepend(lines []source.Line) []*Entry {
 		e.Seq = s.seq
 		s.seq++
 		s.index.index(e)
+		s.vary.index(e)
 	}
 
 	switch {
@@ -224,12 +234,7 @@ func (s *Store) render(l source.Line) *Entry {
 		text = emptyText
 	}
 	// pl passes unstructured lines through verbatim; those are ours to color.
-	// A structured line pl colored itself still says nothing about what its
-	// fields mean, which is where the status codes and the pod names are.
-	switch {
-	case rec.Structured:
-		text = highlightRecord(text, rec.Fields)
-	case text == string(l.Data):
+	if !rec.Structured && text == string(l.Data) {
 		text = Highlight(text)
 	}
 	// Whatever produced the rendering, part of it came from somebody else's
@@ -237,12 +242,22 @@ func (s *Store) render(l source.Line) *Entry {
 	text = Sanitize(text)
 
 	head, extra := fold(text)
+	// A structured line's row is composed here rather than taken from pl's
+	// first line. What pl writes after the message is every field it found, in
+	// the order they arrived and as wide as they happen to be; what a row has
+	// is a few columns of screen and a reader scanning down them. The rendering
+	// pl made is still what the entry view shows, and still what has the
+	// stacktrace under it.
+	if rec.Structured {
+		head = message(rec)
+	}
 
 	e := &Entry{
 		Raw:       l.Data,
 		Text:      text,
 		Head:      head,
 		Extra:     extra,
+		Row:       rowFields(rec, l.Labels),
 		Stderr:    l.Stderr,
 		Kind:      l.Kind,
 		Source:    l.Source,

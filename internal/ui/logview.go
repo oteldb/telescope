@@ -112,11 +112,11 @@ func newLogs(cfg source.Config, store *logs.Store, query string) logModel {
 
 // columns are the fields drawn to the left of a line, as opposed to inside it.
 //
-// A structured line is rendered with its own time and level by the formatter,
-// so the columns are only for lines that carry neither: what a log database
-// reports beside a bare message. They are turned on by the first line that
-// needs them and stay on, so the text does not shift left and right as lines of
-// both kinds arrive.
+// Everything a line says about itself rather than about what happened belongs
+// here, where it lines up down the screen: a severity written wherever the
+// message left off is a severity nobody can scan. They are turned on by the
+// first line that needs them and stay on, so the text does not shift left and
+// right as lines that have them and lines that do not arrive together.
 type columns struct {
 	time  bool
 	level bool
@@ -133,9 +133,6 @@ func (m *logModel) observe(e *logs.Entry) {
 	}
 	m.cols.time = m.cols.time || e.HasTime
 	m.cols.trace = m.cols.trace || e.Record.TraceID != ""
-	if e.Record.Structured {
-		return
-	}
 	m.cols.level = m.cols.level || e.Record.HasLevel
 }
 
@@ -171,7 +168,7 @@ func (m logModel) gutter(e *logs.Entry) string {
 	}
 	if m.cols.level {
 		switch {
-		case e.Record.HasLevel && !e.Record.Structured:
+		case e.Record.HasLevel:
 			b.WriteString(renderLevel(e.Record.Level))
 		default:
 			b.WriteString(strings.Repeat(" ", levelWidth))
@@ -534,7 +531,7 @@ func (m logModel) View() string {
 				}
 			}
 		}
-		row := renderLine(e, originCell(m.origins, e), m.gutter(e), r.n, i == m.cursor, m.hoff, inner)
+		row := renderLine(e, m.store.Row(e), originCell(m.origins, e), m.gutter(e), r.n, i == m.cursor, m.hoff, inner)
 		switch {
 		case i == m.cursor:
 			row = cursorRow(row, inner)
@@ -650,7 +647,12 @@ func (m logModel) filterBar() string {
 // The tag and the gutter are drawn outside the horizontal offset: where a line
 // came from and when it was written are the last things that should scroll away
 // from it.
-func renderLine(e *logs.Entry, tag, gutter string, repeat int, selected bool, hoff, width int) string {
+//
+// What the fields are and what order they come in was decided in logs; how many
+// of them there is room for is decided here, on the width the terminal is now.
+// A rendering that spent the width when the line arrived could not survive the
+// window being dragged wider.
+func renderLine(e *logs.Entry, fields []logs.RowField, tag, gutter string, repeat int, selected bool, hoff, width int) string {
 	marker := "  "
 	if selected {
 		marker = styleSelected.Render("▎ ")
@@ -663,21 +665,59 @@ func renderLine(e *logs.Entry, tag, gutter string, repeat int, selected bool, ho
 	if e.Stderr {
 		text = styleErr.Render("!") + " " + text
 	}
+	// The counts are written before the fields are laid out, since they say how
+	// much of the line the row is not showing and a field crowding them off the
+	// screen would be the row hiding that it hid something.
+	var tail string
 	if e.Extra > 0 {
 		// A stacktrace would otherwise take over the list; the entry view has it.
-		text += styleDim.Render(fmt.Sprintf(" ⏎%d", e.Extra))
+		tail += styleDim.Render(fmt.Sprintf(" ⏎%d", e.Extra))
 	}
 	if repeat > 1 {
 		// What the line said, and how many times running it said it. The count
 		// is the row's and not the line's, which is why it is drawn here and
 		// not folded into the rendering when the line arrived.
-		text += styleDim.Render(fmt.Sprintf(" ×%d", repeat))
+		tail += styleDim.Render(fmt.Sprintf(" ×%d", repeat))
 	}
+	room := width - lipgloss.Width(marker) - lipgloss.Width(text) - lipgloss.Width(tail)
+	text += spendFields(fields, room) + tail
 	if hoff > 0 {
 		text = ansi.TruncateLeft(text, hoff, "")
 	}
 	return marker + ansi.Truncate(text, max(width-lipgloss.Width(marker), 1), styleDim.Render("→"))
 }
+
+// spendFields writes as many of a row's fields as the room left will take, and
+// counts what it could not.
+//
+// The count is not decoration: a row that quietly stopped after two fields
+// would read as a line with two fields, and the reader would have no reason to
+// open it. It is the same promise the ⏎ and × marks make about the lines this
+// row stands for.
+func spendFields(fields []logs.RowField, room int) string {
+	var (
+		out   strings.Builder
+		spent int
+	)
+	for i, f := range fields {
+		text := "  " + f.Render()
+		// Whatever is written must leave room to say what is not, unless this
+		// is the last one and there will be nothing left to say.
+		reserve := 0
+		if i < len(fields)-1 {
+			reserve = lipgloss.Width(moreFields(len(fields) - i - 1))
+		}
+		if spent+lipgloss.Width(text)+reserve > room {
+			return out.String() + styleDim.Render(moreFields(len(fields)-i))
+		}
+		out.WriteString(text)
+		spent += lipgloss.Width(text)
+	}
+	return out.String()
+}
+
+// moreFields is how the row says it is carrying more than it showed.
+func moreFields(n int) string { return fmt.Sprintf("  +%d", n) }
 
 // topBar carries what the list is not showing as well as what it is: folded is
 // how many lines the clamp took out of it, and a list that quietly stood for
