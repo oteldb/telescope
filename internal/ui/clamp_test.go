@@ -185,3 +185,18 @@ func TestOneMessageUnderTwoRequestsIsTwoRows(t *testing.T) {
 	// A line outside a trace still folds into another one outside it.
 	require.Len(t, clampRuns([]*logs.Entry{line(""), line("")}, true), 1)
 }
+
+// TestALineWithNoMessageIsStillARow: a database answering with records that
+// carry everything in their labels leaves nothing for the body, and a list that
+// drew none of them would read as silence over a busy source.
+func TestALineWithNoMessageIsStillARow(t *testing.T) {
+	at := time.Date(2026, 8, 11, 15, 16, 36, 0, time.Local)
+	labeled := func(d time.Duration, status string) source.Line {
+		return source.Line{At: at.Add(d), Labels: []source.Label{{Key: "status", Value: status}}}
+	}
+	m := timedModel(t, labeled(0, "200"), labeled(time.Second, "404"), labeled(2*time.Second, "500"))
+
+	rows := rowsOf(t, m)
+	require.Equal(t, 3, countRows(rows, "(empty)"), "one row each, not one run of three")
+	require.Contains(t, strings.Join(rows, "\n"), "3 lines")
+}

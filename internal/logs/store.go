@@ -1,6 +1,7 @@
 package logs
 
 import (
+	"bytes"
 	"slices"
 	"strings"
 	"time"
@@ -171,6 +172,14 @@ func (s *Store) Prepend(lines []source.Line) []*Entry {
 	return page
 }
 
+// emptyText stands in for a line that said nothing, so the row is somewhere the
+// reader can put a cursor and the entry beside it can be opened for its labels.
+const emptyText = ansiTime + "(empty)" + ansiReset
+
+// blank reports whether a line is whitespace and nothing else, which is what pl
+// refuses to format.
+func blank(data []byte) bool { return len(bytes.TrimSpace(data)) == 0 }
+
 // render turns a line into an entry, without deciding where in the store it
 // belongs: what a line says is its own, and its sequence, shading and place in
 // the list are the store's.
@@ -194,8 +203,25 @@ func (s *Store) render(l source.Line) *Entry {
 	}
 
 	text, ok := s.fmt.Format(l.Data)
-	if !ok {
+	switch {
+	case ok:
+	case !blank(l.Data):
+		// pl declines a line it will not format, which for the formatter here
+		// only ever means an empty one; anything else it refuses it refuses for
+		// a reason this cannot second-guess.
 		return nil
+	case len(l.Labels) == 0 && l.At.IsZero():
+		// Nothing said it, nothing dated it, nothing labeled it: the blank line
+		// between two records rather than a record.
+		return nil
+	default:
+		// A log database can answer with a record whose whole content is in the
+		// labels beside it — an access log shipped by its fields has nothing
+		// left to put in the body. Dropping it loses the line outright: no row,
+		// no count, no bar over it, and a stream that reads as silent while it
+		// is busy. So it becomes an entry saying it had nothing to say, and the
+		// labels arrive with it as any other line's do.
+		text = emptyText
 	}
 	// pl passes unstructured lines through verbatim; those are ours to color.
 	// A structured line pl colored itself still says nothing about what its

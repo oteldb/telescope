@@ -209,6 +209,40 @@ func TestLabelsAreGreppable(t *testing.T) {
 	}
 }
 
+// TestAnEmptyBodyStillReaches: a database can answer with a record that put
+// everything it knows in the labels, and a line dropped for having no message
+// is a line the reader is never told about.
+func TestAnEmptyBodyStillReaches(t *testing.T) {
+	s := NewStore(10)
+	e := s.Append(source.Line{
+		Data: []byte(""),
+		At:   time.Date(2026, 8, 11, 15, 16, 36, 0, time.UTC),
+		Labels: []source.Label{
+			{Key: "status", Value: "404"},
+			{Key: "router", Value: "edge-a"},
+		},
+	})
+
+	require.NotNil(t, e)
+	require.Equal(t, 1, s.Len())
+	require.NotEmpty(t, e.Head, "an invisible row is as good as a dropped line")
+	require.NotContains(t, e.Head, "\n")
+	require.Zero(t, e.Extra)
+	require.True(t, e.HasTime)
+	require.Empty(t, e.Record.Body)
+
+	require.Len(t, NewView(Filter{Query: "edge-a"}).Entries(s), 1, "the labels are all it can be found by")
+}
+
+// TestABlankLineIsNotALine: a line with no message, no time and no labels is
+// the newline a command printed between two records.
+func TestABlankLineIsNotALine(t *testing.T) {
+	s := NewStore(10)
+	require.Nil(t, s.Append(line("")))
+	require.Nil(t, s.Append(line("   \t ")))
+	require.Zero(t, s.Len())
+}
+
 // TestSourceTimeIsATime: a time reported beside the line is when it was
 // written, not when it turned up here.
 func TestSourceTimeIsATime(t *testing.T) {
