@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -50,6 +51,9 @@ func TestInitWritesAConfigThatLoads(t *testing.T) {
 	require.Equal(t, "logs", cfg.Places[0].Name)
 	require.Equal(t, "http://127.0.0.1:3100", cfg.Places[0].URL)
 
+	if runtime.GOOS == "windows" {
+		t.Skip("no POSIX permission bits to read the mode off")
+	}
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
