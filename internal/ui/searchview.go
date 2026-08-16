@@ -163,7 +163,7 @@ func shortID(id string) string {
 
 func (m searchModel) suggestionList(names []string, width int) []string {
 	rows := make([]string, 0, len(names)+1)
-	rows = append(rows, styleDim.Render(searchField(m.focus).label()+" the store knows"))
+	rows = append(rows, styleDim.Render(m.suggestTitle()))
 	for i, name := range names {
 		row := "  " + logs.Sanitize(name)
 		if i == m.sug {
@@ -172,6 +172,19 @@ func (m searchModel) suggestionList(names []string, width int) []string {
 		rows = append(rows, ansi.Truncate(row, width, "…"))
 	}
 	return rows
+}
+
+// suggestTitle says what is being offered. The tag field is two lists under one
+// label — the keys, then what one of them has been — and a heading that said
+// "tags" for both would leave the reader working out which arrived.
+func (m searchModel) suggestTitle() string {
+	if searchField(m.focus) == fieldTags {
+		if at := m.tagAt(); at.Key != "" {
+			return logs.Sanitize(at.Key) + " values the store knows"
+		}
+		return "tag keys the store knows"
+	}
+	return searchField(m.focus).label() + " the store knows"
 }
 
 func (m searchModel) footer() string {

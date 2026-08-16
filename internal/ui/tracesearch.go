@@ -76,6 +76,12 @@ type searchModel struct {
 	// moment somebody types a different one.
 	services, operations []string
 	opsFor               string
+	// tagKeys are what the store says its spans are labeled with and tagValues
+	// what one of those tags has been; valuesFor is which tag they belong to,
+	// which goes stale for the reason opsFor does — a list of values under a key
+	// nobody is typing any more is a list of the wrong thing.
+	tagKeys, tagValues []string
+	valuesFor          string
 	// sug is which suggestion is highlighted, or -1 for none. Typing clears it:
 	// a highlight left standing would accept a name nobody was looking at.
 	sug int
@@ -176,10 +182,17 @@ func (m searchModel) Update(msg tea.Msg) (searchModel, tea.Cmd) {
 		m.results, m.trees = nil, nil
 		return m, nil
 	case searchNamesMsg:
-		if msg.field == fieldService {
+		switch msg.field {
+		case fieldService:
 			m.services = msg.names
-		} else {
-			m.operations, m.opsFor = msg.names, msg.service
+		case fieldTags:
+			if msg.of == "" {
+				m.tagKeys = msg.names
+			} else {
+				m.tagValues, m.valuesFor = msg.names, msg.of
+			}
+		default:
+			m.operations, m.opsFor = msg.names, msg.of
 		}
 		return m, nil
 	}
@@ -232,8 +245,7 @@ func (m searchModel) updateForm(km tea.KeyMsg) (searchModel, tea.Cmd) {
 
 	case "enter":
 		if m.sug >= 0 && m.sug < len(names) {
-			m.inputs[m.focus].SetValue(names[m.sug])
-			m.inputs[m.focus].CursorEnd()
+			m.take(names[m.sug])
 			m.sug = -1
 			return m, m.listNames()
 		}
@@ -249,12 +261,31 @@ func (m searchModel) updateForm(km tea.KeyMsg) (searchModel, tea.Cmd) {
 	if m.inputs[m.focus].Value() != before {
 		m.sug = -1
 		// The operations a service was called to do go stale as soon as the
-		// service does.
-		if searchField(m.focus) == fieldService {
+		// service does, and a keystroke in the tag field moves between a key and
+		// its values, which are two different lists to have asked for.
+		switch searchField(m.focus) {
+		case fieldService, fieldTags:
 			return m, tea.Batch(cmd, m.listNames())
 		}
 	}
 	return m, cmd
+}
+
+// take writes an offered name into the field it was offered under.
+//
+// The tag field takes it in place of the term the cursor is in rather than as
+// the whole value, since it holds several pairs and finishing one must not
+// throw away the rest.
+func (m *searchModel) take(name string) {
+	if searchField(m.focus) == fieldTags {
+		at := m.tagAt()
+		value, pos := at.apply(m.value(fieldTags), name, at.Key == "")
+		m.inputs[fieldTags].SetValue(value)
+		m.inputs[fieldTags].SetCursor(pos)
+		return
+	}
+	m.inputs[m.focus].SetValue(name)
+	m.inputs[m.focus].CursorEnd()
 }
 
 func (m searchModel) updateResults(km tea.KeyMsg) (searchModel, tea.Cmd) {
@@ -430,22 +461,49 @@ func parseSearchDur(s string) (time.Duration, error) {
 // suggestions are the names offered under the focused field, narrowed by what
 // has been typed into it.
 func (m searchModel) suggestions() []string {
-	var all []string
 	switch searchField(m.focus) {
 	case fieldService:
-		all = m.services
+		return narrowNames(m.services, m.value(fieldService))
 	case fieldOperation:
-		all = m.operations
+		if m.opsFor != m.operationsFor() {
+			// The list belongs to a different service. Offering it would name
+			// operations this one was never called to do, which is worse than
+			// offering nothing while the new list is on its way.
+			return nil
+		}
+		return narrowNames(m.operations, m.value(fieldOperation))
+	case fieldTags:
+		at := m.tagAt()
+		switch {
+		case !at.OK:
+			return nil
+		case at.Key == "":
+			return narrowNames(m.tagKeys, at.Prefix)
+		case m.valuesFor != at.Key:
+			// Values listed under another key, for the reason above: they are
+			// what some other tag has been.
+			return nil
+		default:
+			return narrowNames(m.tagValues, at.Prefix)
+		}
 	default:
 		return nil
 	}
-	if searchField(m.focus) == fieldOperation && m.opsFor != m.operationsFor() {
-		// The list belongs to a different service. Offering it would name
-		// operations this one was never called to do, which is worse than
-		// offering nothing while the new list is on its way.
-		return nil
-	}
-	typed := strings.ToLower(strings.TrimSpace(m.inputs[m.focus].Value()))
+}
+
+// tagAt is what the tag field is being asked to finish, read off the text
+// around the cursor rather than off the whole field: it holds a run of
+// key=value pairs, and which half of one the cursor is in is what says whether
+// a name or a value is wanted. That is the same reading the filter prompt makes
+// of a query, so it is the same function that makes it.
+func (m searchModel) tagAt() completion {
+	return completeAt(m.value(fieldTags), m.inputs[fieldTags].Position())
+}
+
+// narrowNames keeps the names that hold what has been typed of one, at most a
+// screenful of them.
+func narrowNames(all []string, typed string) []string {
+	typed = strings.ToLower(strings.TrimSpace(typed))
 	var out []string
 	for _, name := range all {
 		if typed == "" || strings.Contains(strings.ToLower(name), typed) {
@@ -479,6 +537,21 @@ func (m searchModel) listNames() tea.Cmd {
 			return nil
 		}
 		return listTraceNames(m.at, fieldOperation, service)
+	case fieldTags:
+		at := m.tagAt()
+		switch {
+		case !at.OK:
+			return nil
+		case at.Key == "":
+			if m.tagKeys != nil {
+				return nil
+			}
+			return listTraceNames(m.at, fieldTags, "")
+		case m.tagValues != nil && m.valuesFor == at.Key:
+			return nil
+		default:
+			return listTraceNames(m.at, fieldTags, at.Key)
+		}
 	default:
 		return nil
 	}

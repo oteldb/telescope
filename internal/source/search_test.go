@@ -178,6 +178,57 @@ func TestJaegerListsNoOperationsUntilAServiceIsNamed(t *testing.T) {
 	require.False(t, asked)
 }
 
+// Tempo lists its tags by scope, and the field they are offered under is typed
+// unscoped, so what comes back is the names without them.
+func TestTagKeysAreListedWithoutTheirScope(t *testing.T) {
+	srv, _, _ := searchServer(t, tempoTagsPath, `{"scopes":[
+		{"name":"resource","tags":["service.name","cluster"]},
+		{"name":"span","tags":["http.method","service.name"]},
+		{"name":"intrinsic","tags":["name"]}]}`)
+
+	got, err := Endpoint{URL: srv.URL}.TraceTagKeys(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []string{"cluster", "http.method", "name", "service.name"}, got)
+}
+
+// The values of a tag are asked for under the same scoping the search will
+// compile, or the field would offer values the search then does not find.
+func TestTagValuesAreAskedForAsTheQueryWillAskForThem(t *testing.T) {
+	srv, _, _ := searchServer(t, tempoTagValuesPath+".http.method/values",
+		`{"tagValues":[{"type":"string","value":"POST"},{"type":"string","value":"GET"}]}`)
+
+	got, err := Endpoint{URL: srv.URL}.TraceTagValues(t.Context(), "http.method")
+	require.NoError(t, err)
+	require.Equal(t, []string{"GET", "POST"}, got)
+
+	// An intrinsic is the span's own field and is written bare, which is the
+	// rule the compiled query follows.
+	intrinsic, _, _ := searchServer(t, tempoTagValuesPath+"name/values", `{"tagValues":["GET /"]}`)
+	got, err = Endpoint{URL: intrinsic.URL}.TraceTagValues(t.Context(), "name")
+	require.NoError(t, err)
+	require.Equal(t, []string{"GET /"}, got)
+}
+
+// The Jaeger API has no endpoint for tag names at all, so there is nothing to
+// ask — and nothing to ask is not a failure: the field is typed into either way.
+func TestAJaegerStoreIsNotAskedForTags(t *testing.T) {
+	var asked bool
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		asked = true
+	}))
+	defer srv.Close()
+
+	e := Endpoint{URL: srv.URL, Collector: CollectorJaeger}
+	keys, err := e.TraceTagKeys(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, keys)
+
+	values, err := e.TraceTagValues(t.Context(), "http.method")
+	require.NoError(t, err)
+	require.Empty(t, values)
+	require.False(t, asked, "nothing was asked")
+}
+
 // A store that will not say what it holds costs the suggestions and never the
 // search, which is the bargain the filter prompt already makes.
 func TestAStoreThatWillNotListIsNotAFailedSearch(t *testing.T) {
