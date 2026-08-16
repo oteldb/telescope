@@ -164,6 +164,17 @@ func TestLoadRejectsTheOldShape(t *testing.T) {
 	require.ErrorContains(t, err, "sources")
 }
 
+// TestARuleAboutTwoKeysSaysWhereItReadThem: a database that names no url is a
+// mistake the schema cannot describe — it is about two keys — so it is an
+// invariant, and an invariant keeps the line the value came from.
+func TestARuleAboutTwoKeysSaysWhereItReadThem(t *testing.T) {
+	path := write(t, "places:\n  - name: prod\n    type: victorialogs\n")
+	_, err := loadFrom(path)
+	require.ErrorContains(t, err, "places[name=prod]")
+	require.ErrorContains(t, err, "requires a url")
+	require.ErrorContains(t, err, path+":2:3", "and where in the file it was read")
+}
+
 // TestLoadAcceptsTheSchemaKey: a file that names the schema describing it is
 // how an editor finds one, so the key is read as an annotation rather than as a
 // place that is not a place.

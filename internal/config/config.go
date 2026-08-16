@@ -37,9 +37,10 @@ type Config struct {
 // one, and the JSON Schema an editor reads all derive from this one
 // declaration, so a key cannot be documented as something it does not accept.
 //
-// What it does not describe is what one key means for another: that a database
-// needs a url and a command cannot have one, that a group's places must exist.
-// Those are [New]'s, since a place built in Go never passed through a file.
+// What one key means for another — that a database needs a url and a command
+// cannot have one, that a group's places must exist — is a schema's blind spot,
+// so those are invariants: the same functions [New] runs, registered where the
+// resolver can say which line of the file it read the offending value from.
 var Descriptor = figureout.MustDerive(func(c *Config, s *figureout.Schema[Config]) {
 	// Keyed by name so that what is wrong with an entry is reported as the
 	// entry's name rather than as its position: counting places in a file to
@@ -48,7 +49,41 @@ var Descriptor = figureout.MustDerive(func(c *Config, s *figureout.Schema[Config
 		Doc("Where logs are read from, declared once and referred to by name.")
 	figureout.List(s, &c.Groups, "groups", groupDescriptor).MergeByKey("name").
 		Doc("Places read as one stream.")
+
+	figureout.Invariant(s, "place-is-usable", func(c *Config) error {
+		var errs []error
+		for _, p := range c.Places {
+			if err := p.Validate(); err != nil {
+				errs = append(errs, figureout.At(placePath(p.Name)).Errorf("%s", err))
+			}
+		}
+		return errors.Join(errs...)
+	})
+
+	// A group is checked against the places as declared, before any token has
+	// been read: a group whose place needs one telescope cannot find is not a
+	// group written wrong, and carrying that reason is [Group.resolve]'s.
+	figureout.Invariant(s, "group-names-places", func(c *Config) error {
+		var errs []error
+		byName := placeIndex(c.Places)
+		for _, g := range c.Groups {
+			if err := g.resolve(c.Places, byName); err != nil {
+				errs = append(errs, figureout.At(groupPath(g.Name)).Errorf("%s", err))
+			}
+		}
+		return errors.Join(errs...)
+	})
 })
+
+// placePath and groupPath are where an entry was written, for a rule that is
+// about one. The lists are keyed by name, so the path names the entry too.
+func placePath(name string) string {
+	return figureout.KeyedElementPath("places", "name", name)
+}
+
+func groupPath(name string) string {
+	return figureout.KeyedElementPath("groups", "name", name)
+}
 
 // Path is where the config file is read from, honoring XDG_CONFIG_HOME.
 func Path() string {

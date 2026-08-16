@@ -94,46 +94,61 @@ func (g Group) Stream() (cfg source.Config, ready bool, err error) {
 // never declared, or one that cannot open on its own, is reported as what it
 // is: a mistake in the file.
 func (c *Config) resolveGroups() error {
-	byName := make(map[string]int, len(c.Places))
-	for i, p := range c.Places {
-		byName[p.Name] = i
-	}
+	byName := placeIndex(c.Places)
 	for i, g := range c.Groups {
 		if g.Name == "" {
 			return errors.Errorf("group %d: name is required", i+1)
 		}
-		for _, name := range g.Places {
-			j, ok := byName[name]
-			if !ok {
-				return errors.Errorf("group %q names undeclared place %q", g.Name, name)
-			}
-			cfg, ready, err := c.Places[j].Stream()
-			switch {
-			case err != nil && c.Places[j].resolveErr != nil:
-				// Whether a token can be read is environment, not declaration.
-				// The group carries the reason and reports it when opened.
-				c.Groups[i].resolveErr = errors.Wrapf(err, "place %q", name)
-			case err != nil:
-				return errors.Wrapf(err, "group %q names %q", g.Name, name)
-			case !ready:
-				// A group cannot ask once per place, so every place that does
-				// not say enough has to be asking for the same thing.
-				if asks := c.Groups[i].asks; asks != "" && asks != cfg.Collector {
-					return errors.Errorf(
-						"group %q names %q and a %s place, which do not ask for the same thing: "+
-							"one target cannot be both",
-						g.Name, name, asks)
-				}
-				c.Groups[i].asks = cfg.Collector
-			}
-			cfg.Name = name
-			c.Groups[i].members = append(c.Groups[i].members, cfg)
-		}
-		if err := c.Groups[i].shape(); err != nil {
+		if err := c.Groups[i].resolve(c.Places, byName); err != nil {
 			return errors.Wrapf(err, "group %q", g.Name)
 		}
 	}
 	return nil
+}
+
+// placeIndex is where each place is, for a group that names one.
+func placeIndex(places []Place) map[string]int {
+	byName := make(map[string]int, len(places))
+	for i, p := range places {
+		byName[p.Name] = i
+	}
+	return byName
+}
+
+// resolve attaches the places the group names, and reports what is wrong with
+// the group itself.
+//
+// It says nothing about which group it is: the caller knows, and it is
+// registered as an invariant too, where the path already names one.
+func (g *Group) resolve(places []Place, byName map[string]int) error {
+	for _, name := range g.Places {
+		j, ok := byName[name]
+		if !ok {
+			return errors.Errorf("names undeclared place %q", name)
+		}
+		cfg, ready, err := places[j].Stream()
+		switch {
+		case err != nil && places[j].resolveErr != nil:
+			// Whether a token can be read is environment, not declaration. The
+			// group carries the reason and reports it when opened.
+			g.resolveErr = errors.Wrapf(err, "place %q", name)
+		case err != nil:
+			return errors.Wrapf(err, "names %q", name)
+		case !ready:
+			// A group cannot ask once per place, so every place that does not
+			// say enough has to be asking for the same thing.
+			if g.asks != "" && g.asks != cfg.Collector {
+				return errors.Errorf(
+					"names %q and a %s place, which do not ask for the same thing: "+
+						"one target cannot be both",
+					name, g.asks)
+			}
+			g.asks = cfg.Collector
+		}
+		cfg.Name = name
+		g.members = append(g.members, cfg)
+	}
+	return g.shape()
 }
 
 // shape checks what is wrong with the group itself rather than with any place
