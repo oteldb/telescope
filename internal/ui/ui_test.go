@@ -2017,9 +2017,9 @@ func TestGutterCarriesTimeAndLevel(t *testing.T) {
 		"when and how bad do not scroll away with the text")
 }
 
-// TestGutterKeepsStructuredLinesAligned: a structured line is rendered with its
-// own time and level, so the columns are left empty rather than doubled — but
-// they stay reserved, or the two kinds of line would not line up.
+// TestGutterKeepsStructuredLinesAligned: the severity of a line is drawn in the
+// gutter whatever kind of line it is, so a screenful of both reads as one
+// column of severities and not as two.
 func TestGutterKeepsStructuredLinesAligned(t *testing.T) {
 	lg := newLogs(source.Config{Collector: source.CollectorLoki, Target: "*"}, logs.NewStore(10), "")
 	lg.resize(120, 30)
@@ -2027,11 +2027,17 @@ func TestGutterKeepsStructuredLinesAligned(t *testing.T) {
 	lg.append(source.Line{Data: []byte("bare"), At: at, Labels: []source.Label{{Key: "level", Value: "WARN"}}})
 	lg.append(source.Line{Data: []byte(`{"level":"info","msg":"structured"}`), At: at})
 
+	out := ansi.Strip(lg.View())
+	require.Contains(t, out, "WARN  bare")
+	require.Contains(t, out, "INFO  structured")
+
+	// In columns and not in bytes: the marker on the cursor's row is one rune
+	// and three bytes, and the two rows line up all the same.
 	rows := map[string]int{}
-	for line := range strings.SplitSeq(ansi.Strip(lg.View()), "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		for _, word := range []string{"bare", "structured"} {
-			if strings.Contains(line, word) {
-				rows[word] = strings.Index(line, word)
+			if before, _, ok := strings.Cut(line, word); ok {
+				rows[word] = lipgloss.Width(before)
 			}
 		}
 	}

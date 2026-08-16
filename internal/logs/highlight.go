@@ -9,10 +9,17 @@ import (
 // consistent with pl's own output, which telescope passes through untouched.
 const (
 	ansiReset = "\x1b[0m"
-	ansiTime  = "\x1b[38;5;245m"
-	ansiNum   = "\x1b[38;5;180m"
-	ansiStr   = "\x1b[38;5;108m"
-	ansiPath  = "\x1b[38;5;110m"
+	// A message is the sentence on the row and the fields beside it are not, so
+	// it is bold and they are not. pl says the same thing the same way.
+	ansiBold = "\x1b[1m"
+	// A field's name, where it has to be written out at all. pl paints one this
+	// color, and a row this composed sitting above a row pl rendered should not
+	// look like it came from somewhere else.
+	ansiKey  = "\x1b[36m"
+	ansiTime = "\x1b[38;5;245m"
+	ansiNum  = "\x1b[38;5;180m"
+	ansiStr  = "\x1b[38;5;108m"
+	ansiPath = "\x1b[38;5;110m"
 
 	// An outcome is colored by whether it is one to worry about, so a screenful
 	// of requests reads as a shape before it reads as text.
