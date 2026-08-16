@@ -48,7 +48,7 @@ func root() *cobra.Command {
 	// cliversion writes the word "version" itself, and cobra's default template
 	// writes it too.
 	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
-	cmd.AddCommand(traceCmd(), schemaCmd())
+	cmd.AddCommand(traceCmd(), schemaCmd(), initCmd())
 	return cmd
 }
 
