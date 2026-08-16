@@ -26,6 +26,20 @@ func originCell(o logs.Origins, e *logs.Entry) string {
 	return originStyle(id).Render(label) + pad
 }
 
+// originRow drops from a row what the column beside it already says.
+func originRow(o logs.Origins, fields []logs.RowField) []logs.RowField {
+	if !o.Several() {
+		return fields
+	}
+	out := fields[:0:0]
+	for _, f := range fields {
+		if !o.Names(f.Key) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // originStyle colors a stream by what it is rather than by when it first spoke.
 //
 // A color handed out in order of appearance moves: the same pod is the second
