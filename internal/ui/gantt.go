@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/oteldb/telescope/internal/logs"
+	"github.com/oteldb/telescope/internal/query"
 	"github.com/oteldb/telescope/internal/trace"
 )
 
@@ -44,6 +46,15 @@ type gantt struct {
 	// the axis counts its offsets from.
 	bounds trace.Window
 
+	// filter is the query the spans were narrowed by, and spec is it as it was
+	// typed: the bar under the chart shows what is in force, and a query printed
+	// back from its own tree would show it rewritten rather than as somebody
+	// wrote it. matched is what it selected, which is not every row drawn — see
+	// [gantt.selected].
+	filter  query.Expr
+	spec    string
+	matched map[*trace.Node]bool
+
 	rows      []*trace.Node
 	collapsed map[*trace.Node]bool
 	// hidden is the services filtered out. A span of one is still drawn when
@@ -76,7 +87,7 @@ func (g *gantt) reflow() {
 	if g.cursor >= 0 && g.cursor < len(g.rows) {
 		was = g.rows[g.cursor]
 	}
-	g.rows = g.tree.Rows(g.collapsed, g.hidden)
+	g.rows = g.selected(g.tree.Rows(g.collapsed, g.hidden))
 	if was == nil {
 		return
 	}
@@ -150,6 +161,60 @@ func (g *gantt) expandAll() {
 	g.reflow()
 }
 
+// setFilter narrows the chart to the spans a query selects. A nil expression is
+// no filter, which is what an emptied prompt parses to.
+func (g *gantt) setFilter(e query.Expr, spec string) {
+	g.filter, g.spec = e, spec
+	if e == nil {
+		g.spec = ""
+	}
+	g.reflow()
+}
+
+// selected drops the rows the filter did not select, keeping the spans above
+// one that it did.
+//
+// Those are kept for the reason the service filter keeps them: removing a span
+// would reparent what hangs off it onto something that never called it, and the
+// tree is the whole of what says who called whom. What is kept that way is
+// structure rather than an answer, which is for the drawing to say.
+//
+// A filter that selects nothing is obeyed rather than dropped, unlike a service
+// filter that hides everything: somebody typed a question here, and answering
+// "nothing matches" is the answer. Showing the trace back would be claiming the
+// spans on screen are the ones asked for.
+func (g *gantt) selected(rows []*trace.Node) []*trace.Node {
+	if g.filter == nil {
+		g.matched = nil
+		return rows
+	}
+	g.matched = map[*trace.Node]bool{}
+	// Matched over the whole tree and not over the rows, so a fold that hides a
+	// match is still drawn: what is collapsed is put away, not filtered out.
+	above := map[*trace.Node]bool{}
+	g.tree.Walk(func(n *trace.Node) bool {
+		if !query.Match(g.filter, spanRecord{n}) {
+			return true
+		}
+		g.matched[n] = true
+		for at := n; at != nil && !above[at]; at = at.Parent {
+			above[at] = true
+		}
+		return true
+	})
+	return slices.DeleteFunc(slices.Clone(rows), func(n *trace.Node) bool { return !above[n] })
+}
+
+// scaffold reports that a row is drawn only to hold up what is under it: either
+// its service was filtered out, or the query selected something below and not
+// this.
+func (g *gantt) scaffold(n *trace.Node) bool {
+	if g.filter != nil && !g.matched[n] {
+		return true
+	}
+	return n.Scaffold(g.hidden)
+}
+
 // toggleService filters a service out of the view, or brings it back.
 func (g *gantt) toggleService(service string) {
 	if g.hidden[service] {
@@ -219,6 +284,12 @@ func (g *gantt) View(width, height int) string {
 	body := max(height-len(out), 0)
 	g.clamp(body)
 
+	// A filter is obeyed even where it selects nothing, so the chart has to be
+	// able to say that rather than leave the reader looking at an empty frame.
+	if len(g.rows) == 0 {
+		return strings.Join(append(out, styleDim.Render("no spans match this filter")), "\n")
+	}
+
 	for i := g.top; i < len(g.rows) && i < g.top+body; i++ {
 		row := g.row(g.rows[i], nameWidth, barWidth)
 		if i == g.cursor {
@@ -246,6 +317,10 @@ func (g *gantt) summary() string {
 		styleDim.Render(fmt.Sprintf("%d spans", g.tree.Len())),
 		styleDim.Render(fmt.Sprintf("%d services", len(g.tree.Services()))),
 		styleDim.Render(humanDur(g.tree.Duration())),
+	}
+	if g.filter != nil {
+		parts = append(parts, styleSelected.Render(fmt.Sprintf("%d of %d spans match",
+			len(g.matched), g.tree.Len())))
 	}
 	if len(g.hidden) > 0 {
 		parts = append(parts, styleSelected.Render(fmt.Sprintf("%d of %d services",
@@ -307,7 +382,7 @@ func (g *gantt) row(n *trace.Node, nameWidth, barWidth int) string {
 	b.WriteString(padRight(ansi.Truncate(g.name(n), nameWidth, styleDim.Render("…")), nameWidth))
 	b.WriteByte(' ')
 
-	scaffold := n.Scaffold(g.hidden)
+	scaffold := g.scaffold(n)
 	if scaffold {
 		b.WriteString(padLeft(styleDim.Render(humanDur(n.Duration)), durWidth))
 	} else {
@@ -348,7 +423,7 @@ func (g *gantt) name(n *trace.Node) string {
 		// would be drawing a parent that is not there.
 		b.WriteString(styleDim.Render("⋯ "))
 	}
-	if n.Scaffold(g.hidden) {
+	if g.scaffold(n) {
 		b.WriteString(styleDim.Render(logs.Sanitize(n.Service) + " " + logs.Sanitize(n.Name)))
 	} else {
 		b.WriteString(g.palette.style(n.Service).Render(logs.Sanitize(n.Service)))
