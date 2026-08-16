@@ -16,6 +16,14 @@ import (
 // can name a Grafana and a datasource rather than the full URL.
 const grafanaProxyPath = "/api/datasources/proxy/uid/"
 
+// DatasourceURL is where a Grafana proxies the datasource with this uid. A
+// place says the two separately, but anything that only has a URL to hand — a
+// trace store, which has no datasource key of its own — builds it here rather
+// than spelling the path out a second time.
+func DatasourceURL(grafana, uid string) string {
+	return strings.TrimRight(strings.TrimSpace(grafana), "/") + grafanaProxyPath + strings.TrimSpace(uid)
+}
+
 // localVia is what a place says when it is read from this machine, which is
 // also what saying nothing means.
 const localVia = "local"
@@ -324,7 +332,7 @@ func (p Place) Endpoint() (source.Endpoint, error) {
 		Insecure:  p.Insecure,
 	}
 	if ds := strings.TrimSpace(p.Datasource); ds != "" {
-		out.URL += grafanaProxyPath + ds
+		out.URL = DatasourceURL(out.URL, ds)
 	}
 
 	token, err := p.Token.Read(context.Background())
