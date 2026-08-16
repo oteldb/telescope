@@ -40,7 +40,7 @@ func TestConfigCommand(t *testing.T) {
 		{
 			name: "kubectl selector and container",
 			cfg:  Config{Collector: CollectorKubectl, Target: "app=oteldb", Container: "ch", Tail: 10},
-			want: "kubectl logs -l app=oteldb -c ch --tail 10",
+			want: "kubectl logs -l app=oteldb -c ch --prefix --tail 10",
 		},
 		{
 			name: "docker",
@@ -90,12 +90,12 @@ func TestConfigCommand(t *testing.T) {
 		{
 			name: "kubectl deployment",
 			cfg:  Config{Collector: CollectorKubectl, Namespace: "oteldb", Target: "deployment/api", Follow: true},
-			want: "kubectl logs -n oteldb deployment/api -f",
+			want: "kubectl logs -n oteldb deployment/api --prefix -f",
 		},
 		{
 			name: "kubectl statefulset container",
 			cfg:  Config{Collector: CollectorKubectl, Namespace: "oteldb", Target: "statefulset/oteldb", Container: "clickhouse"},
-			want: "kubectl logs -n oteldb statefulset/oteldb -c clickhouse",
+			want: "kubectl logs -n oteldb statefulset/oteldb -c clickhouse --prefix",
 		},
 		{
 			name: "kubectl with an explicit context",

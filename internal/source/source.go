@@ -330,6 +330,9 @@ func (c Config) Command() string {
 		if ct := strings.TrimSpace(c.Container); ct != "" {
 			args = append(args, "-c", Quote(ct))
 		}
+		if c.Prefixes() {
+			args = append(args, "--prefix")
+		}
 		if c.Stamps() {
 			args = append(args, "--timestamps")
 		}
