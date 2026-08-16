@@ -197,6 +197,23 @@ Places live in `$XDG_CONFIG_HOME/telescope/config.yaml`, by default
 `~/.config/telescope/config.yaml`. When the file declares any, the start screen
 opens on a picker; `tab` leaves it for the manual flow.
 
+`telescope init` writes the first one. It offers what this machine already runs
+— its containers, its units, the clusters its kubeconfigs name, the hosts its
+ssh config does — and asks about each; `--yes` takes them all without asking and
+`--print` writes the file to standard output instead of to disk. It will not
+replace a config that is already there unless told to with `--force`.
+
+A Grafana comes in the same way, as a place for each of its Loki, VictoriaLogs
+and Tempo datasources:
+
+```console
+telescope init --grafana https://grafana.example.com --grafana-token env:GRAFANA_TOKEN
+telescope init --grafana-provisioning /etc/grafana/provisioning/datasources
+```
+
+The token is named — `env:NAME`, `file:PATH` or `exec:COMMAND` — rather than
+written out, and the config it leaves behind names it the same way.
+
 ```yaml
 places:
   # Named in full: opens straight into the logs.
