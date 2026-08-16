@@ -439,12 +439,13 @@ type (
 	}
 	searchErrMsg struct{ err error }
 	// searchNamesMsg is what the store says it holds, for one field of the
-	// form. service is which service the operations belong to, when the store
-	// indexes them that way.
+	// form. of is what the list hangs off where it is not a list of everything:
+	// the service whose operations these are, when the store indexes them that
+	// way, or the tag whose values they are.
 	searchNamesMsg struct {
-		field   searchField
-		service string
-		names   []string
+		field searchField
+		of    string
+		names []string
 	}
 	// traceLoadedMsg and traceErrMsg answer it. A trace is a request over the
 	// network, so the screen is opened first and filled in when it lands.
@@ -540,17 +541,22 @@ func searchTraces(at source.Endpoint, q source.TraceQuery) tea.Cmd {
 // A store that will not say costs the suggestions and never the search, so a
 // failure here answers with nothing rather than with an error: the field is
 // typed into either way, and a role that may search but not list is ordinary.
-func listTraceNames(at source.Endpoint, f searchField, service string) tea.Cmd {
+func listTraceNames(at source.Endpoint, f searchField, of string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		var (
 			names []string
 			err   error
 		)
-		if f == fieldService {
+		switch {
+		case f == fieldService:
 			names, err = at.TraceServices(ctx)
-		} else {
-			names, err = at.TraceOperations(ctx, service)
+		case f == fieldTags && of == "":
+			names, err = at.TraceTagKeys(ctx)
+		case f == fieldTags:
+			names, err = at.TraceTagValues(ctx, of)
+		default:
+			names, err = at.TraceOperations(ctx, of)
 		}
 		if err != nil {
 			names = nil
@@ -560,7 +566,7 @@ func listTraceNames(at source.Endpoint, f searchField, service string) tea.Cmd {
 		if names == nil {
 			names = []string{}
 		}
-		return searchNamesMsg{field: f, service: service, names: names}
+		return searchNamesMsg{field: f, of: of, names: names}
 	}
 }
 

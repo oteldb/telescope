@@ -15,6 +15,7 @@ import (
 // Trace search paths, resolved against [Endpoint.URL].
 const (
 	tempoSearchPath    = "/api/search"
+	tempoTagsPath      = "/api/v2/search/tags"
 	tempoTagValuesPath = "/api/v2/search/tag/"
 	jaegerSearchPath   = "/api/traces"
 	jaegerServicesPath = "/api/services"
@@ -131,6 +132,81 @@ func (e Endpoint) TraceOperations(ctx context.Context, service string) ([]string
 		return e.jaegerList(ctx, jaegerServicesPath+"/"+url.PathEscape(service)+"/operations")
 	}
 	return e.tempoTagValues(ctx, tempoOperationTag)
+}
+
+// TraceTagKeys lists what the spans in the store are labeled with, so the tag
+// field can be finished rather than remembered.
+//
+// Only Tempo can answer it. The Jaeger API lists services and the operations of
+// one and has no endpoint for tag names at all, so there is nothing to ask
+// there — and nothing is not a failure: the field is typed into either way, the
+// same bargain [Endpoint.TraceServices] makes for a store that refuses.
+func (e Endpoint) TraceTagKeys(ctx context.Context) ([]string, error) {
+	if e.traceAPI() == CollectorJaeger {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, fieldsTimeout)
+	defer cancel()
+
+	body, err := e.fetchSearch(ctx, tempoTagsPath, url.Values{})
+	if err != nil {
+		return nil, err
+	}
+	return tagNames(body)
+}
+
+// TraceTagValues lists what one tag has been.
+//
+// The key is scoped on the way out by the same rule the query is compiled
+// under, since Tempo answers for `.http.method` and `span.http.method`
+// separately: a suggestion listed under a narrower question than the one the
+// search will ask would offer values the search then does not find.
+func (e Endpoint) TraceTagValues(ctx context.Context, key string) ([]string, error) {
+	key = strings.TrimSpace(key)
+	if key == "" || e.traceAPI() == CollectorJaeger {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, fieldsTimeout)
+	defer cancel()
+
+	return e.tempoTagValues(ctx, traceQLKey(key))
+}
+
+// tagNames reads {"scopes":[{"name":…,"tags":[…]}]} off the tag names endpoint.
+//
+// Which scope a tag was found in is dropped. The field these are offered under
+// is typed unscoped — `http.status_code`, not `span.http.status_code` — and
+// [TraceQuery.TraceQL] is what decides to look in both scopes for it, so a
+// suggestion that carried one would quietly compile into the narrower question.
+func tagNames(body []byte) ([]string, error) {
+	var out []string
+	d := jx.DecodeBytes(body)
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		if string(k) != "scopes" {
+			return d.Skip()
+		}
+		return d.Arr(func(d *jx.Decoder) error {
+			return d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+				if string(k) != "tags" {
+					return d.Skip()
+				}
+				return d.Arr(func(d *jx.Decoder) error {
+					v, err := d.Str()
+					if err != nil {
+						return err
+					}
+					if v != "" {
+						out = append(out, v)
+					}
+					return nil
+				})
+			})
+		})
+	}); err != nil {
+		return nil, errors.Wrap(err, "decode tag names")
+	}
+	slices.Sort(out)
+	return slices.Compact(out), nil
 }
 
 // tempoTagValues reads {"tagValues":[…]} off the tag values endpoint.

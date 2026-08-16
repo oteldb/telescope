@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -284,15 +285,29 @@ func (s *store) routeTempo(mux *http.ServeMux) {
 		}
 		writeJSON(w, otlpOf(t))
 	})
+	// The tag names, which is the listing the Jaeger API has no answer for at
+	// all: the tag field of the search form completes here or nowhere.
+	mux.HandleFunc("GET /api/v2/search/tags", func(w http.ResponseWriter, r *http.Request) {
+		logAsked(r)
+		writeJSON(w, map[string]any{"scopes": []map[string]any{
+			{"name": "resource", "tags": []string{"service.name"}},
+			{"name": "span", "tags": s.tagKeys()},
+			{"name": "intrinsic", "tags": []string{"name", "status", "duration"}},
+		}})
+	})
 	mux.HandleFunc("GET /api/v2/search/tag/{tag}/values", func(w http.ResponseWriter, r *http.Request) {
 		logAsked(r)
 		values := []map[string]string{}
 		add := func(v string) { values = append(values, map[string]string{"type": "string", "value": v}) }
-		if strings.Contains(r.PathValue("tag"), "service.name") {
+		// A tag arrives scoped, since that is how it is asked for; what the
+		// spans hold it under is the bare name.
+		tag := strings.TrimPrefix(r.PathValue("tag"), ".")
+		switch {
+		case strings.Contains(tag, "service.name"):
 			for _, name := range services {
 				add(name)
 			}
-		} else {
+		case tag == "name":
 			// Tempo has no index of what one service was called to do, so it
 			// answers with every span name it holds.
 			for _, ops := range operations {
@@ -300,9 +315,50 @@ func (s *store) routeTempo(mux *http.ServeMux) {
 					add(op)
 				}
 			}
+		default:
+			for _, v := range s.tagValues(tag) {
+				add(v)
+			}
 		}
 		writeJSON(w, map[string]any{"tagValues": values})
 	})
+}
+
+// tagKeys and tagValues answer out of the spans actually held, so a tag the
+// form offers is one a search for it then finds.
+func (s *store) tagKeys() []string {
+	out := map[string]bool{}
+	s.eachTag(func(t tag) { out[t.Key] = true })
+	return sortedTags(out)
+}
+
+func (s *store) tagValues(key string) []string {
+	out := map[string]bool{}
+	s.eachTag(func(t tag) {
+		if t.Key == key {
+			out[fmt.Sprint(t.Value)] = true
+		}
+	})
+	return sortedTags(out)
+}
+
+func (s *store) eachTag(f func(tag)) {
+	for _, t := range s.held {
+		for _, sp := range t.Spans {
+			for _, tg := range sp.Tags {
+				f(tg)
+			}
+		}
+	}
+}
+
+func sortedTags(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for v := range set {
+		out = append(out, v)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // matching filters by the parameters Jaeger reads, which is how a form that

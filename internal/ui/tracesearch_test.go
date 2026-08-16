@@ -257,7 +257,7 @@ func TestSearchOffersWhatTheStoreHolds(t *testing.T) {
 // Jaeger indexes them per service.
 func TestOperationSuggestionsBelongToOneService(t *testing.T) {
 	m := searchScreen(t, jaegerStore())
-	m, _ = m.Update(searchNamesMsg{field: fieldOperation, service: "api", names: []string{"GET /v1/orders"}})
+	m, _ = m.Update(searchNamesMsg{field: fieldOperation, of: "api", names: []string{"GET /v1/orders"}})
 	m = typeSearch(t, m, "api")
 	m = send(t, m, k("tab"))
 	require.Contains(t, screen(t, m), "operation the store knows")
@@ -269,6 +269,59 @@ func TestOperationSuggestionsBelongToOneService(t *testing.T) {
 	m = typeSearch(t, m, "2")
 	m = send(t, m, k("tab"))
 	require.NotContains(t, screen(t, m), "operation the store knows")
+}
+
+// The tag field holds several pairs, so what is offered is what the cursor is
+// in the middle of: the keys while one is being named, and that key's values
+// once it is.
+func TestTagsCompleteTheirKeysAndThenTheirValues(t *testing.T) {
+	m := searchScreen(t, tempoStore())
+	m, _ = m.Update(searchNamesMsg{field: fieldTags, names: []string{"http.method", "http.status_code"}})
+	m = send(t, m, k("tab"), k("tab"))
+	m = typeSearch(t, m, "http.st")
+
+	out := screen(t, m)
+	require.Contains(t, out, "tag keys the store knows")
+	require.Contains(t, out, "http.status_code")
+
+	// Accepting a name leaves the comparison behind it, which is where the value
+	// goes.
+	m = send(t, m, k("down"))
+	m, _ = m.Update(k("enter"))
+	require.Equal(t, "http.status_code=", searchOf(m).value(fieldTags))
+	require.False(t, searchOf(m).searching, "the suggestion was accepted, not searched for")
+
+	// And now the field is a value, so the values of that key are what is
+	// offered.
+	m, _ = m.Update(searchNamesMsg{field: fieldTags, of: "http.status_code", names: []string{"500", "503"}})
+	out = screen(t, m)
+	require.Contains(t, out, "http.status_code values the store knows")
+	require.Contains(t, out, "503")
+
+	m = send(t, m, k("down"))
+	m, _ = m.Update(k("enter"))
+	require.Equal(t, "http.status_code=500", searchOf(m).value(fieldTags))
+
+	// A second pair completes the same way, and finishing it leaves the first
+	// alone.
+	m = typeSearch(t, m, " http.me")
+	m = send(t, m, k("down"))
+	m, _ = m.Update(k("enter"))
+	require.Equal(t, "http.status_code=500 http.method=", searchOf(m).value(fieldTags))
+}
+
+// Values belong to the key they were listed for. Offering them under another is
+// offering what some other tag has been.
+func TestTagValuesAreNotOfferedUnderAnotherKey(t *testing.T) {
+	m := searchScreen(t, tempoStore())
+	m, _ = m.Update(searchNamesMsg{field: fieldTags, of: "http.method", names: []string{"POST"}})
+	m = send(t, m, k("tab"), k("tab"))
+
+	m = typeSearch(t, m, "http.method=")
+	require.Contains(t, screen(t, m), "POST")
+
+	m = typeSearch(t, m, "P db.system=")
+	require.NotContains(t, screen(t, m), "POST", "those are what another tag has been")
 }
 
 // TestSearchOpensFromTheStartScreen: alt+t on a saved place searches the store
