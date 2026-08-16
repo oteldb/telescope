@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -86,4 +88,36 @@ places:
 	require.NoError(t, err)
 	require.False(t, ok)
 	require.True(t, cfg.Places[0].Traces.IsZero())
+}
+
+// TestATraceStoreBorrowsTheTokenAlreadyRead: a keyring is unlocked once per
+// run, so a place that declares both a token command and a trace store must
+// not run the command twice — once for the logs endpoint and once for this one.
+func TestATraceStoreBorrowsTheTokenAlreadyRead(t *testing.T) {
+	needsShell(t)
+	dir := t.TempDir()
+	runs := filepath.Join(dir, "runs")
+	script := filepath.Join(dir, "token.sh")
+	require.NoError(t, os.WriteFile(script,
+		[]byte("#!/bin/sh\necho ran >> "+runs+"\necho s3cret\n"), 0o700))
+
+	cfg, err := loadFrom(write(t, `
+places:
+  - name: prod
+    type: victorialogs
+    url: https://logs.example.com
+    token:
+      exec: `+script+`
+    traces: https://tempo.example.com
+`))
+	require.NoError(t, err)
+
+	ran, err := os.ReadFile(runs)
+	require.NoError(t, err)
+	require.Equal(t, "ran\n", string(ran), "the token command ran once")
+
+	traces, ok, err := cfg.Places[0].TraceEndpoint()
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "s3cret", traces.Token, "and the store reads behind the same door")
 }

@@ -341,6 +341,10 @@ func (p Place) Endpoint() (source.Endpoint, error) {
 // them twice would be a way to get one of them wrong. A place that reaches its
 // logs by running a command has none of those to lend, and the trace endpoint
 // is then the URL alone.
+//
+// The token is the one already read for the logs endpoint rather than a second
+// read of its own: a keyring is unlocked once per run, and reading it here too
+// would prompt twice for a place that declares both.
 func (p Place) TraceEndpoint() (source.Endpoint, bool, error) {
 	if p.Traces.IsZero() {
 		return source.Endpoint{}, false, nil
@@ -348,13 +352,19 @@ func (p Place) TraceEndpoint() (source.Endpoint, bool, error) {
 	if err := p.Traces.Validate(); err != nil {
 		return source.Endpoint{}, false, err
 	}
-	out, err := p.Endpoint()
-	out.URL = strings.TrimRight(strings.TrimSpace(p.Traces.URL), "/")
-	// What speaks at the log endpoint says nothing about this one: a place whose
-	// logs are in VictoriaLogs may keep its traces in either store, or in
-	// neither's neighbor.
-	out.Collector = p.Traces.Collector()
-	return out, true, err
+	return source.Endpoint{
+		Name: p.Name,
+		// What speaks at the log endpoint says nothing about this one: a place
+		// whose logs are in VictoriaLogs may keep its traces in either store,
+		// or in neither's neighbor.
+		Collector: p.Traces.Collector(),
+		URL:       strings.TrimRight(strings.TrimSpace(p.Traces.URL), "/"),
+		Token:     p.resolved.Token,
+		Tenant:    p.Tenant,
+		Header:    p.Header,
+		Proxy:     strings.TrimSpace(p.Proxy),
+		Insecure:  p.Insecure,
+	}, true, nil
 }
 
 // parseVia reads how a place is reached. Saying nothing is saying local, which
