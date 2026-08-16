@@ -104,13 +104,23 @@ func loadFrom(path string) (Config, error) {
 	if path == "" {
 		return Config{}, nil
 	}
-	c, _, err := Descriptor.Resolve(fyaml.File(path,
+	return resolve(fyaml.File(path,
 		fyaml.Optional(),
 		// A key that is not a key is a mistake worth reporting: a config the
 		// reader half understands opens half the places it names and says
 		// nothing.
 		fyaml.DisallowUnknownFields(),
 	))
+}
+
+// Parse reads a config from bytes rather than from the file, which is how a
+// file telescope is about to write is checked to be one it could read back.
+func Parse(data []byte) (Config, error) {
+	return resolve(fyaml.Bytes(data, fyaml.DisallowUnknownFields()))
+}
+
+func resolve(src figureout.Source) (Config, error) {
+	c, _, err := Descriptor.Resolve(src)
 	if err != nil {
 		return Config{}, said(err)
 	}
