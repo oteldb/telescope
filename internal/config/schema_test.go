@@ -62,3 +62,25 @@ func TestSchemaRequiresOnlyWhatAPlaceMustName(t *testing.T) {
 	require.Contains(t, doc.Properties.Places.Items.Properties, "traces",
 		"which is offered, not demanded")
 }
+
+// TestHeadersAreASecret: the headers are where a credential the token cannot
+// express ends up, so the schema says so and nothing telescope writes about
+// them ever quotes one.
+func TestHeadersAreASecret(t *testing.T) {
+	data, err := Schema()
+	require.NoError(t, err)
+
+	var doc struct {
+		Properties struct {
+			Places struct {
+				Items struct {
+					Properties struct {
+						Headers map[string]any `json:"headers"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"places"`
+		} `json:"properties"`
+	}
+	require.NoError(t, json.Unmarshal(data, &doc))
+	require.Equal(t, true, doc.Properties.Places.Items.Properties.Headers["writeOnly"])
+}

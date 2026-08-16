@@ -137,7 +137,9 @@ var placeDescriptor = figureout.MustDerive(func(p *Place, s *figureout.Schema[Pl
 			"so the file stays shareable.")
 	figureout.Value(s, &p.Tenant, "tenant").
 		Doc("AccountID:ProjectID for VictoriaLogs, the org id for Loki.")
-	figureout.Value(s, &p.Header, "headers").
+	// Secret, because this is where a credential the token cannot express ends
+	// up: an Authorization header a proxy wants written out, a signed cookie.
+	figureout.Value(s, &p.Header, "headers", figureout.Secret()).
 		Doc("Anything else the database or its proxy needs.")
 	figureout.Value(s, &p.Proxy, "proxy").
 		Doc("Reach this database through http://… or socks5h://…. " +
