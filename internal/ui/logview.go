@@ -719,52 +719,6 @@ func spendFields(fields []logs.RowField, room int) string {
 // moreFields is how the row says it is carrying more than it showed.
 func moreFields(n int) string { return fmt.Sprintf("  +%d", n) }
 
-// topBar carries what the list is not showing as well as what it is: folded is
-// how many lines the clamp took out of it, and a list that quietly stood for
-// four hundred lines with one row would be lying about the log.
-func (m logModel) topBar(entries []*logs.Entry, folded int) string {
-	title := styleTitle.Render(m.cfg.Title())
-
-	var (
-		stats  []string
-		filter = m.view.Filter()
-	)
-	stats = append(stats, fmt.Sprintf("%d shown", len(entries)))
-	stats = append(stats, fmt.Sprintf("%d lines", m.store.Len()))
-	if d := m.store.Dropped(); d > 0 {
-		stats = append(stats, fmt.Sprintf("%d dropped", d))
-	}
-	if folded > 0 {
-		stats = append(stats, fmt.Sprintf("%d clamped", folded))
-	}
-	if r := timeRange(entries); r != "" {
-		stats = append(stats, r)
-	}
-	if older := m.olderText(); older != "" {
-		stats = append(stats, older)
-	}
-	stats = append(stats, filter.Describe())
-	stats = append(stats, "follow "+onOff(m.follow))
-	stats = append(stats, m.statusText())
-
-	inner := max(m.width()-2, 1)
-	line := styleDim.Render(strings.Join(stats, " · "))
-	return styleBox.Width(m.width()).Render(
-		ansi.Truncate(title, inner, "…") + "\n" + ansi.Truncate(line, inner, "…"),
-	)
-}
-
-func (m logModel) statusText() string {
-	switch {
-	case m.err != nil:
-		return styleErr.Render(m.status + ": " + m.err.Error())
-	case m.status == "streaming":
-		return styleOK.Render(m.status)
-	default:
-		return m.status
-	}
-}
-
 func (m logModel) footer(entries []*logs.Entry) string {
 	if m.note != "" && !m.searching {
 		return ansi.Truncate(styleOK.Render(m.note), m.width(), "")
@@ -838,22 +792,6 @@ func mapSlice[T, R any](in []T, fn func(T) R) []R {
 		out = append(out, fn(v))
 	}
 	return out
-}
-
-// timeRange summarizes the time span covered by the visible entries.
-func timeRange(entries []*logs.Entry) string {
-	if len(entries) == 0 {
-		return ""
-	}
-	from, to := entries[0].At, entries[len(entries)-1].At
-	if from.IsZero() || to.IsZero() {
-		return ""
-	}
-	const layout = "15:04:05"
-	if from.Truncate(24 * time.Hour).Equal(to.Truncate(24 * time.Hour)) {
-		return from.Local().Format(layout) + " → " + to.Local().Format(layout)
-	}
-	return from.Local().Format("01-02 "+layout) + " → " + to.Local().Format("01-02 "+layout)
 }
 
 // textinputBlink is the initial cursor blink for the start screen.

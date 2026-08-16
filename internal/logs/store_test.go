@@ -118,7 +118,10 @@ func TestViewSetFilterResets(t *testing.T) {
 func TestFilterDescribe(t *testing.T) {
 	require.Equal(t, "no filter", Filter{}.Compile().Describe())
 	require.Equal(t, "/a|b/", Filter{Query: "/a|b/"}.Compile().Describe())
-	require.Equal(t, "level≥warn", Filter{MinLevel: LevelWarn}.Compile().Describe())
+	// The level is the view's to draw, in its own color, so it is not a word here.
+	require.Equal(t, "no filter", Filter{MinLevel: LevelWarn}.Compile().Describe())
+	require.Equal(t, "WARN", LevelWarn.String())
+	require.Equal(t, "all", LevelAll.String())
 	// A query is described as it would be typed, not as it was.
 	require.Equal(t, "alpha or beta", Filter{Query: "alpha OR   beta"}.Compile().Describe())
 	require.Contains(t, Filter{Query: "a("}.Compile().Describe(), "bad query")
