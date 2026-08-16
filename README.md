@@ -146,6 +146,14 @@ Go, zap, the JVM, CPython and V8 traces are understood.
 gantt; `f` goes back the other way, narrowing the list by the whole trace or by
 the row the cursor is on in a span.
 
+**Which stream wrote it.** A view reading more than one — the containers of a
+pod, the pods of a deployment, the services of a namespace, the places of a
+group — names every line down the left, in a color that stays with the stream
+for as long as the view is open. The name is whichever label actually differs,
+cut down to the part that does, and a view reading one thing has no such column.
+`kubectl logs` on a deployment tails every pod at once and writes whichever
+spoke first; their lines are put back in time order as they arrive.
+
 **Repetition and silence.** A line repeated straight after itself is drawn once
 with `×n`, and a gap in the log is drawn as the gap it is.
 

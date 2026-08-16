@@ -95,7 +95,7 @@ func (m *logModel) takePage(msg pageMsg) {
 	m.pageErr = nil
 
 	entries := m.view.Entries(m.store)
-	runs := clampRuns(entries, m.clamped)
+	runs := m.runs(entries)
 	var anchor *logs.Entry
 	if m.cursor < len(runs) {
 		anchor = entries[runs[m.cursor].first]
@@ -105,6 +105,7 @@ func (m *logModel) takePage(msg pageMsg) {
 	for _, e := range page {
 		m.observe(e)
 	}
+	m.resolve()
 	// A page shorter than what was asked for is the far end of the store's room
 	// rather than the far end of the database.
 	m.atCap = len(page) < len(msg.lines)
@@ -115,7 +116,7 @@ func (m *logModel) takePage(msg pageMsg) {
 		// repetition are usually more of it — so the row is looked up from the
 		// line rather than counted from the top.
 		if i := slices.Index(entries, anchor); i >= 0 {
-			row := runAt(clampRuns(entries, m.clamped), i)
+			row := runAt(m.runs(entries), i)
 			m.top += row - m.cursor
 			m.cursor = row
 		}

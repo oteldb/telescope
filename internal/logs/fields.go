@@ -28,6 +28,10 @@ type fieldIndex struct {
 	// prompt's business.
 	order  []string
 	values map[string][]string
+	// labeled are the keys the source reported beside a line rather than the
+	// line reporting them itself, which is the difference between a name that
+	// describes the stream and one that describes what the stream was doing.
+	labeled map[string]bool
 }
 
 // observe records one key, and the value under it when that value is worth
@@ -65,6 +69,7 @@ func (ix *fieldIndex) index(e *Entry) {
 	}
 	for _, l := range e.Labels {
 		ix.observe(l.Key, l.Value, completable(l.Key))
+		ix.label(l.Key)
 	}
 	// The names a record is read under whatever the shipper called them, offered
 	// only where this stream has something under them.
@@ -82,8 +87,21 @@ func (ix *fieldIndex) index(e *Entry) {
 	}
 	if e.Source != "" {
 		ix.observe("source", e.Source, true)
+		ix.label("source")
 	}
 	ix.observe("stream", streamName(e.Stderr), true)
+	ix.label("stream")
+}
+
+// label records that key came from the source rather than from the line.
+func (ix *fieldIndex) label(key string) {
+	if key == "" || !ix.has(key) {
+		return
+	}
+	if ix.labeled == nil {
+		ix.labeled = make(map[string]bool)
+	}
+	ix.labeled[key] = true
 }
 
 func streamName(stderr bool) string {
