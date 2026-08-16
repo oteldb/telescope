@@ -4,9 +4,12 @@ A terminal log viewer for the [oteldb](https://github.com/oteldb/oteldb) project
 
 It streams logs from `journalctl`, `kubectl`, `docker` or any command, locally
 or through `ssh`, and from a VictoriaLogs or Loki database, directly or through
-a Grafana datasource. Structured lines are pretty printed with
-[go-faster/pl](https://github.com/go-faster/pl); anything else passes through
-with timestamps, levels, numbers and paths highlighted.
+a Grafana datasource. A row is the message and then whatever tells the lines
+apart — the method, the route, the status, how long it took — colored by what
+each one means, with what did not fit counted at the end; what a whole stream
+says the same way stays in the entry view. Text logs are pretty printed with
+[go-faster/pl](https://github.com/go-faster/pl), with timestamps, levels,
+numbers and paths highlighted.
 
 ![telescope](demo/demo.gif)
 
