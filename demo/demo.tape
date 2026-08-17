@@ -118,11 +118,23 @@ Down@250ms 2
 Sleep 800ms
 Alt+t
 Sleep 1500ms
-Type "api"
-Sleep 1s
+
+# A service is spelled the way the instrumentation spelled it, so the store is
+# asked: ctrl+n hands the keys to what it answered, enter takes the highlight
+# back into the field, and the arrows go on walking the form.
+Type "gate"
+Sleep 1200ms
+Ctrl+N
+Sleep 900ms
 Enter
-Sleep 2500ms
-Down@300ms 6
+Sleep 900ms
+Down@250ms 2
+Sleep 600ms
+Type "error=true"
+Sleep 1200ms
+Enter
+Sleep 3s
+Down@300ms 4
 Sleep 1s
 Enter
 Sleep 4s
