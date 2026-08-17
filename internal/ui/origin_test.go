@@ -74,7 +74,7 @@ func TestAStreamKeepsItsColor(t *testing.T) {
 	)
 	// Not the row the cursor is on: that one is drawn over a gradient, which is
 	// what the cursor is.
-	painted := originStyle("api-6b8d4f-lq7pv").Render("lq7pv")
+	painted := m.(Model).logs.palette.style("api-6b8d4f-lq7pv").Render("lq7pv")
 	require.Contains(t, m.View(), painted)
 
 	m = send(t, m, k("/"))
@@ -87,12 +87,41 @@ func TestAStreamKeepsItsColor(t *testing.T) {
 }
 
 // TestTwoStreamsAreTwoColors: telling them apart is the whole point of the
-// column.
+// column, so a hash that lands two of them on one swatch is not the answer —
+// `api` and `worker` did exactly that.
 func TestTwoStreamsAreTwoColors(t *testing.T) {
+	p := newOriginPalette(nil)
 	require.NotEqual(t,
-		originStyle("api-6b8d4f-2xk9w").Render("x"),
-		originStyle("api-6b8d4f-lq7pv").Render("x"),
+		p.style("api-6b8d4f-2xk9w").Render("x"),
+		p.style("api-6b8d4f-lq7pv").Render("x"),
 	)
+
+	seen := map[string]bool{}
+	for _, name := range []string{"api", "worker", "cache", "gateway", "checkout"} {
+		row := newOriginPalette([]string{"api", "worker", "cache", "gateway", "checkout"}).style(name).Render("x")
+		require.False(t, seen[row], name+" reads as one of the streams before it")
+		seen[row] = true
+	}
+}
+
+// The chips under the list are the legend for the column down its left, so a
+// place has to read as one color in both — even though the chip is the place
+// and the column is what its lines carry.
+func TestTheLegendIsTheColumnsColors(t *testing.T) {
+	p := newOriginPalette([]string{"api", "worker"})
+	require.Equal(t, p.style("api").Render("x"), p.style("api/api").Render("x"))
+	require.NotEqual(t, p.style("api/api").Render("x"), p.style("worker/worker").Render("x"))
+}
+
+// A stream is not a severity: a place drawn in the red the list writes ERROR in
+// is the view raising an alarm about a name.
+func TestNoStreamReadsAsASeverity(t *testing.T) {
+	for _, c := range originColors {
+		require.NotEqual(t, "#da1e28", c.Dark)
+		require.NotEqual(t, "#a2191f", c.Dark)
+		require.NotEqual(t, "#8d8d8d", c.Dark, "and none reads as what the list dims")
+	}
+	require.Len(t, originColors, len(spanColors)-3)
 }
 
 // drawnRow is the drawn row carrying text, without the screen's own padding.

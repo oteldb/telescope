@@ -50,6 +50,9 @@ type logModel struct {
 	// origins what tells its streams apart where it turned out to be several.
 	cols    columns
 	origins logs.Origins
+	// palette is which color each stream reads in, kept on the view because a
+	// color is only worth anything against the other streams of the same list.
+	palette *originPalette
 	// resolved is how many lines origins was worked out from, so that a view
 	// drawn from a store somebody else appended to still names them.
 	resolved int
@@ -105,6 +108,7 @@ func newLogs(cfg source.Config, store *logs.Store, query string) logModel {
 		clamped: true,
 		volume:  true,
 		origin:  time.Now(),
+		palette: newOriginPalette(cfg.Labels()),
 		search:  ti,
 		status:  "connecting",
 	}
@@ -539,7 +543,7 @@ func (m logModel) View() string {
 				}
 			}
 		}
-		row := renderLine(e, originRow(m.origins, m.store.Row(e)), originCell(m.origins, e), m.gutter(e), r.n, i == m.cursor, m.hoff, inner)
+		row := renderLine(e, originRow(m.origins, m.store.Row(e)), originCell(m.palette, m.origins, e), m.gutter(e), r.n, i == m.cursor, m.hoff, inner)
 		switch {
 		case i == m.cursor:
 			row = cursorRow(row, inner)
@@ -623,7 +627,7 @@ func (m logModel) chips() string {
 		// colored the way it colors them rather than by what they are.
 		var out strings.Builder
 		for _, l := range m.cfg.Labels() {
-			out.WriteString(originStyle(l).Render(" " + l + " "))
+			out.WriteString(m.palette.style(l).Render(" " + l + " "))
 		}
 		return out.String()
 	}
