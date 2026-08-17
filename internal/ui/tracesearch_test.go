@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -247,10 +248,154 @@ func TestSearchOffersWhatTheStoreHolds(t *testing.T) {
 	// searching for what was half typed.
 	m = typeSearch(t, m, "gate")
 	require.NotContains(t, screen(t, m), "worker")
-	m = send(t, m, k("down"))
+	m = send(t, m, k("ctrl+n"))
 	m, _ = m.Update(k("enter"))
 	require.Equal(t, "gateway", searchOf(m).inputs[fieldService].Value())
 	require.False(t, searchOf(m).searching, "the suggestion was accepted, not searched for")
+}
+
+// A store worth searching always has something to offer under the first field,
+// so a list that took the arrows would take them for the whole form. The list
+// is stepped into and out of instead, and the arrows stay the way down the
+// fields.
+func TestArrowsWalkTheFormWhileTheStoreIsOffering(t *testing.T) {
+	m := searchScreen(t, tempoStore())
+	m, _ = m.Update(searchNamesMsg{field: fieldService, names: []string{"api", "gateway"}})
+	require.Contains(t, screen(t, m), "gateway", "there is a list under the field")
+
+	m = send(t, m, k("down"), k("down"))
+	require.Equal(t, int(fieldTags), searchOf(m).focus, "the arrows walked the form")
+	m = send(t, m, k("up"))
+	require.Equal(t, int(fieldOperation), searchOf(m).focus)
+
+	// ctrl+n hands the keys to the list, and from there the arrows walk it.
+	m = send(t, m, k("up"), k("ctrl+n"), k("down"))
+	require.Equal(t, int(fieldService), searchOf(m).focus, "the field is still the one being filled")
+	require.Equal(t, 1, searchOf(m).sug)
+
+	// esc gives them back without leaving the screen, and so does walking off
+	// the top of the list.
+	m = send(t, m, k("esc"))
+	require.Equal(t, -1, searchOf(m).sug)
+	require.Equal(t, stateSearch, m.(Model).state)
+
+	m = send(t, m, k("ctrl+n"), k("up"))
+	require.Equal(t, -1, searchOf(m).sug, "off the top is back into the field")
+	m = send(t, m, k("down"))
+	require.Equal(t, int(fieldOperation), searchOf(m).focus, "and the arrows walk the form again")
+}
+
+// A suggestion is in the list because it matched, and where it matched is what
+// says why it is there — the same highlight the start screen's prompt draws.
+func TestSearchShowsWhyASuggestionIsOffered(t *testing.T) {
+	m := searchScreen(t, tempoStore())
+	m, _ = m.Update(searchNamesMsg{field: fieldService, names: []string{"gateway", "gate-keeper"}})
+	m = typeSearch(t, m, "gate")
+	require.Contains(t, m.View(), styleMatch.Render("gate"))
+}
+
+// The tag field is a filter and reads as one: a key, what it is compared with,
+// and the value are three things and not one string.
+func TestSearchColorsTheTagsItSearchesBy(t *testing.T) {
+	m := searchScreen(t, tempoStore())
+	m = send(t, m, k("down"), k("down"))
+	m = typeSearch(t, m, "http.status_code=500")
+
+	// Read off an unfocused row: the focused one carries the cursor wash, which
+	// is laid over the colors rather than instead of them.
+	m = send(t, m, k("down"))
+	out := m.View()
+	require.Contains(t, out, styleKey.Render("http.status_code"))
+	require.Contains(t, out, styleDim.Render("="))
+	require.Contains(t, out, styleFilter.Render("500"))
+}
+
+// A field that says something is lit and one that is still its own example is
+// not, so what the search is narrowed by can be read without reading the
+// placeholders to find out which of them are placeholders.
+func TestAFilledFieldReadsAsFilled(t *testing.T) {
+	m := searchScreen(t, tempoStore())
+	m = typeSearch(t, m, "api")
+	m = send(t, m, k("down"))
+
+	out := m.View()
+	require.Contains(t, out, styleFilter.Render(padRight("service", labelWidth)))
+	require.Contains(t, out, styleLabel.Render(padRight("max", labelWidth)))
+}
+
+// The number of traces to ask for is the number the screen can show, since the
+// window is what decides how much of an answer is an answer.
+func TestTheLimitIsWhatTheScreenHolds(t *testing.T) {
+	m := searchScreen(t, tempoStore())
+	q, err := searchOf(m).query()
+	require.NoError(t, err)
+	require.Equal(t, searchOf(m).defaultLimit(), q.Limit)
+	require.Contains(t, screen(t, m), strconv.Itoa(q.Limit)+" — as many traces as this screen holds")
+
+	// A number typed into the field is the number asked for.
+	m = send(t, m, k("down"), k("down"), k("down"), k("down"), k("down"), k("down"))
+	m = typeSearch(t, m, "5")
+	q, err = searchOf(m).query()
+	require.NoError(t, err)
+	require.Equal(t, 5, q.Limit)
+}
+
+// The results are a table, so what a row says is read down a column rather than
+// found again on every line.
+func TestSearchResultsLineUp(t *testing.T) {
+	at := time.Date(2026, 8, 17, 13, 12, 48, 0, time.Local)
+	m := searchScreen(t, tempoStore())
+	m, _ = m.Update(searchLoadedMsg{results: []trace.Result{
+		{TraceID: "aaaa", Service: "oteldb", Name: "engine.merge", Start: at, Matched: 1},
+		{TraceID: "bbbb", Service: "oteldb", Name: "chstorage.metrics.timeseries.queryTimeseries", Start: at, Matched: 5},
+	}})
+
+	var cols []int
+	for line := range strings.SplitSeq(screen(t, m), "\n") {
+		if i := strings.Index(line, "matched"); i > 0 {
+			cols = append(cols, ansi.StringWidth(line[:i]))
+		}
+	}
+	require.Len(t, cols, 2)
+	require.Equal(t, cols[0], cols[1], "the count is a column, whatever the name before it was")
+}
+
+// The list says how many it did not show. A store with four hundred operations
+// must not read as one with six.
+func TestSuggestionsSayWhatDidNotFit(t *testing.T) {
+	names := make([]string, 80)
+	for i := range names {
+		names[i] = "op-" + strconv.Itoa(i)
+	}
+	m := searchScreen(t, tempoStore())
+	m, _ = m.Update(searchNamesMsg{field: fieldService, names: names})
+
+	out := screen(t, m)
+	shown := strings.Count(out, "op-")
+	require.Greater(t, shown, 6, "the list takes the space the screen has")
+	require.Contains(t, out, "… "+strconv.Itoa(80-shown)+" more")
+}
+
+// Every letter is a letter in a form: q searches for a service called queue
+// here, and quits only from the results.
+func TestSearchFieldsTakeEveryLetter(t *testing.T) {
+	m := searchScreen(t, tempoStore())
+	m = typeSearch(t, m, "queue")
+	require.Equal(t, "queue", searchOf(m).value(fieldService))
+	require.Equal(t, stateSearch, m.(Model).state)
+}
+
+// A field is narrower than what can be typed into it, so it shows the end being
+// typed rather than the start: a tag filter that has scrolled out from under
+// the caret is a field nobody can edit.
+func TestALongFilterScrollsUnderTheCaret(t *testing.T) {
+	m := searchScreen(t, tempoStore())
+	m = send(t, m, k("down"), k("down"))
+	m = typeSearch(t, m, strings.Repeat("key.of.a.tag=value ", 8)+"tail=x")
+
+	out := screen(t, m)
+	require.Contains(t, out, "tail=x", "the caret is on screen")
+	require.Less(t, strings.Count(out, "key.of.a.tag"), 8, "and what does not fit is not")
 }
 
 // The operations of a service go stale the moment the service does, since
@@ -286,7 +431,7 @@ func TestTagsCompleteTheirKeysAndThenTheirValues(t *testing.T) {
 
 	// Accepting a name leaves the comparison behind it, which is where the value
 	// goes.
-	m = send(t, m, k("down"))
+	m = send(t, m, k("ctrl+n"))
 	m, _ = m.Update(k("enter"))
 	require.Equal(t, "http.status_code=", searchOf(m).value(fieldTags))
 	require.False(t, searchOf(m).searching, "the suggestion was accepted, not searched for")
@@ -298,14 +443,14 @@ func TestTagsCompleteTheirKeysAndThenTheirValues(t *testing.T) {
 	require.Contains(t, out, "http.status_code values the store knows")
 	require.Contains(t, out, "503")
 
-	m = send(t, m, k("down"))
+	m = send(t, m, k("ctrl+n"))
 	m, _ = m.Update(k("enter"))
 	require.Equal(t, "http.status_code=500", searchOf(m).value(fieldTags))
 
 	// A second pair completes the same way, and finishing it leaves the first
 	// alone.
 	m = typeSearch(t, m, " http.me")
-	m = send(t, m, k("down"))
+	m = send(t, m, k("ctrl+n"))
 	m, _ = m.Update(k("enter"))
 	require.Equal(t, "http.status_code=500 http.method=", searchOf(m).value(fieldTags))
 }

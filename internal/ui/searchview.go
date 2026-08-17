@@ -2,11 +2,13 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/oteldb/telescope/internal/complete"
 	"github.com/oteldb/telescope/internal/logs"
 	"github.com/oteldb/telescope/internal/source"
 	"github.com/oteldb/telescope/internal/trace"
@@ -24,12 +26,13 @@ func (m searchModel) View() string {
 	rows = append(rows, "")
 	rows = append(rows, m.status(width))
 
-	body := m.list(width, height-len(rows))
+	free := height - len(rows)
+	body := m.list(width, free)
 	if names := m.suggestions(); len(names) > 0 {
 		// Drawn over the results rather than beside them, for the reason the
 		// service picker is drawn over the gantt: a terminal has no room for a
 		// second column, and the list is read once and dismissed.
-		body = m.suggestionList(names, width)
+		body = m.suggestionList(names, width, free)
 	}
 	rows = append(rows, body...)
 
@@ -50,18 +53,6 @@ func (m searchModel) head() string {
 	}
 	return styleTitle.Render("search traces") + " " +
 		styleChipWhere.Render(logs.Sanitize(m.at.Label())) + styleChip.Render(api)
-}
-
-func (m searchModel) formRows(width int) []string {
-	rows := make([]string, 0, searchFields)
-	for f := range searchFields {
-		label := styleLabel.Render(padRight(f.label(), labelWidth))
-		if m.focus == int(f) {
-			label = styleSelected.Render(padRight(f.label(), labelWidth))
-		}
-		rows = append(rows, ansi.Truncate(label+" "+m.inputs[f].View(), width, "…"))
-	}
-	return rows
 }
 
 // status is the line between the form and the results: what the last search
@@ -106,10 +97,13 @@ func (m searchModel) list(width, height int) []string {
 
 	from := min(m.off, max(len(m.results)-1, 0))
 	to := min(from+height, len(m.results))
+	window := m.results[from:to]
+	cols := searchColumns(window, width)
+
 	rows := make([]string, 0, to-from)
-	for i := from; i < to; i++ {
-		row := ansi.Truncate(m.row(m.results[i]), width, styleDim.Render("…"))
-		if i == m.cursor && m.focus == focusResults {
+	for i, r := range window {
+		row := ansi.Truncate(m.row(r, cols), width, styleDim.Render("…"))
+		if from+i == m.cursor && m.focus == focusResults {
 			row = cursorRow(row, width)
 		}
 		rows = append(rows, row)
@@ -117,38 +111,91 @@ func (m searchModel) list(width, height int) []string {
 	return rows
 }
 
+// searchCols is how wide each column of the result table is.
+//
+// They are measured over the rows on screen rather than over the whole answer,
+// so a page of short names is not read across a column sized for one long name
+// somewhere below it — and remeasured as the list scrolls, which is what keeps
+// the columns tight to what is being read.
+type searchCols struct{ service, name, count int }
+
+// searchColumns measures the table. Everything but the name has a width the
+// content decides; the name takes what is left, since it is the one field of a
+// trace that has no length anybody agreed on.
+func searchColumns(window []trace.Result, width int) searchCols {
+	var c searchCols
+	for _, r := range window {
+		c.service = max(c.service, ansi.StringWidth(logs.Sanitize(r.Service)))
+		c.count = max(c.count, ansi.StringWidth(countText(r)))
+		c.name = max(c.name, ansi.StringWidth(logs.Sanitize(r.Name)))
+	}
+	fixed := len(searchStamp) + durWidth + idWidth + 3*gapWidth
+	if c.service > 0 {
+		fixed += c.service + gapWidth
+	}
+	if c.count > 0 {
+		fixed += c.count + gapWidth
+	}
+	c.name = max(min(c.name, width-fixed), 1)
+	return c
+}
+
+const (
+	// idWidth is what [shortID] leaves of a trace id, and gapWidth the space
+	// between two columns of the table.
+	idWidth  = 13
+	gapWidth = 2
+)
+
 // row draws one result: when it ran, who ran it, what it was, how long it took,
 // and how much of it there is.
-//
-// The two counts are drawn as the different claims they are. Jaeger answers a
-// search with the traces, so it can say a trace has thirty-eight spans and two
-// of them failed; Tempo answers with a summary and can only say how many spans
-// its query selected. A column that meant whichever the store happened to
-// report would be a number nobody could read.
-func (m searchModel) row(r trace.Result) string {
-	parts := []string{styleDim.Render(r.Start.Local().Format(searchStamp))}
+func (m searchModel) row(r trace.Result, c searchCols) string {
+	gap := strings.Repeat(" ", gapWidth)
+	cells := []string{styleDim.Render(r.Start.Local().Format(searchStamp))}
+	if c.service > 0 {
+		cells = append(cells, styleSelected.Render(padRight(logs.Sanitize(r.Service), c.service)))
+	}
 
 	name := logs.Sanitize(r.Name)
 	if name == "" {
 		name = "—"
 	}
-	if service := logs.Sanitize(r.Service); service != "" {
-		parts = append(parts, styleSelected.Render(service))
+	cells = append(cells,
+		padRight(ansi.Truncate(name, c.name, "…"), c.name),
+		styleDim.Render(padLeft(humanDur(r.Duration), durWidth)),
+	)
+	if c.count > 0 {
+		cells = append(cells, padRight(m.countCell(r), c.count))
 	}
-	parts = append(parts, name, styleDim.Render(padLeft(humanDur(r.Duration), 8)))
+	return strings.Join(append(cells, styleTrace.Render(shortID(r.TraceID))), gap)
+}
 
+// countText is how much of the trace there is, as plain text for measuring.
+//
+// The two stores count different things, and the column says which. Jaeger
+// answers a search with the traces, so it can say a trace has thirty-eight
+// spans and two of them failed; Tempo answers with a summary and can only say
+// how many spans its query selected. A column that meant whichever the store
+// happened to report would be a number nobody could read.
+func countText(r trace.Result) string {
 	switch {
+	case r.Spans > 0 && r.Errors > 0:
+		return fmt.Sprintf("%d spans ✗%d", r.Spans, r.Errors)
 	case r.Spans > 0:
-		spans := fmt.Sprintf("%d spans", r.Spans)
-		if r.Errors > 0 {
-			spans += " " + styleErr.Render(fmt.Sprintf("✗%d", r.Errors))
-		}
-		parts = append(parts, styleDim.Render(spans))
+		return fmt.Sprintf("%d spans", r.Spans)
 	case r.Matched > 0:
-		parts = append(parts, styleDim.Render(fmt.Sprintf("%d matched", r.Matched)))
+		return fmt.Sprintf("%d matched", r.Matched)
+	default:
+		return ""
 	}
-	parts = append(parts, styleTrace.Render(shortID(r.TraceID)))
-	return strings.Join(parts, "  ")
+}
+
+func (m searchModel) countCell(r trace.Result) string {
+	if r.Spans > 0 && r.Errors > 0 {
+		return styleDim.Render(fmt.Sprintf("%d spans ", r.Spans)) +
+			styleErr.Render(fmt.Sprintf("✗%d", r.Errors))
+	}
+	return styleDim.Render(countText(r))
 }
 
 // shortID is as much of a trace id as tells one row from another. The whole of
@@ -161,15 +208,42 @@ func shortID(id string) string {
 	return id
 }
 
-func (m searchModel) suggestionList(names []string, width int) []string {
-	rows := make([]string, 0, len(names)+1)
+// suggestionList draws what the store offers under the field, scrolled to keep
+// the highlighted one on screen and cut off with a count of what did not fit
+// rather than silently. The list is what says whether the thing being looked
+// for exists at all, so a store with four hundred operations must not read as
+// one with six.
+func (m searchModel) suggestionList(names []complete.Candidate, width, height int) []string {
+	if height <= 1 {
+		return nil
+	}
+
+	shown := min(len(names), height-1)
+	if shown < len(names) {
+		// A row goes to saying how many were left out.
+		shown = max(shown-1, 1)
+	}
+	from := 0
+	if m.sug >= shown {
+		from = m.sug - shown + 1
+	}
+
+	rows := make([]string, 0, shown+2)
 	rows = append(rows, styleDim.Render(m.suggestTitle()))
-	for i, name := range names {
-		row := "  " + logs.Sanitize(name)
-		if i == m.sug {
+	for i, c := range names[from : from+shown] {
+		selected := from+i == m.sug
+		marker := "  "
+		if selected {
+			marker = styleSelected.Render("▎ ")
+		}
+		row := marker + highlightMatch(logs.Sanitize(c.Value), c.Matched, selected)
+		if selected {
 			row = cursorRow(row, width)
 		}
 		rows = append(rows, ansi.Truncate(row, width, "…"))
+	}
+	if rest := len(names) - from - shown; rest > 0 {
+		rows = append(rows, styleHint.Render("  … "+strconv.Itoa(rest)+" more"))
 	}
 	return rows
 }
@@ -188,18 +262,22 @@ func (m searchModel) suggestTitle() string {
 }
 
 func (m searchModel) footer() string {
-	if m.focus == focusResults {
+	switch {
+	case m.focus == focusResults:
 		return styleHint.Render(searchResultKeys)
-	}
-	if len(m.suggestions()) > 0 {
+	case m.sug >= 0:
 		return styleHint.Render(searchSuggestKeys)
+	case len(m.suggestions()) > 0:
+		return styleHint.Render(searchOfferKeys)
+	default:
+		return styleHint.Render(searchFormKeys)
 	}
-	return styleHint.Render(searchFormKeys)
 }
 
 const (
-	searchFormKeys    = "enter search · tab field · ctrl+r again · esc back"
-	searchSuggestKeys = "↑↓ suggestions · enter accept · esc dismiss · tab field"
+	searchFormKeys    = "enter search · ↑↓ field · ctrl+r again · esc back"
+	searchOfferKeys   = "ctrl+n suggestions · enter search · ↑↓ field · esc back"
+	searchSuggestKeys = "↑↓ suggestions · enter accept · esc back to the field"
 	searchResultKeys  = "enter open · ↑↓ move · y copy id · ctrl+r again · esc edit search"
 )
 

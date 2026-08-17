@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/oteldb/telescope/internal/complete"
 	"github.com/oteldb/telescope/internal/source"
 	"github.com/oteldb/telescope/internal/trace"
 )
@@ -35,10 +36,6 @@ const (
 // It is one more stop on the same cycle rather than a mode of its own, so tab
 // walks from the form into the results and round again.
 const focusResults = int(searchFields)
-
-// maxSuggestions is how many names are offered under a field at once. The list
-// is drawn over the results, so it may not take the screen.
-const maxSuggestions = 6
 
 func (f searchField) label() string {
 	switch f {
@@ -82,8 +79,12 @@ type searchModel struct {
 	// nobody is typing any more is a list of the wrong thing.
 	tagKeys, tagValues []string
 	valuesFor          string
-	// sug is which suggestion is highlighted, or -1 for none. Typing clears it:
-	// a highlight left standing would accept a name nobody was looking at.
+	// sug is which suggestion is highlighted, or -1 when the field has the keys
+	// rather than the list. It is the whole of the focus between the two: the
+	// arrows walk the form while it is -1 and the list while it is not, since a
+	// form of seven fields under a list of four hundred operations cannot give
+	// the same key to both. Typing clears it — a highlight left standing would
+	// accept a name nobody was looking at.
 	sug int
 
 	results []trace.Result
@@ -144,9 +145,17 @@ func (f searchField) placeholder(at source.Endpoint) string {
 func (m *searchModel) resize(w, h int) {
 	m.w, m.h = w, h
 	for f := range searchFields {
-		m.inputs[f].Width = max(m.bodyWidth()-labelWidth-2, 10)
+		m.inputs[f].Width = m.fieldWidth()
 	}
+	// The default is what the screen can hold, so it is the screen that says
+	// what it is: a form that offered 20 on a terminal with room for sixty rows
+	// would be asking for a table two thirds empty.
+	m.inputs[fieldLimit].Placeholder = strconv.Itoa(m.defaultLimit()) +
+		" — as many traces as this screen holds"
 }
+
+// defaultLimit is how many traces an empty limit field asks for.
+func (m searchModel) defaultLimit() int { return max(m.listHeight(), 20) }
 
 // labelWidth is the column the field names are drawn in, wide enough for the
 // longest of them.
@@ -211,10 +220,9 @@ func (m searchModel) Update(msg tea.Msg) (searchModel, tea.Cmd) {
 func (m searchModel) updateForm(km tea.KeyMsg) (searchModel, tea.Cmd) {
 	names := m.suggestions()
 
+	m.sug = min(m.sug, len(names)-1)
+
 	switch km.String() {
-	case "q":
-		// A form is being typed into, so q is a letter here and nowhere else on
-		// this screen. Only ctrl+c quits from a prompt.
 	case "esc":
 		if m.sug >= 0 {
 			m.sug = -1
@@ -222,32 +230,53 @@ func (m searchModel) updateForm(km tea.KeyMsg) (searchModel, tea.Cmd) {
 		}
 		return m, func() tea.Msg { return backMsg{} }
 
-	case "tab":
-		return m.move(1)
-	case "shift+tab":
-		return m.move(-1)
-
-	case "down", "ctrl+n":
+	case "ctrl+n":
 		if len(names) > 0 {
+			m.sug = min(m.sug+1, len(names)-1)
+		}
+		return m, nil
+	case "ctrl+p":
+		if m.sug >= 0 {
+			m.sug--
+		}
+		return m, nil
+
+	case "down":
+		if m.sug >= 0 {
 			m.sug = min(m.sug+1, len(names)-1)
 			return m, nil
 		}
 		return m.move(1)
-	case "up", "ctrl+p":
+	case "up":
 		if m.sug >= 0 {
+			// Off the top of the list is back into the field it was offered
+			// under, which is the way out that does not need a second key.
 			m.sug--
 			return m, nil
 		}
-		if len(names) == 0 {
-			return m.move(-1)
+		return m.move(-1)
+	case "pgdown":
+		if m.sug >= 0 {
+			m.sug = min(m.sug+m.listHeight(), len(names)-1)
+			return m, nil
 		}
-		return m, nil
+	case "pgup":
+		if m.sug >= 0 {
+			m.sug = max(m.sug-m.listHeight(), 0)
+			return m, nil
+		}
+
+	case "tab":
+		if m.sug >= 0 {
+			return m, m.accept(names)
+		}
+		return m.move(1)
+	case "shift+tab":
+		return m.move(-1)
 
 	case "enter":
-		if m.sug >= 0 && m.sug < len(names) {
-			m.take(names[m.sug])
-			m.sug = -1
-			return m, m.listNames()
+		if m.sug >= 0 {
+			return m, m.accept(names)
 		}
 		return m.run()
 
@@ -255,20 +284,34 @@ func (m searchModel) updateForm(km tea.KeyMsg) (searchModel, tea.Cmd) {
 		return m.run()
 	}
 
-	before := m.inputs[m.focus].Value()
+	before, at := m.inputs[m.focus].Value(), m.inputs[m.focus].Position()
 	var cmd tea.Cmd
 	m.inputs[m.focus], cmd = m.inputs[m.focus].Update(km)
-	if m.inputs[m.focus].Value() != before {
-		m.sug = -1
-		// The operations a service was called to do go stale as soon as the
-		// service does, and a keystroke in the tag field moves between a key and
-		// its values, which are two different lists to have asked for.
-		switch searchField(m.focus) {
-		case fieldService, fieldTags:
-			return m, tea.Batch(cmd, m.listNames())
-		}
+	if m.inputs[m.focus].Value() == before && m.inputs[m.focus].Position() == at {
+		return m, cmd
+	}
+	// The text moved under the list, so what it was offering is no longer what
+	// is being typed.
+	m.sug = -1
+	// The operations a service was called to do go stale as soon as the service
+	// does, and a keystroke in the tag field moves between a key and its values,
+	// which are two different lists to have asked for.
+	switch searchField(m.focus) {
+	case fieldService, fieldTags:
+		return m, tea.Batch(cmd, m.listNames())
 	}
 	return m, cmd
+}
+
+// accept writes the highlighted suggestion into the field and hands the keys
+// back to it.
+func (m *searchModel) accept(names []complete.Candidate) tea.Cmd {
+	if m.sug < 0 || m.sug >= len(names) {
+		return nil
+	}
+	m.take(names[m.sug].Value)
+	m.sug = -1
+	return m.listNames()
 }
 
 // take writes an offered name into the field it was offered under.
@@ -417,6 +460,7 @@ func (m searchModel) query() (source.TraceQuery, error) {
 	if q.Range, err = source.ParseRange(m.value(fieldRange), time.Now()); err != nil {
 		return q, errField(fieldRange, err)
 	}
+	q.Limit = m.defaultLimit()
 	if spec := strings.TrimSpace(m.value(fieldLimit)); spec != "" {
 		n, convErr := strconv.Atoi(spec)
 		if convErr != nil || n <= 0 {
@@ -460,7 +504,7 @@ func parseSearchDur(s string) (time.Duration, error) {
 
 // suggestions are the names offered under the focused field, narrowed by what
 // has been typed into it.
-func (m searchModel) suggestions() []string {
+func (m searchModel) suggestions() []complete.Candidate {
 	switch searchField(m.focus) {
 	case fieldService:
 		return narrowNames(m.services, m.value(fieldService))
@@ -500,21 +544,14 @@ func (m searchModel) tagAt() completion {
 	return completeAt(m.value(fieldTags), m.inputs[fieldTags].Position())
 }
 
-// narrowNames keeps the names that hold what has been typed of one, at most a
-// screenful of them.
-func narrowNames(all []string, typed string) []string {
-	typed = strings.ToLower(strings.TrimSpace(typed))
-	var out []string
-	for _, name := range all {
-		if typed == "" || strings.Contains(strings.ToLower(name), typed) {
-			out = append(out, name)
-		}
-		if len(out) == maxSuggestions {
-			break
-		}
-	}
+// narrowNames ranks the names against what has been typed of one, by the same
+// ranking the start screen's prompt uses: a name is offered because it matched,
+// and where it matched is what the list shows to say why it is there.
+func narrowNames(all []string, typed string) []complete.Candidate {
+	typed = strings.TrimSpace(typed)
+	out := labelCandidates(all, typed)
 	// A single suggestion that is already what was typed is not a suggestion.
-	if len(out) == 1 && strings.EqualFold(out[0], typed) {
+	if len(out) == 1 && strings.EqualFold(out[0].Value, typed) {
 		return nil
 	}
 	return out

@@ -104,11 +104,13 @@ func k(s string) tea.Msg {
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
 	return tea.KeyMsg{Type: map[string]tea.KeyType{
-		"enter": tea.KeyEnter,
-		"tab":   tea.KeyTab,
-		"esc":   tea.KeyEsc,
-		"down":  tea.KeyDown,
-		"up":    tea.KeyUp,
+		"enter":  tea.KeyEnter,
+		"tab":    tea.KeyTab,
+		"esc":    tea.KeyEsc,
+		"down":   tea.KeyDown,
+		"up":     tea.KeyUp,
+		"ctrl+n": tea.KeyCtrlN,
+		"ctrl+p": tea.KeyCtrlP,
 	}[s]}
 }
 
