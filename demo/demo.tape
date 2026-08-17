@@ -12,8 +12,8 @@ Output demo/demo.gif
 
 Set Shell bash
 Set FontSize 14
-Set Width 1280
-Set Height 720
+Set Width 1600
+Set Height 900
 Set Padding 16
 Set Framerate 24
 Set TypingSpeed 70ms
