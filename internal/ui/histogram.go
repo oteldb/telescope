@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -123,20 +124,33 @@ var volSteps = []time.Duration{
 	24 * time.Hour,
 }
 
-// volStep is the narrowest bucket that fits the span into cols columns. Narrow
-// rather than round: the chart is drawn at the resolution the screen has, and a
-// step chosen to be tidy would throw half the columns away.
-func volStep(span time.Duration, cols int) time.Duration {
-	cols = max(cols, 1)
+// volBuckets is how many buckets the chart is worth drawing, which is not as
+// many as the screen has columns.
+//
+// Nine lines over three seconds, bucketed at the width of a column, is nine
+// bars of one line each: evenly spaced, all the same height, and saying nothing
+// about volume, which is the one thing the panel is for. A bar means something
+// only once its bucket holds several lines, so the count is what decides how
+// finely time is cut — the square-root rule a histogram is usually binned by.
+// The screen is the other limit, and the smaller of the two wins.
+func volBuckets(counted, cols int) int {
+	return min(max(cols, 1), max(2*int(math.Sqrt(float64(counted))), 4))
+}
+
+// volStep is the narrowest bucket that fits the span into n of them. Narrow
+// rather than round: within that budget the chart is drawn at the resolution
+// there is, and a step chosen to be tidy would throw half of it away.
+func volStep(span time.Duration, n int) time.Duration {
+	n = max(n, 1)
 	for _, s := range volSteps {
-		if int(span/s)+1 <= cols {
+		if int(span/s)+1 <= n {
 			return s
 		}
 	}
-	if cols == 1 {
+	if n == 1 {
 		return span + 24*time.Hour
 	}
-	days := span/(24*time.Hour)/time.Duration(cols-1) + 1
+	days := span/(24*time.Hour)/time.Duration(n-1) + 1
 	return days * 24 * time.Hour
 }
 
@@ -167,11 +181,15 @@ type volumeChart struct {
 // Telescope's own notes are left out for the plainer reason that they are not
 // log lines.
 func bucketVolume(entries []*logs.Entry, cols int, cursor *logs.Entry) (volumeChart, bool) {
-	var first, last time.Time
+	var (
+		first, last time.Time
+		counted     int
+	)
 	for _, e := range entries {
 		if !volCounts(e) {
 			continue
 		}
+		counted++
 		if first.IsZero() || e.At.Before(first) {
 			first = e.At
 		}
@@ -183,7 +201,7 @@ func bucketVolume(entries []*logs.Entry, cols int, cursor *logs.Entry) (volumeCh
 		return volumeChart{}, false
 	}
 
-	step := volStep(last.Sub(first), cols)
+	step := volStep(last.Sub(first), volBuckets(counted, cols))
 	from := volTruncate(first, step)
 	c := volumeChart{
 		step:   step,
@@ -263,6 +281,16 @@ func (c volumeChart) cell(width int) int {
 	return max(width/max(len(c.bars), 1), 1)
 }
 
+// bar is how much of a cell the bar itself takes. A wide cell keeps a column of
+// air on its right: three buckets drawn edge to edge across a wide screen are
+// not three bars, they are one band that changes color twice.
+func (c volumeChart) bar(cell int) int {
+	if cell >= 4 {
+		return cell - 1
+	}
+	return cell
+}
+
 // rows draws the bars, tallest bucket reaching the top row.
 func (c volumeChart) rows(width, height int) []string {
 	segs := make([][volLevels]int, len(c.bars))
@@ -271,6 +299,10 @@ func (c volumeChart) rows(width, height int) []string {
 	}
 
 	cell := c.cell(width)
+	bar, air := c.bar(cell), ""
+	if gap := cell - c.bar(cell); gap > 0 {
+		air = strings.Repeat(" ", gap)
+	}
 	rows := make([]string, height)
 	for r := range height {
 		// r counts down from the top row, base up from the bottom of the chart.
@@ -290,7 +322,8 @@ func (c volumeChart) rows(width, height int) []string {
 			}
 			fill := min(filled-base, 8)
 			out.WriteString(volTint(segs[i], base, fill, i == c.cursor).
-				Render(strings.Repeat(string(volBlocks[fill]), cell)))
+				Render(strings.Repeat(string(volBlocks[fill]), bar)))
+			out.WriteString(air)
 		}
 		rows[r] = out.String()
 	}

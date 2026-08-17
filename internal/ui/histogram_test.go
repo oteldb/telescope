@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
 
@@ -17,9 +18,9 @@ import (
 
 func TestVolumeStepIsTheNarrowestThatFits(t *testing.T) {
 	for _, tt := range []struct {
-		span time.Duration
-		cols int
-		want time.Duration
+		span    time.Duration
+		buckets int
+		want    time.Duration
 	}{
 		{0, 96, 10 * time.Millisecond},
 		{3 * time.Second, 96, 50 * time.Millisecond},
@@ -29,11 +30,37 @@ func TestVolumeStepIsTheNarrowestThatFits(t *testing.T) {
 		{30 * 24 * time.Hour, 96, 12 * time.Hour},
 		{365 * 24 * time.Hour, 96, 4 * 24 * time.Hour},
 	} {
-		step := volStep(tt.span, tt.cols)
+		step := volStep(tt.span, tt.buckets)
 		require.Equal(t, tt.want, step, tt.span.String())
-		require.LessOrEqual(t, int(tt.span/step)+1, tt.cols,
-			"the chart has to fit the columns it was given")
+		require.LessOrEqual(t, int(tt.span/step)+1, tt.buckets,
+			"the chart has to fit the buckets it was given")
 	}
+}
+
+// A bar says something only once its bucket holds several lines. Cut at the
+// width of a column, nine lines three tenths of a second apart are nine bars of
+// one — evenly spaced, all full height, a barcode rather than a shape.
+func TestAFewLinesAreNotCutIntoOneBucketEach(t *testing.T) {
+	at := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)
+	var entries []*logs.Entry
+	for i := range 9 {
+		entries = append(entries, volEntry(at.Add(time.Duration(i)*300*time.Millisecond), zapcore.InfoLevel))
+	}
+
+	c, ok := bucketVolume(entries, 150, nil)
+	require.True(t, ok)
+	require.LessOrEqual(t, len(c.bars), 9, "fewer buckets than lines")
+	require.Greater(t, c.max, 1, "so a bucket holds more than one of them")
+
+	// The screen is still the other limit: a thousand lines are not cut into a
+	// thousand buckets on a screen with room for a hundred and fifty.
+	require.LessOrEqual(t, volBuckets(1000, 150), 150)
+	require.Equal(t, 4, volBuckets(1, 150), "and one line still draws a chart")
+
+	// Drawn edge to edge, a handful of buckets is one band that changes color
+	// rather than a row of bars.
+	rows := c.rows(150, volBars)
+	require.Contains(t, ansi.Strip(rows[volBars-1]), "█ █", "there is air between two bars")
 }
 
 // TestVolumeCountsWhatTheViewShows: the panel is a count of the lines under it,
@@ -49,15 +76,16 @@ func TestVolumeCountsWhatTheViewShows(t *testing.T) {
 
 	c, ok := bucketVolume(entries, 96, nil)
 	require.True(t, ok)
-	require.Equal(t, time.Second, c.step)
+	require.Equal(t, 30*time.Second, c.step)
 	require.Equal(t, 4, c.count)
 	require.Equal(t, 2, c.totals[volInfo])
 	require.Equal(t, 1, c.totals[volError])
 	require.Equal(t, 1, c.totals[volWarn])
-	require.Equal(t, 1, c.max, "a second that carried one line is a bar of one")
-	require.Equal(t, 61, len(c.bars), "the empty seconds between them are buckets too")
-	require.Equal(t, 1, c.bars[0].total)
-	require.Zero(t, c.bars[3].total)
+	require.Equal(t, 3, c.max, "the burst is three lines in one bucket")
+	require.Len(t, c.bars, 3)
+	require.Equal(t, 3, c.bars[0].total)
+	require.Zero(t, c.bars[1].total, "the quiet half minute between them is a bucket too")
+	require.Equal(t, 1, c.bars[2].total)
 }
 
 // TestVolumeRoundsASingleLineUp: one error in an hour of chatter is what the
@@ -110,12 +138,12 @@ func TestVolumeIsDrawnAboveTheList(t *testing.T) {
 	)
 
 	out := screen(t, m)
-	require.Contains(t, out, "peak 1 per 50ms", "the scale the bars are drawn to")
+	require.Contains(t, out, "peak 1 per 1s", "the scale the bars are drawn to")
 	require.Contains(t, out, "info 2")
 	require.Contains(t, out, "error 1")
 
 	rows := strings.Split(out, "\n")
-	panel := indexOfRow(rows, "peak 1 per 50ms")
+	panel := indexOfRow(rows, "peak 1 per 1s")
 	first := indexOfRow(rows, "first")
 	require.Positive(t, panel)
 	require.Less(t, panel, first, "above the lines it counts")
