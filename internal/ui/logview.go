@@ -453,6 +453,14 @@ func (m logModel) requery(f logs.Filter) (source.Config, bool) {
 	return next, true
 }
 
+// narrowed reports whether what is on screen is less than what was read, by
+// either of the two things that narrow it: the query typed at the prompt and
+// the level the view cycles.
+func (m logModel) narrowed() bool {
+	f := m.view.Filter()
+	return f.Query != "" || f.MinLevel != logs.LevelAll
+}
+
 // syncFollow pins the cursor to the newest entry while following. It runs when
 // entries arrive rather than at render time, so keys that work from the cursor
 // see where the view actually is.
@@ -525,7 +533,7 @@ func (m logModel) View() string {
 		// own edge and says nothing about the log.
 		if i > m.top {
 			if d, ok := gap(entries[runs[i-1].last()], e); ok {
-				body = append(body, gapRow(d, e.At, inner))
+				body = append(body, gapRow(d, e.At, inner, m.narrowed()))
 				if len(body) == height {
 					break
 				}

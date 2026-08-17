@@ -111,6 +111,37 @@ func TestAGapIsDrawnBetweenTheLines(t *testing.T) {
 	require.Contains(t, rows[silence+1], "after the silence")
 }
 
+// A gap under a filter is not silence: the source may have been writing the
+// whole time and none of it got through. Saying silence there would report the
+// view's own narrowing as something the log did.
+func TestAGapUnderAFilterDoesNotClaimSilence(t *testing.T) {
+	at := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)
+	m := timedModel(t,
+		leveledAt(at, "error", "before"),
+		leveledAt(at.Add(time.Second), "info", "chatter"),
+		leveledAt(at.Add(8*time.Minute), "error", "after"),
+	)
+	require.Contains(t, screen(t, m), "of silence", "nothing is hidden yet")
+
+	// The level the view cycles hides the chatter, and the hole it leaves is
+	// eight minutes of the filter rather than of the log.
+	m = send(t, m, k("l"), k("l"), k("l"))
+	out := screen(t, m)
+	require.Contains(t, out, "8m00s without a match")
+	require.NotContains(t, out, "of silence")
+
+	// And so is a hole left by the query prompt.
+	m = send(t, m, k("l"))
+	m = send(t, m, k("/"))
+	m = typed(t, m, "error")
+	m = send(t, m, k("enter"))
+	require.Contains(t, screen(t, m), "without a match")
+}
+
+func leveledAt(at time.Time, level, msg string) source.Line {
+	return source.Line{Data: []byte(`{"level":"` + level + `","msg":"` + msg + `"}`), At: at}
+}
+
 // TestAGapCostsARow: the window is counted in rows, since a gap takes one.
 func TestAGapCostsARow(t *testing.T) {
 	at := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)

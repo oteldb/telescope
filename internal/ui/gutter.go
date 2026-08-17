@@ -142,11 +142,21 @@ func gap(prev, next *logs.Entry) (time.Duration, bool) {
 	return d, d >= gapAfter
 }
 
-// gapRow draws the silence between two lines: how long it lasted, and the
-// instant the log picks up again, which is the one thing the clock column
-// cannot say once a list covers more than a day.
-func gapRow(d time.Duration, at time.Time, width int) string {
-	label := fmt.Sprintf("%s of silence · %s ", humanGap(d), at.Local().Format(fullLayout))
+// gapRow draws the seam between two lines: how long it lasted, and the instant
+// the log picks up again, which is the one thing the clock column cannot say
+// once a list covers more than a day.
+//
+// What the gap means depends on what is being looked at. Over the whole stream
+// it is silence, and that is the thing a reader is looking for. Under a filter
+// it is not: the source may have been writing the whole time, and all this row
+// knows is that none of it got through. Claiming silence there would be the
+// view reporting its own narrowing as something the log did.
+func gapRow(d time.Duration, at time.Time, width int, narrowed bool) string {
+	what := "of silence"
+	if narrowed {
+		what = "without a match"
+	}
+	label := fmt.Sprintf("%s %s · %s ", humanGap(d), what, at.Local().Format(fullLayout))
 	rule := strings.Repeat("─", max(width-len(label)-4, 0))
 	return styleDim.Render("  ── " + label + rule)
 }
