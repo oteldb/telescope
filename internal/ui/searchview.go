@@ -117,32 +117,42 @@ func (m searchModel) list(width, height int) []string {
 // so a page of short names is not read across a column sized for one long name
 // somewhere below it — and remeasured as the list scrolls, which is what keeps
 // the columns tight to what is being read.
-type searchCols struct{ service, name, count int }
+type searchCols struct{ service, name, count, id int }
 
 // searchColumns measures the table. Everything but the name has a width the
 // content decides; the name takes what is left, since it is the one field of a
 // trace that has no length anybody agreed on.
 func searchColumns(window []trace.Result, width int) searchCols {
 	var c searchCols
+	name := 0
 	for _, r := range window {
 		c.service = max(c.service, ansi.StringWidth(logs.Sanitize(r.Service)))
 		c.count = max(c.count, ansi.StringWidth(countText(r)))
-		c.name = max(c.name, ansi.StringWidth(logs.Sanitize(r.Name)))
+		c.id = max(c.id, ansi.StringWidth(r.TraceID))
+		name = max(name, ansi.StringWidth(logs.Sanitize(r.Name)))
 	}
-	fixed := len(searchStamp) + durWidth + idWidth + 3*gapWidth
+	fixed := len(searchStamp) + durWidth + 3*gapWidth
 	if c.service > 0 {
 		fixed += c.service + gapWidth
 	}
 	if c.count > 0 {
 		fixed += c.count + gapWidth
 	}
-	c.name = max(min(c.name, width-fixed), 1)
+	// The whole id where the row can hold it and still name what it is, and as
+	// much of it as tells rows apart where it cannot. An id is carried rather
+	// than read — `y` is what it is for — so a column of hex crowding out the
+	// operation would be the row spending its width on the thing nobody is
+	// scanning.
+	if fixed+name+c.id > width {
+		c.id = min(c.id, idWidth)
+	}
+	c.name = max(min(name, width-fixed-c.id), 1)
 	return c
 }
 
 const (
-	// idWidth is what [shortID] leaves of a trace id, and gapWidth the space
-	// between two columns of the table.
+	// idWidth is how much of a trace id tells one row from another, for a table
+	// with no room for all of it, and gapWidth the space between two columns.
 	idWidth  = 13
 	gapWidth = 2
 )
@@ -167,7 +177,7 @@ func (m searchModel) row(r trace.Result, c searchCols) string {
 	if c.count > 0 {
 		cells = append(cells, padRight(m.countCell(r), c.count))
 	}
-	return strings.Join(append(cells, styleTrace.Render(shortID(r.TraceID))), gap)
+	return strings.Join(append(cells, styleTrace.Render(shortID(r.TraceID, c.id))), gap)
 }
 
 // countText is how much of the trace there is, as plain text for measuring.
@@ -198,14 +208,13 @@ func (m searchModel) countCell(r trace.Result) string {
 	return styleDim.Render(countText(r))
 }
 
-// shortID is as much of a trace id as tells one row from another. The whole of
-// it is what `y` copies: an id is carried rather than read, and sixteen bytes
-// of hex across a row is a column of noise.
-func shortID(id string) string {
-	if len(id) > 12 {
-		return id[:12] + "…"
+// shortID is as much of a trace id as the column has room for. `y` copies the
+// whole of it either way, which is what an id is for.
+func shortID(id string, width int) string {
+	if width < 2 || len(id) <= width {
+		return id
 	}
-	return id
+	return id[:width-1] + "…"
 }
 
 // suggestionList draws what the store offers under the field, scrolled to keep

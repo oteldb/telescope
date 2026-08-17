@@ -360,6 +360,25 @@ func TestSearchResultsLineUp(t *testing.T) {
 	require.Equal(t, cols[0], cols[1], "the count is a column, whatever the name before it was")
 }
 
+// An id is carried rather than read, so it is cut where the row needs the
+// width for what the trace was — and not where the row has width to spare.
+func TestTheWholeIdIsShownWhereItFits(t *testing.T) {
+	const id = "4bf92f3577b34da6a3ce929d0e0e4736"
+	results := []trace.Result{{TraceID: id, Service: "gateway", Name: "POST /checkout", Start: time.Now(), Matched: 3}}
+
+	m := searchScreen(t, tempoStore())
+	m, _ = m.Update(searchLoadedMsg{results: results})
+	require.Contains(t, screen(t, m), "4bf92f3577b3…", "eighty columns is not room for all of it")
+
+	wide := send(t, New(), tea.WindowSizeMsg{Width: 160, Height: 30})
+	wide, _ = wide.Update(openSearchMsg{at: tempoStore()})
+	wide, _ = wide.Update(searchLoadedMsg{results: results})
+	out := screen(t, wide)
+	require.Contains(t, out, id)
+	require.NotContains(t, out, "4bf92f3577b3…")
+	require.Contains(t, out, "POST /checkout", "and the name did not pay for it")
+}
+
 // The list says how many it did not show. A store with four hundred operations
 // must not read as one with six.
 func TestSuggestionsSayWhatDidNotFit(t *testing.T) {
