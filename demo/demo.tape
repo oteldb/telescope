@@ -1,6 +1,14 @@
 # The README recording. Run from the repository root:
 #
 #     vhs demo/demo.tape
+#     gifski -o demo/demo.gif -W 1600 -r 25 -Q 80 demo/demo.gif
+#
+# The second line is worth a fifth of the file: vhs writes a frame per tick and
+# a terminal is unchanged between keystrokes, so most of them are copies of the
+# one before. gifski merges those and lengthens the delay instead, which leaves
+# the timing and the pixels alone. Quality below 80, or its --motion-quality,
+# buys another megabyte and leaves ghosts of the previous frame in the dark
+# rows; the point of the recording is that the log is readable.
 #
 # It reads demo/home as the config directory, so the places it opens are the
 # two scripts in demo/emit.sh and not anything on this machine, and the traces
