@@ -40,7 +40,7 @@ const logsDescription = "Reads the lines of a place, newest last. " +
 type logsInput struct {
 	Place  string `json:"place" jsonschema:"The name of a place or group, as places reports it"`
 	Filter string `json:"filter,omitempty" jsonschema:"The filter to read through, in telescope's filter language"`
-	Range  string `json:"range,omitempty" jsonschema:"The window to read: 1h, today, 6h..1h. Empty reads the place's own window"`
+	Range  string `json:"range,omitempty" jsonschema:"The window, relative or absolute: 1h, today, yesterday, 6h..1h, 10:00..12:00, 2026-01-02 10:00..2026-01-02 12:00, or two RFC 3339 instants. Empty reads the place's own window, and all removes every bound"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"How many lines to return, newest last. Defaults to 50 and is capped at 500"`
 }
 
@@ -59,10 +59,22 @@ type logsOutput struct {
 	Returned int `json:"returned"`
 	// Covered says the window was read to its far end. When it is false the
 	// counts are about what was read and not about what is there.
-	Covered bool              `json:"covers_window"`
-	Common  map[string]string `json:"common,omitempty" jsonschema:"Labels every returned line shares, written once instead of on each"`
-	Varies  []string          `json:"varies,omitempty" jsonschema:"The fields that tell the returned lines apart"`
-	Note    string            `json:"note,omitempty" jsonschema:"What the answer leaves out, and what to ask instead"`
+	Covered bool `json:"covers_window"`
+	// Pushed is the query each stream was actually sent, which is what read
+	// and matched differing means: a place that answered the filter itself
+	// returns only matches, and one that could not is filtered here after the
+	// fact.
+	Pushed []pushed          `json:"pushed,omitempty"`
+	Common map[string]string `json:"common,omitempty" jsonschema:"Labels every returned line shares, written once instead of on each"`
+	Varies []string          `json:"varies,omitempty" jsonschema:"The fields that tell the returned lines apart"`
+	Note   string            `json:"note,omitempty" jsonschema:"What the answer leaves out, and what to ask instead"`
+}
+
+// pushed is one stream and the query the database was asked, empty for a
+// source that answers no query of its own.
+type pushed struct {
+	Place string `json:"place"`
+	Query string `json:"query,omitempty"`
 }
 
 type window struct {
@@ -99,7 +111,8 @@ func logsHandler(cfg config.Config) sdk.ToolHandlerFor[logsInput, logsOutput] {
 		case limit > maxLogsLimit:
 			limit = maxLogsLimit
 		}
-		read, err := readBack(ctx, src.WithFilter(filter.Expr()), filter, limit)
+		asked := src.WithFilter(filter.Expr())
+		read, err := readBack(ctx, asked, filter, limit)
 		if err != nil {
 			return nil, logsOutput{}, err
 		}
@@ -111,6 +124,7 @@ func logsHandler(cfg config.Config) sdk.ToolHandlerFor[logsInput, logsOutput] {
 			Matched:  len(read.matched),
 			Returned: min(len(read.matched), limit),
 			Covered:  read.covered,
+			Pushed:   pushedTo(asked),
 		}
 		shown := read.matched
 		if len(shown) > limit {
@@ -212,4 +226,26 @@ func logsNote(out logsOutput, limit int) string {
 			" lines back, which is as far as one call looks; anything older than the first " +
 			"line here was not read. Ask again over an earlier window to go on"
 	}
+}
+
+// pushedTo is what each stream was asked, named as the streams are named.
+//
+// A filter telescope could not compile into the database's own language is not
+// a narrower answer, it is the same answer read here instead — which is the
+// whole of the difference between the lines read and the lines matched, and
+// the one thing a caller cannot work out from the counts alone.
+func pushedTo(src source.Config) []pushed {
+	var (
+		queries = src.Pushed()
+		names   = src.Labels()
+		out     = make([]pushed, 0, len(queries))
+	)
+	for i, q := range queries {
+		name := src.Name
+		if i < len(names) {
+			name = names[i]
+		}
+		out = append(out, pushed{Place: name, Query: q})
+	}
+	return out
 }

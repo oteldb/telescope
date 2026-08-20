@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/oteldb/telescope/internal/config"
+	"github.com/oteldb/telescope/internal/source"
 )
 
 // entry is a line as VictoriaLogs answers with one.
@@ -183,4 +184,40 @@ func TestLogsRefusesWhatItCannotAskTwice(t *testing.T) {
 
 	_, _, err := logsHandler(cfg)(t.Context(), nil, logsInput{Place: "tail"})
 	require.ErrorContains(t, err, "can only follow")
+}
+
+// TestLogsSaysWhatTheDatabaseWasAsked: read and matched differ when a place
+// could not be asked the filter, and the query it was asked is the only thing
+// that says which of the two happened.
+func TestLogsSaysWhatTheDatabaseWasAsked(t *testing.T) {
+	srv, _ := logStore(t, []entry{
+		{at: "2026-08-17T12:00:01Z", level: "info", pod: "api-1", msg: "started"},
+	})
+	cfg := testConfig(t, []config.Place{
+		{Name: "prod", Type: "victorialogs", URL: srv},
+		{Name: "node", Type: "journalctl", Unit: "nginx"},
+	}, nil)
+
+	text, out := logsOf(t, cfg, logsInput{Place: "prod", Filter: "pod=api-1"})
+	require.Len(t, out.Pushed, 1)
+	require.Contains(t, out.Pushed[0].Query, "api-1")
+	require.Contains(t, text, "asked prod: ")
+}
+
+// TestLogsSaysWhenNothingWasPushed: a collector answers no query of its own,
+// and an agent that thought the filter had reached it would read the counts
+// as a quiet stream rather than as a wide one.
+func TestLogsSaysWhenNothingWasPushed(t *testing.T) {
+	cfg := testConfig(t, []config.Place{
+		{Name: "node", Type: "journalctl", Unit: "nginx"},
+	}, nil)
+
+	require.Equal(t, []pushed{{Place: "node"}}, pushedTo(mustStream(t, cfg, "node")))
+}
+
+func mustStream(t *testing.T, cfg config.Config, place string) source.Config {
+	t.Helper()
+	src, err := stream(cfg, place)
+	require.NoError(t, err)
+	return src
 }

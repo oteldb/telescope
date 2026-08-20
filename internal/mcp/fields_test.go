@@ -150,3 +150,18 @@ func TestUnknownRangeIsReported(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "yesterdayish"), err.Error())
 }
+
+// TestFieldsOverAnAbsoluteWindow: an agent looking at an incident has two
+// instants and not a duration, and the tools say they take them.
+func TestFieldsOverAnAbsoluteWindow(t *testing.T) {
+	srv, asked := vlogs(t, nil)
+	cfg := testConfig(t, []config.Place{
+		{Name: "prod", Type: "victorialogs", URL: srv},
+	}, nil)
+
+	_, _, err := fieldsHandler(cfg)(t.Context(), nil,
+		fieldsInput{Place: "prod", Range: "2026-08-17T12:00:00Z..2026-08-17T12:05:00Z"})
+	require.NoError(t, err)
+	require.Equal(t, "2026-08-17T12:00:00Z", asked.Get("start"))
+	require.Equal(t, "2026-08-17T12:05:00Z", asked.Get("end"))
+}

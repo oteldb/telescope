@@ -154,6 +154,15 @@ func draw(out logsOutput, rows []row) string {
 			fmt.Fprintf(b, "window: %s..%s\n", first.Format(dateStamp), last.Format(dateStamp))
 		}
 	}
+	for _, p := range out.Pushed {
+		switch {
+		case p.Query != "":
+			fmt.Fprintf(b, "asked %s: %s\n", p.Place, p.Query)
+		default:
+			fmt.Fprintf(b, "asked %s: nothing — it answers no query of its own, "+
+				"so the filter was applied here\n", p.Place)
+		}
+	}
 	if len(out.Common) > 0 {
 		b.WriteString("common:")
 		for _, k := range sortedKeys(out.Common) {
