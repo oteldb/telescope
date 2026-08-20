@@ -130,8 +130,10 @@ func (g *Group) resolve(places []Place, byName map[string]int) error {
 		switch {
 		case err != nil && places[j].resolveErr != nil:
 			// Whether a token can be read is environment, not declaration. The
-			// group carries the reason and reports it when opened.
-			g.resolveErr = errors.Wrapf(err, "place %q", name)
+			// group carries the reason and reports it when opened, as the place
+			// worded it: that reason names the place already, and saying it
+			// again here reads as two places having failed.
+			g.resolveErr = err
 		case err != nil:
 			return errors.Wrapf(err, "names %q", name)
 		case !ready:
