@@ -63,6 +63,19 @@ var Descriptor = figureout.MustDerive(func(c *Config, s *figureout.Schema[Config
 	// A group is checked against the places as declared, before any token has
 	// been read: a group whose place needs one telescope cannot find is not a
 	// group written wrong, and carrying that reason is [Group.resolve]'s.
+	// Which entry named which is a rule about two of them, so it is reported
+	// with the line that did the naming rather than as a fact about the file.
+	figureout.Invariant(s, "traces-name-places", func(c *Config) error {
+		var errs []error
+		byName := placeIndex(c.Places)
+		for _, p := range c.Places {
+			if _, err := traceStore(c.Places, byName, p); err != nil {
+				errs = append(errs, figureout.At(placePath(p.Name)).Errorf("%s", err))
+			}
+		}
+		return errors.Join(errs...)
+	})
+
 	figureout.Invariant(s, "group-names-places", func(c *Config) error {
 		var errs []error
 		byName := placeIndex(c.Places)
@@ -179,10 +192,55 @@ func New(places []Place, groups []Group) (Config, error) {
 	if err := c.resolvePlaces(); err != nil {
 		return Config{}, err
 	}
+	if err := c.resolveTraces(); err != nil {
+		return Config{}, err
+	}
 	if err := c.resolveGroups(); err != nil {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+// resolveTraces attaches to each place the store it named.
+//
+// It runs after every place has been resolved, so the store's own token is the
+// one already read: a place naming a store is not a place borrowing a token,
+// and the store is reached the way the store says.
+func (c *Config) resolveTraces() error {
+	byName := placeIndex(c.Places)
+	for i, p := range c.Places {
+		store, err := traceStore(c.Places, byName, p)
+		switch {
+		case err != nil:
+			return errors.Wrapf(err, "place %q", p.Name)
+		case store == nil:
+			continue
+		}
+		c.Places[i].linked, c.Places[i].linkErr = store.resolved, store.resolveErr
+	}
+	return nil
+}
+
+// traceStore is the place p named for its traces, nil for one that named none,
+// and why what it named cannot be a store.
+//
+// It says nothing about which place did the naming: [Config.resolveTraces] is
+// told by the caller, and the invariant reports it against the entry it was
+// read from, where the path names it already.
+func traceStore(places []Place, byName map[string]int, p Place) (*Place, error) {
+	if !p.Traces.Links() {
+		return nil, nil
+	}
+	j, ok := byName[p.Traces.Name]
+	if !ok {
+		return nil, errors.Errorf("names undeclared place %q for its traces", p.Traces.Name)
+	}
+	if store := &places[j]; store.ReadsTraces() {
+		return store, nil
+	}
+	return nil, errors.Errorf(
+		"names %q for its traces, and %q reads logs: a trace store is a place of type %s",
+		p.Traces.Name, p.Traces.Name, strings.Join(traceTypeNames, " or "))
 }
 
 // resolvePlaces validates each place and reads the endpoint of each one that
@@ -207,7 +265,7 @@ func (c *Config) resolvePlaces() error {
 		}
 		seen[p.Name] = true
 
-		if !p.Collector().IsRemoteAPI() {
+		if !p.Collector().IsRemoteAPI() && !p.ReadsTraces() {
 			continue
 		}
 		c.Places[i].resolved, c.Places[i].resolveErr = p.Endpoint()

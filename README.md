@@ -64,6 +64,7 @@ see [Configuration](#configuration).
 | `command` | anything writing to stdout |
 | `victorialogs` | a [LogsQL][logsql] query, over HTTP |
 | `loki` | a Loki endpoint, over HTTP; the filter selects the stream |
+| `tempo`, `jaeger` | traces rather than lines: a store other places name, see [Traces](#traces) |
 
 The first four run a command, on this machine unless you name an ssh host with
 `ctrl+o` (or `via: ssh://host`). The last two query a database over HTTP and
@@ -274,34 +275,46 @@ standard output, for a schema store or an editor that wants a local copy.
 
 ### Traces
 
-A place can say where its traces are read from, which `telescope trace --from
-<name>` then refers to by name:
+A trace store is a place, of type `tempo` or `jaeger`, and the places whose
+lines carry ids into it name it:
 
 ```yaml
 places:
-  - name: prod
+  - name: prod traces
+    type: tempo
+    url: https://tempo.example.com
+    token:
+      env: TEMPO_TOKEN
+  - name: api
     type: victorialogs
     url: https://logs.example.com
-    token:
-      env: LOGS_TOKEN
+    traces: prod traces
+  - name: worker
+    type: victorialogs
+    url: https://logs.example.com
+    traces: prod traces
+```
+
+An environment writes its traces into one store and its logs into several, so
+the store is declared once and reached the way it says — its own token, tenant
+and proxy, not those of whoever named it. `telescope trace --from "prod traces"`
+opens it, `alt+t` on it searches it, and `enter` does the same, since it holds
+no lines to stream.
+
+A store that speaks Jaeger's query API — Jaeger itself, or VictoriaTraces —
+declares `type: jaeger`.
+
+Where there is one place and one store, a url written in place of the name says
+the same thing without needing one, and borrows the token, tenant, proxy and
+TLS settings of the place it is written on:
+
+```yaml
+places:
+  - name: homelab
+    type: loki
+    url: https://loki.example.com
     traces: https://tempo.example.com
 ```
-
-A url on its own is a Tempo. A store that speaks Jaeger's query API — Jaeger
-itself, or VictoriaTraces — says so:
-
-```yaml
-places:
-  - name: prod
-    type: victorialogs
-    url: https://logs.example.com
-    traces:
-      url: https://victoria.example.com/select/jaeger
-      type: jaeger
-```
-
-Either way the store borrows the place's token, tenant, proxy and TLS settings,
-since a system's traces usually sit behind the same door as its logs.
 
 ### Endpoints
 

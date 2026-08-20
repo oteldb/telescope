@@ -163,14 +163,22 @@ func (g Grafana) build(found []datasource, viaAPI bool) ([]Offer, []string) {
 	var (
 		out    []Offer
 		notes  []string
-		traces []config.TraceStore
+		stores []string
 	)
 	for _, d := range found {
 		if kind, ok := traceKinds[d.Type]; ok {
-			store := config.TraceStore{URL: g.datasourceURL(d, viaAPI), Type: string(kind)}
-			if !store.IsZero() {
-				traces = append(traces, store)
+			store := config.Place{
+				Name: d.Name, Type: string(kind), URL: g.datasourceURL(d, viaAPI),
 			}
+			if store.URL == "" {
+				notes = append(notes, "grafana: "+d.Name+" names no url")
+				continue
+			}
+			if viaAPI {
+				store.URL, store.Datasource, store.Token = g.URL, d.UID, g.Token
+			}
+			out = append(out, Offer{Place: store, Note: "grafana datasource"})
+			stores = append(stores, store.Name)
 			continue
 		}
 		kind, ok := logKinds[d.Type]
@@ -190,7 +198,7 @@ func (g Grafana) build(found []datasource, viaAPI bool) ([]Offer, []string) {
 		}
 		out = append(out, Offer{Place: place, Note: "grafana datasource"})
 	}
-	return attach(out, traces, notes)
+	return attach(out, stores, notes)
 }
 
 // datasourceURL is where the datasource is queried: through the Grafana that
@@ -204,30 +212,28 @@ func (g Grafana) datasourceURL(d datasource, viaAPI bool) string {
 	return strings.TrimSpace(d.URL)
 }
 
-// attach hangs a trace store off the places it belongs to.
+// attach points the log places at the store they belong to.
 //
-// A place reads its traces through the same door as its logs, so one store and
-// a handful of log datasources from the same Grafana is a system whose traces
-// are that store — there is nowhere else for them to be. Several stores is a
-// question this has no way to answer, and guessing would quietly point half the
-// places at the wrong one, so it says what it found instead.
-func attach(offers []Offer, traces []config.TraceStore, notes []string) ([]Offer, []string) {
-	switch {
-	case len(traces) == 0 || len(offers) == 0:
-		for _, t := range traces {
-			notes = append(notes, "grafana: "+t.URL+" holds traces, but no log datasource came with it")
+// Every store is a place of its own now, so nothing is lost by not knowing
+// which: they are all declared, all reachable by name, and `telescope trace
+// --from` opens any of them. What is left to guess is only the link, and one
+// store beside a handful of log datasources from the same Grafana is a system
+// whose traces are that store — there is nowhere else for them to be. Several
+// is a question this has no way to answer, so it says which names are there
+// and leaves the linking to whoever knows.
+func attach(offers []Offer, stores, notes []string) ([]Offer, []string) {
+	if len(stores) != 1 {
+		if len(stores) > 1 {
+			notes = append(notes, "grafana: several trace stores ("+strings.Join(stores, ", ")+
+				"): name the one each place reads with traces: <name>")
 		}
-	case len(traces) == 1:
-		for i := range offers {
-			offers[i].Place.Traces = traces[0]
+		return offers, notes
+	}
+	for i := range offers {
+		if offers[i].Place.ReadsTraces() {
+			continue
 		}
-	default:
-		var urls []string
-		for _, t := range traces {
-			urls = append(urls, t.URL)
-		}
-		notes = append(notes, "grafana: several trace stores ("+strings.Join(urls, ", ")+
-			"): add traces: to the places they belong to")
+		offers[i].Place.Traces = config.TraceStore{Name: stores[0]}
 	}
 	return offers, notes
 }
