@@ -19,8 +19,10 @@ const (
 
 const placesDescription = "Lists where telescope can read from: the places and " +
 	"groups the config declares, what speaks at each, which signals it holds and " +
-	"whether it opens as it stands. Every other tool names one of these by name; " +
-	"none of them takes a command line, so a place that is not here cannot be read."
+	"whether it opens as it stands. A place that reads traces is one of these too, " +
+	"and the places whose lines carry ids into it name it. Every other tool names " +
+	"one of these by name; none of them takes a command line, so a place that is " +
+	"not here cannot be read."
 
 type placesInput struct{}
 
@@ -51,8 +53,12 @@ type placeInfo struct {
 // nothing about whether Tempo or Jaeger answers at it, and the two answer the
 // same question differently.
 type store struct {
-	URL  string `json:"url"`
-	Type string `json:"type" jsonschema:"What answers there: tempo or jaeger"`
+	// Place is the store this place named, when it named one rather than
+	// writing an address out: it is a place of its own, and asking about it by
+	// that name is how the rest of it is found.
+	Place string `json:"place,omitempty" jsonschema:"The place that reads these traces, when the store is one"`
+	URL   string `json:"url"`
+	Type  string `json:"type" jsonschema:"What answers there: tempo or jaeger"`
 }
 
 type groupInfo struct {
@@ -86,6 +92,9 @@ func placesHandler(cfg config.Config) sdk.ToolHandlerFor[placesInput, placesOutp
 }
 
 func describePlace(p config.Place) placeInfo {
+	if p.ReadsTraces() {
+		return describeStore(p)
+	}
 	info := placeInfo{
 		Name:  p.Name,
 		Type:  p.Type,
@@ -95,7 +104,11 @@ func describePlace(p config.Place) placeInfo {
 	}
 	if traces, ok, err := p.TraceEndpoint(); ok && err == nil {
 		info.Reads = append(info.Reads, signalTraces)
-		info.Traces = &store{URL: traces.URL, Type: string(traces.Collector)}
+		info.Traces = &store{
+			Place: p.Traces.Name,
+			URL:   traces.URL,
+			Type:  string(traces.Collector),
+		}
 	}
 
 	// The stream is where a place says what it is in the terms everything below
@@ -116,6 +129,25 @@ func describePlace(p config.Place) placeInfo {
 			info.Needs = err.Error()
 		}
 	}
+	return info
+}
+
+// describeStore is a place that reads traces rather than lines.
+//
+// It is in the same list as the rest: a store is a place, with a name the
+// others use to point at it, and one list keeps the pointing legible. What it
+// does not have is a stream — [config.Place.Stream] refuses one, and reporting
+// that refusal as the place's error would read as a place that is broken
+// rather than one that holds another signal.
+func describeStore(p config.Place) placeInfo {
+	info := placeInfo{Name: p.Name, Type: p.Type, Reads: []string{signalTraces}}
+	at, _, err := p.TraceEndpoint()
+	info.URL = at.URL
+	if err != nil {
+		info.Error = err.Error()
+		return info
+	}
+	info.Ready = true
 	return info
 }
 

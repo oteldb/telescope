@@ -123,3 +123,33 @@ func TestPlacesNamesWhatAnswersAtATraceStore(t *testing.T) {
 	require.Equal(t, []string{signalLogs, signalTraces}, place.Reads)
 	require.Equal(t, &store{URL: "https://jaeger.example.com", Type: "jaeger"}, place.Traces)
 }
+
+// TestPlacesReportsAStoreAsAPlace: a trace store is a place with a name the
+// others point at, so it is in the same list and says which signal it holds.
+func TestPlacesReportsAStoreAsAPlace(t *testing.T) {
+	cfg := testConfig(t, []config.Place{
+		{Name: "prod traces", Type: "tempo", URL: "https://tempo.example.com"},
+		{
+			Name:   "api",
+			Type:   "victorialogs",
+			URL:    "https://logs.example.com",
+			Traces: config.TraceStore{Name: "prod traces"},
+		},
+	}, nil)
+
+	out := callPlaces(t, cfg)
+	require.Len(t, out.Places, 2)
+
+	tempo := out.Places[0]
+	require.Equal(t, []string{signalTraces}, tempo.Reads)
+	require.Equal(t, "tempo", tempo.Type)
+	require.Equal(t, "https://tempo.example.com", tempo.URL)
+	require.True(t, tempo.Ready, "a store that holds no lines is not a broken place")
+	require.Empty(t, tempo.Error)
+	require.Nil(t, tempo.Traces, "it is the store rather than naming one")
+
+	api := out.Places[1]
+	require.Equal(t, []string{signalLogs, signalTraces}, api.Reads)
+	require.Equal(t, &store{Place: "prod traces", URL: "https://tempo.example.com", Type: "tempo"},
+		api.Traces, "the link is by the name the tools take, with where it points beside it")
+}

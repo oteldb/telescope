@@ -221,3 +221,16 @@ func mustStream(t *testing.T, cfg config.Config, place string) source.Config {
 	require.NoError(t, err)
 	return src
 }
+
+// TestLogsRefusesAStore: a store holds traces, and an agent told only that the
+// place could not be opened would try again with a filter.
+func TestLogsRefusesAStore(t *testing.T) {
+	cfg := testConfig(t, []config.Place{
+		{Name: "prod traces", Type: "tempo", URL: "https://tempo.example.com"},
+	}, nil)
+
+	_, _, err := logsHandler(cfg)(t.Context(), nil, logsInput{Place: "prod traces"})
+	require.ErrorContains(t, err, "reads traces rather than lines")
+	require.NotContains(t, err.Error(), "telescope trace --from",
+		"a tool answers with what its caller can do, not with a command line")
+}
