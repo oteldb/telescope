@@ -254,6 +254,12 @@ var (
 func (m startModel) savedCandidates() []complete.Candidate {
 	out := make([]complete.Candidate, 0, m.saved.len())
 	for i := range m.saved.len() {
+		if p, ok := m.saved.store(i); ok {
+			out = append(out, complete.Candidate{
+				Value: p.Name, Detail: storeWhere(p),
+			})
+			continue
+		}
 		cfg, ready, err := m.saved.stream(i)
 		if err != nil {
 			out = append(out, complete.Candidate{
@@ -290,6 +296,16 @@ func savedWhere(cfg source.Config) string {
 		where = "ssh://" + cfg.Host
 	}
 	return where + " · " + string(cfg.Collector)
+}
+
+// storeWhere describes a place that reads traces, in the shape [savedWhere]
+// describes one that reads lines: where it points, then what answers there.
+func storeWhere(p config.Place) string {
+	at, _, err := p.TraceEndpoint()
+	if err != nil {
+		return "traces · " + err.Error()
+	}
+	return endpointWhere(at) + " · " + string(at.Collector)
 }
 
 // mark shows whether a saved source is picked to be read with others. The
@@ -557,6 +573,11 @@ func missingLabel(c source.Collector) string {
 func (m startModel) openSaved(i int) (startModel, tea.Cmd) {
 	if i < 0 || i >= m.saved.len() {
 		return m, nil
+	}
+	if _, ok := m.saved.store(i); ok {
+		// A store holds no lines, so opening it is searching it — the same
+		// thing alt+t does to a place that names one.
+		return m.searchTraces(i)
 	}
 	cfg, ready, err := m.saved.stream(i)
 	if err != nil {

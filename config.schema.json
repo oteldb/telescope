@@ -225,7 +225,7 @@
             "type": "object"
           },
           "traces": {
-            "description": "Where this place's traces are read from. A url on its own is a Tempo.",
+            "description": "Where this place's traces are read from: the name of a place that reads them, or a url of one, which on its own is a Tempo.",
             "oneOf": [
               {
                 "type": "string"
@@ -233,6 +233,13 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "place": {
+                    "description": "The name of a place that reads traces, where the store is declared once and named by everything whose lines carry ids into it.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "type": {
                     "default": "tempo",
                     "description": "Which API answers there.",
@@ -265,7 +272,9 @@
               "docker",
               "command",
               "victorialogs",
-              "loki"
+              "loki",
+              "tempo",
+              "jaeger"
             ],
             "type": "string"
           },

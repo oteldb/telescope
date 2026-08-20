@@ -39,11 +39,18 @@ func (s saved) place(i int) (config.Place, bool) {
 // what decides whether the key that searches one is worth offering.
 func (s saved) readsTraces() bool {
 	for _, p := range s.places {
-		if !p.Traces.IsZero() {
+		if p.ReadsTraces() || !p.Traces.IsZero() {
 			return true
 		}
 	}
 	return false
+}
+
+// store returns the entry at i when it is a place that reads traces rather than
+// lines. Such a place holds no stream: what opening it means is a search.
+func (s saved) store(i int) (config.Place, bool) {
+	p, ok := s.place(i)
+	return p, ok && p.ReadsTraces()
 }
 
 func (s saved) name(i int) string {

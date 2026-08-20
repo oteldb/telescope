@@ -103,6 +103,11 @@ type Place struct {
 	// than returned so one unreadable token does not take the whole config down.
 	resolved   source.Endpoint
 	resolveErr error
+	// linked is the trace store this place named, and linkErr why that store's
+	// token could not be read. Both are the named place's own: a store declared
+	// once is reached the way it says, not the way whoever named it is.
+	linked  source.Endpoint
+	linkErr error
 }
 
 // placeDescriptor describes a [Place] as it is written in the file: what each
@@ -155,9 +160,9 @@ var placeDescriptor = figureout.MustDerive(func(p *Place, s *figureout.Schema[Pl
 	figureout.Value(s, &p.Insecure, "insecure").
 		Doc("Skip TLS verification, for a place behind a private CA.")
 
-	figureout.ScalarOr(s, &p.Traces, "traces", traceStoreDescriptor,
-		func(url string) TraceStore { return TraceStore{URL: url} }).
-		Doc("Where this place's traces are read from. A url on its own is a Tempo.")
+	figureout.ScalarOr(s, &p.Traces, "traces", traceStoreDescriptor, traceScalar).
+		Doc("Where this place's traces are read from: the name of a place that reads " +
+			"them, or a url of one, which on its own is a Tempo.")
 	figureout.Value(s, &p.Range, "range").
 		Doc("The window read: 1h, today, 6h..1h.")
 	figureout.Optional(s, &p.Tail, "tail").AtLeast(0).DocumentDefault(defaultTail).
@@ -170,11 +175,15 @@ var placeDescriptor = figureout.MustDerive(func(p *Place, s *figureout.Schema[Pl
 
 	figureout.IgnoreRecursive(s, &p.resolved, figureout.Reason("resolved at load"))
 	figureout.Ignore(s, &p.resolveErr, figureout.Reason("resolved at load"))
+	figureout.IgnoreRecursive(s, &p.linked, figureout.Reason("resolved at load"))
+	figureout.Ignore(s, &p.linkErr, figureout.Reason("resolved at load"))
 })
 
-// typeNames are the types a place may declare, for the message that says so
-// when it declares something else.
-var typeNames = []string{
+// logTypes are the types a place may declare to read logs, and traceTypeNames
+// the ones it may declare to read traces. They are separate lists because a
+// stream can only be opened on the first kind: what a place of the second kind
+// is for is being named by the others, and by `telescope trace --from`.
+var logTypes = []string{
 	string(source.CollectorJournal),
 	string(source.CollectorKubectl),
 	string(source.CollectorDocker),
@@ -182,6 +191,30 @@ var typeNames = []string{
 	string(source.CollectorVictoriaLogs),
 	string(source.CollectorLoki),
 }
+
+// typeNames is every type a place may declare.
+var typeNames = append(append([]string{}, logTypes...), traceTypeNames...)
+
+// traceScalar reads what `traces:` says when it says one thing. A url is a
+// store written out, and anything else is the name of a place that is one —
+// the same rule `telescope trace --from` reads its argument by, since the two
+// are the same question asked in two places.
+func traceScalar(s string) TraceStore {
+	if isURL(s) {
+		return TraceStore{URL: s}
+	}
+	return TraceStore{Name: s}
+}
+
+// isURL reports whether a bound was written as an address rather than a name.
+func isURL(s string) bool {
+	s = strings.TrimSpace(s)
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// ReadsTraces reports whether the place is a trace store rather than a stream
+// of lines.
+func (p Place) ReadsTraces() bool { return p.Collector().IsTraceAPI() }
 
 // Collector is what speaks at this place.
 func (p Place) Collector() source.Collector { return source.Collector(strings.TrimSpace(p.Type)) }
@@ -195,9 +228,47 @@ func (p Place) Validate() error {
 	if strings.TrimSpace(p.Name) == "" {
 		return errors.New("name is required")
 	}
+	if p.ReadsTraces() {
+		return p.validateTraceStore()
+	}
 	p.resolveErr = nil
 	_, _, err := p.Stream()
 	return err
+}
+
+// validateTraceStore rejects what a place that reads traces cannot mean.
+//
+// It is checked here rather than through [Place.Stream] because there is no
+// stream to build: nothing is tailed from a trace store, and what would be
+// wrong with it is what it says about reading lines it does not read.
+func (p Place) validateTraceStore() error {
+	if strings.TrimSpace(p.URL) == "" {
+		return errors.Errorf("%s requires a url", p.Type)
+	}
+	if !p.Traces.IsZero() {
+		return errors.New("traces reads traces already: it is what other places name")
+	}
+	for _, named := range []struct {
+		field string
+		set   bool
+	}{
+		{"unit", strings.TrimSpace(p.Unit) != ""},
+		{"namespace", strings.TrimSpace(p.Namespace) != ""},
+		{"target", strings.TrimSpace(p.Target) != ""},
+		{"container", strings.TrimSpace(p.Container) != ""},
+		{"args", strings.TrimSpace(p.Args) != ""},
+		{"via", strings.TrimSpace(p.Via) != ""},
+		{"query", strings.TrimSpace(p.Query) != ""},
+	} {
+		if named.set {
+			return errors.Errorf("%s reads traces, not lines: %s means nothing to it",
+				p.Type, named.field)
+		}
+	}
+	if err := p.Token.Validate(); err != nil {
+		return err
+	}
+	return (source.Endpoint{Proxy: p.Proxy}).ProxyError()
 }
 
 // Stream converts a declared place into a stream config.
@@ -211,7 +282,12 @@ func (p Place) Stream() (cfg source.Config, ready bool, err error) {
 		return source.Config{}, false, errors.Errorf(
 			"type is required: one of %s", strings.Join(typeNames, ", "))
 	}
-	if !slices.Contains(typeNames, string(collector)) {
+	if collector.IsTraceAPI() {
+		return source.Config{}, false, errors.Errorf(
+			"%s reads traces, not logs: name it from a place whose lines carry trace ids, "+
+				"or open it with telescope trace --from %s", p.Type, p.Name)
+	}
+	if !slices.Contains(logTypes, string(collector)) {
 		return source.Config{}, false, errors.Errorf(
 			"unknown type %q: want one of %s", p.Type, strings.Join(typeNames, ", "))
 	}
@@ -356,11 +432,21 @@ func (p Place) Endpoint() (source.Endpoint, error) {
 // read of its own: a keyring is unlocked once per run, and reading it here too
 // would prompt twice for a place that declares both.
 func (p Place) TraceEndpoint() (source.Endpoint, bool, error) {
+	if p.ReadsTraces() {
+		// A place that reads traces is the store, and reads it through its own
+		// door rather than through anybody's.
+		return p.resolved, true, p.resolveErr
+	}
 	if p.Traces.IsZero() {
 		return source.Endpoint{}, false, nil
 	}
 	if err := p.Traces.Validate(); err != nil {
 		return source.Endpoint{}, false, err
+	}
+	if p.Traces.Links() {
+		// Resolved when the file was read, since the store is another entry of
+		// it and a place cannot see its neighbors.
+		return p.linked, true, p.linkErr
 	}
 	return source.Endpoint{
 		Name: p.Name,

@@ -63,6 +63,30 @@ var Descriptor = figureout.MustDerive(func(c *Config, s *figureout.Schema[Config
 	// A group is checked against the places as declared, before any token has
 	// been read: a group whose place needs one telescope cannot find is not a
 	// group written wrong, and carrying that reason is [Group.resolve]'s.
+	// Which entry named which is a rule about two of them, so it is reported
+	// with the line that did the naming rather than as a fact about the file.
+	figureout.Invariant(s, "traces-name-places", func(c *Config) error {
+		var errs []error
+		byName := placeIndex(c.Places)
+		for _, p := range c.Places {
+			if !p.Traces.Links() {
+				continue
+			}
+			j, ok := byName[p.Traces.Name]
+			switch {
+			case !ok:
+				errs = append(errs, figureout.At(placePath(p.Name)).Errorf(
+					"names undeclared place %q for its traces", p.Traces.Name))
+			case !c.Places[j].ReadsTraces():
+				errs = append(errs, figureout.At(placePath(p.Name)).Errorf(
+					"names %q for its traces, and %q reads logs: "+
+						"a trace store is a place of type %s",
+					p.Traces.Name, p.Traces.Name, strings.Join(traceTypeNames, " or ")))
+			}
+		}
+		return errors.Join(errs...)
+	})
+
 	figureout.Invariant(s, "group-names-places", func(c *Config) error {
 		var errs []error
 		byName := placeIndex(c.Places)
@@ -179,10 +203,41 @@ func New(places []Place, groups []Group) (Config, error) {
 	if err := c.resolvePlaces(); err != nil {
 		return Config{}, err
 	}
+	if err := c.resolveTraces(); err != nil {
+		return Config{}, err
+	}
 	if err := c.resolveGroups(); err != nil {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+// resolveTraces attaches to each place the store it named.
+//
+// It runs after every place has been resolved, so the store's own token is the
+// one already read: a place naming a store is not a place borrowing a token,
+// and the store is reached the way the store says.
+func (c *Config) resolveTraces() error {
+	byName := placeIndex(c.Places)
+	for i, p := range c.Places {
+		if !p.Traces.Links() {
+			continue
+		}
+		j, ok := byName[p.Traces.Name]
+		if !ok {
+			return errors.Errorf("place %q names undeclared place %q for its traces",
+				p.Name, p.Traces.Name)
+		}
+		store := c.Places[j]
+		if !store.ReadsTraces() {
+			return errors.Errorf(
+				"place %q names %q for its traces, and %q reads logs: "+
+					"a trace store is a place of type %s",
+				p.Name, store.Name, store.Name, strings.Join(traceTypeNames, " or "))
+		}
+		c.Places[i].linked, c.Places[i].linkErr = store.resolved, store.resolveErr
+	}
+	return nil
 }
 
 // resolvePlaces validates each place and reads the endpoint of each one that
@@ -207,7 +262,7 @@ func (c *Config) resolvePlaces() error {
 		}
 		seen[p.Name] = true
 
-		if !p.Collector().IsRemoteAPI() {
+		if !p.Collector().IsRemoteAPI() && !p.ReadsTraces() {
 			continue
 		}
 		c.Places[i].resolved, c.Places[i].resolveErr = p.Endpoint()
