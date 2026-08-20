@@ -37,13 +37,22 @@ type placeInfo struct {
 	Reads  []string `json:"reads" jsonschema:"The signals this place holds: logs, traces"`
 	Via    string   `json:"via,omitempty" jsonschema:"How the collector is reached when it is not this machine, as ssh://host"`
 	URL    string   `json:"url,omitempty" jsonschema:"The database queried, for a place read over HTTP"`
-	Traces string   `json:"traces,omitempty" jsonschema:"Where this place's traces are read from"`
+	Traces *store   `json:"traces,omitempty" jsonschema:"Where this place's traces are read from, and what answers there"`
 	Target string   `json:"target,omitempty" jsonschema:"What it reads there: a unit, a pod, a container, or a query"`
 	Query  string   `json:"query,omitempty" jsonschema:"The filter the place is read through unless another is given"`
 	Range  string   `json:"range,omitempty" jsonschema:"The window the place is read over unless another is given"`
 	Ready  bool     `json:"ready" jsonschema:"Whether it opens as it stands"`
 	Needs  string   `json:"needs,omitempty" jsonschema:"What it must be given first, when it does not open as it stands"`
 	Error  string   `json:"error,omitempty" jsonschema:"Why it cannot be opened at all, such as a token that could not be read"`
+}
+
+// store is a database a place reads from that is not the one its logs come
+// from. It carries what speaks there as well as where it is: a URL says
+// nothing about whether Tempo or Jaeger answers at it, and the two answer the
+// same question differently.
+type store struct {
+	URL  string `json:"url"`
+	Type string `json:"type" jsonschema:"What answers there: tempo or jaeger"`
 }
 
 type groupInfo struct {
@@ -84,8 +93,9 @@ func describePlace(p config.Place) placeInfo {
 		Query: p.Query,
 		Range: p.Range,
 	}
-	if _, ok, err := p.TraceEndpoint(); ok && err == nil {
+	if traces, ok, err := p.TraceEndpoint(); ok && err == nil {
 		info.Reads = append(info.Reads, signalTraces)
+		info.Traces = &store{URL: traces.URL, Type: string(traces.Collector)}
 	}
 
 	// The stream is where a place says what it is in the terms everything below
@@ -95,7 +105,6 @@ func describePlace(p config.Place) placeInfo {
 	info.Ready = ready
 	info.Target = config.Target(src)
 	info.URL = src.Endpoint.URL
-	info.Traces = src.Traces.URL
 	if src.Transport == source.TransportSSH {
 		info.Via = "ssh://" + src.Host
 	}

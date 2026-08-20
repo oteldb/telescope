@@ -52,7 +52,8 @@ func TestPlacesReportsWhatEachPlaceHolds(t *testing.T) {
 	prod := out.Places[1]
 	require.Equal(t, []string{signalLogs, signalTraces}, prod.Reads)
 	require.Equal(t, "https://logs.example.com", prod.URL)
-	require.Equal(t, "https://tempo.example.com", prod.Traces)
+	require.Equal(t, &store{URL: "https://tempo.example.com", Type: "tempo"}, prod.Traces,
+		"a url says nothing about which of the two APIs answers at it")
 	require.Equal(t, "app:api", prod.Target)
 	require.Empty(t, prod.Via, "a database is dialed rather than entered")
 	require.True(t, prod.Ready)
@@ -104,4 +105,21 @@ func TestPlacesReportsAGroupThatMustBeAsked(t *testing.T) {
 	group := callPlaces(t, cfg).Groups[0]
 	require.False(t, group.Ready)
 	require.Equal(t, "a target for its docker places", group.Needs)
+}
+
+// TestPlacesNamesWhatAnswersAtATraceStore: Tempo and Jaeger answer the same
+// question differently, and a place that declared which is not asked again.
+func TestPlacesNamesWhatAnswersAtATraceStore(t *testing.T) {
+	cfg := testConfig(t, []config.Place{
+		{
+			Name:   "prod",
+			Type:   "victorialogs",
+			URL:    "https://logs.example.com",
+			Traces: config.TraceStore{URL: "https://jaeger.example.com", Type: "jaeger"},
+		},
+	}, nil)
+
+	place := callPlaces(t, cfg).Places[0]
+	require.Equal(t, []string{signalLogs, signalTraces}, place.Reads)
+	require.Equal(t, &store{URL: "https://jaeger.example.com", Type: "jaeger"}, place.Traces)
 }
