@@ -60,6 +60,8 @@ const rangeStamp = "2006-01-02 15:04"
 //	today          since local midnight
 //	yesterday      the day before, both ends
 //	2026-08-11 10:00..12:00
+//	                the morning of that day, since a clock time at the far end
+//	                belongs to the day the near end named
 //
 // A bound may be a duration ago, a clock time today, a date, a date and time,
 // or RFC 3339. Everything without an offset is local time, since that is what
@@ -78,13 +80,32 @@ func ParseRange(spec string, now time.Time) (Range, error) {
 
 	from, to, split := strings.Cut(spec, rangeSep)
 	r := Range{Spec: spec}
-	var err error
-	if r.Since, err = parseBound(from, now); err != nil {
+	var (
+		err   error
+		dated bool
+	)
+	if r.Since, dated, err = parseBound(from, now, now); err != nil {
 		return Range{}, err
 	}
 	if split {
-		if r.Until, err = parseBound(to, now); err != nil {
+		// A clock time at the far end belongs to the day the near end named:
+		// "2026-01-02 10:00..12:00" is one morning, and reading the end as
+		// today would make it every month since. Only a start that named a
+		// date lends one — where it is a duration ago, the window reaches up
+		// to now and the day it started on says nothing about the end.
+		day := now
+		if dated {
+			day = r.Since
+		}
+		var clock bool
+		if r.Until, clock, err = parseBound(to, now, day); err != nil {
 			return Range{}, err
+		}
+		// Overnight, where the end is a clock time on the day the start named
+		// and has already gone by: 22:00..02:00 is four hours and not an error
+		// about a window that ends before it starts.
+		if dated && !clock && r.Closed() && !r.Until.After(r.Since) {
+			r.Until = r.Until.AddDate(0, 0, 1)
 		}
 	}
 	if r.Closed() && !r.Until.After(r.Since) {
@@ -93,31 +114,36 @@ func ParseRange(spec string, now time.Time) (Range, error) {
 	return r, nil
 }
 
-// parseBound resolves one end. An empty end is open: "1h.." is the last hour
-// and everything after it, which is the same as "1h".
-func parseBound(s string, now time.Time) (time.Time, error) {
+// parseBound resolves one end, dating a bare clock time from day and a
+// duration ago from now. An empty end is open: "1h.." is the last hour and
+// everything after it, which is the same as "1h".
+//
+// dated reports that the bound named a date of its own, which is what lets the
+// other end borrow one.
+func parseBound(s string, now, day time.Time) (t time.Time, dated bool, err error) {
 	s = strings.TrimSpace(s)
 	switch strings.ToLower(s) {
 	case "", "now":
-		return time.Time{}, nil
+		return time.Time{}, false, nil
 	}
 	if d, ok := parseDur(s); ok {
-		return now.Add(-d), nil
+		return now.Add(-d), false, nil
 	}
 	for _, layout := range rangeLayouts {
 		t, err := time.ParseInLocation(layout, s, now.Location())
 		if err != nil {
 			continue
 		}
-		// A layout without a date means a time today, which is what "10:00"
-		// reads as; ParseInLocation would otherwise put it in year zero.
+		// A layout without a date means a time on the day in hand, which is
+		// what "10:00" reads as; ParseInLocation would otherwise put it in
+		// year zero.
 		if t.Year() == 0 {
-			t = time.Date(now.Year(), now.Month(), now.Day(),
-				t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), now.Location())
+			return time.Date(day.Year(), day.Month(), day.Day(),
+				t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), now.Location()), false, nil
 		}
-		return t, nil
+		return t, true, nil
 	}
-	return time.Time{}, errors.Errorf("cannot read %q as a time or a duration ago", s)
+	return time.Time{}, false, errors.Errorf("cannot read %q as a time or a duration ago", s)
 }
 
 // rangeLayouts are the absolute forms accepted, most specific first.
