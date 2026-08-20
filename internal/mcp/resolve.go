@@ -26,6 +26,14 @@ func stream(cfg config.Config, name string) (source.Config, error) {
 		if p.Name != name {
 			continue
 		}
+		if p.ReadsTraces() {
+			// Worded for whoever asked rather than as the place puts it: what
+			// a store says about itself points at the command line, and the
+			// caller here has tools instead.
+			return source.Config{}, errors.Errorf(
+				"%q reads traces rather than lines: it is what the places whose logs "+
+					"carry trace ids name, and places says which those are", name)
+		}
 		src, _, err := p.Stream()
 		if err != nil {
 			// Unwrapped: the caller named the place a moment ago, and what a

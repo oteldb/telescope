@@ -24,7 +24,7 @@ const valuesDescription = "Lists the values one field has been seen with at a " 
 var errNoField = errors.New("name a field: fields lists the ones a place indexes")
 
 type fieldsInput struct {
-	Place string `json:"place" jsonschema:"The name of a place or group, as places reports it"`
+	Place string `json:"place" jsonschema:"The name of a place or group that reads logs, as places reports it"`
 	Range string `json:"range,omitempty" jsonschema:"The window, relative or absolute: 1h, today, yesterday, 6h..1h, 10:00..12:00, 2026-01-02 10:00..2026-01-02 12:00, or two RFC 3339 instants. Empty reads the place's own window, and all removes every bound"`
 }
 
@@ -34,7 +34,7 @@ type fieldsOutput struct {
 }
 
 type valuesInput struct {
-	Place string `json:"place" jsonschema:"The name of a place or group, as places reports it"`
+	Place string `json:"place" jsonschema:"The name of a place or group that reads logs, as places reports it"`
 	Field string `json:"field" jsonschema:"The field to list, as fields names it"`
 	Range string `json:"range,omitempty" jsonschema:"The window, relative or absolute: 1h, today, yesterday, 6h..1h, 10:00..12:00, 2026-01-02 10:00..2026-01-02 12:00, or two RFC 3339 instants. Empty reads the place's own window, and all removes every bound"`
 }

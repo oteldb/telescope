@@ -38,7 +38,7 @@ const logsDescription = "Reads the lines of a place, newest last. " +
 	"reported once, and lines repeating the one before them are folded with a count."
 
 type logsInput struct {
-	Place  string `json:"place" jsonschema:"The name of a place or group, as places reports it"`
+	Place  string `json:"place" jsonschema:"The name of a place or group that reads logs, as places reports it"`
 	Filter string `json:"filter,omitempty" jsonschema:"The filter to read through, in telescope's filter language"`
 	Range  string `json:"range,omitempty" jsonschema:"The window, relative or absolute: 1h, today, yesterday, 6h..1h, 10:00..12:00, 2026-01-02 10:00..2026-01-02 12:00, or two RFC 3339 instants. Empty reads the place's own window, and all removes every bound"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"How many lines to return, newest last. Defaults to 50 and is capped at 500"`
