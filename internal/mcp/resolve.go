@@ -28,7 +28,10 @@ func stream(cfg config.Config, name string) (source.Config, error) {
 		}
 		src, _, err := p.Stream()
 		if err != nil {
-			return source.Config{}, errors.Wrapf(err, "place %q", name)
+			// Unwrapped: the caller named the place a moment ago, and what a
+			// place says about itself already names it where the name is not
+			// obvious — see the token it could not read.
+			return source.Config{}, err
 		}
 		return src, nil
 	}
@@ -38,7 +41,7 @@ func stream(cfg config.Config, name string) (source.Config, error) {
 		}
 		src, _, err := g.Stream()
 		if err != nil {
-			return source.Config{}, errors.Wrapf(err, "group %q", name)
+			return source.Config{}, err
 		}
 		return src, nil
 	}
