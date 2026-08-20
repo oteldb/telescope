@@ -129,7 +129,7 @@ func traceCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&from, "from", "",
-		"a trace store url, or the name of a place in the config that declares one")
+		"a trace store url, or the name of a place that reads traces or names one")
 	cmd.Flags().StringVar(&api, "api", "",
 		"what answers there: tempo or jaeger. A named place declares its own")
 	return cmd

@@ -40,6 +40,16 @@ func TestParseRange(t *testing.T) {
 		{spec: "2026-08-09", since: day(9, 0, 0)},
 		{spec: "2026-08-09 10:00..2026-08-09 12:00", since: day(9, 10, 0), until: day(9, 12, 0)},
 		{spec: "2026-08-09T10:00:00Z", since: day(9, 10, 0)},
+		// The far end borrows the day the near end named, rather than landing
+		// on today and making one morning into every month since.
+		{spec: "2026-08-09 10:00..12:00", since: day(9, 10, 0), until: day(9, 12, 0)},
+		{spec: "2026-08-09..12:00", since: day(9, 0, 0), until: day(9, 12, 0)},
+		{spec: "2026-08-09T10:00:00Z..12:00", since: day(9, 10, 0), until: day(9, 12, 0)},
+		// Overnight: the end has gone by on that day, so it is the next one.
+		{spec: "2026-08-09 22:00..02:00", since: day(9, 22, 0), until: day(10, 2, 0)},
+		// A start that is a duration ago names no day to borrow, and the
+		// window reaches up to now.
+		{spec: "6h..12:00", since: day(11, 8, 30), until: day(11, 12, 0)},
 	} {
 		t.Run(tt.spec, func(t *testing.T) {
 			r, err := ParseRange(tt.spec, now)

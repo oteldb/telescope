@@ -36,7 +36,8 @@ func grafana(t *testing.T, body string) *httptest.Server {
 }
 
 // TestGrafanaWritesAPlacePerDatasourceItCanRead: what comes back is everything
-// the Grafana can query, and telescope reads two kinds of it.
+// the Grafana can query, and telescope reads two kinds of it — logs, and the
+// traces the log places point at.
 func TestGrafanaWritesAPlacePerDatasourceItCanRead(t *testing.T) {
 	t.Setenv("TEST_GRAFANA_TOKEN", "secret")
 	srv := grafana(t, datasourceList)
@@ -45,7 +46,7 @@ func TestGrafanaWritesAPlacePerDatasourceItCanRead(t *testing.T) {
 	offers, notes, err := g.offers(t.Context(), srv.Client())
 	require.NoError(t, err)
 	require.Empty(t, notes)
-	require.Equal(t, []string{"Loki", "VictoriaLogs"}, names(offers))
+	require.Equal(t, []string{"Loki", "VictoriaLogs", "Tempo"}, names(offers))
 
 	loki := offers[0].Place
 	require.Equal(t, "loki", loki.Type)
@@ -74,10 +75,10 @@ func TestGrafanaNamesTheTokenRatherThanCopyingIt(t *testing.T) {
 	require.Contains(t, string(data), "env: TEST_GRAFANA_TOKEN")
 }
 
-// TestTheOneTraceStoreIsAttachedToEveryPlace: a place reads its traces through
-// the same door as its logs, and one store beside a handful of log datasources
-// has nowhere else to belong.
-func TestTheOneTraceStoreIsAttachedToEveryPlace(t *testing.T) {
+// TestATraceDatasourceIsOfferedAsAPlace: Grafana lists one kind of thing, and
+// so does telescope now — the store is a place with a name, and the places
+// whose lines carry ids into it name it.
+func TestATraceDatasourceIsOfferedAsAPlace(t *testing.T) {
 	t.Setenv("TEST_GRAFANA_TOKEN", "secret")
 	srv := grafana(t, datasourceList)
 
@@ -86,14 +87,29 @@ func TestTheOneTraceStoreIsAttachedToEveryPlace(t *testing.T) {
 		Token: config.Token{Env: "TEST_GRAFANA_TOKEN"},
 	}.offers(t.Context(), srv.Client())
 	require.NoError(t, err)
+
+	var store string
 	for _, o := range offers {
-		require.Equal(t, config.DatasourceURL(srv.URL, "trc1"), o.Place.Traces.URL)
-		require.Equal(t, "tempo", o.Place.Traces.Type)
+		if o.Place.ReadsTraces() {
+			store = o.Place.Name
+			require.Equal(t, "tempo", o.Place.Type)
+			require.Equal(t, "trc1", o.Place.Datasource)
+		}
+	}
+	require.NotEmpty(t, store, "the trace datasource is a place of its own")
+	for _, o := range offers {
+		if o.Place.ReadsTraces() {
+			continue
+		}
+		require.Equal(t, store, o.Place.Traces.Name)
+		require.Empty(t, o.Place.Traces.URL, "the store says where it is, once")
 	}
 }
 
 // TestSeveralTraceStoresAreSaidRatherThanGuessed: pointing half the places at
-// the wrong store is worse than pointing none of them anywhere.
+// the wrong store is worse than pointing none of them anywhere — and none of
+// them is no longer nowhere, since every store is declared and can be opened
+// by name.
 func TestSeveralTraceStoresAreSaidRatherThanGuessed(t *testing.T) {
 	t.Setenv("TEST_GRAFANA_TOKEN", "secret")
 	srv := grafana(t, `[
@@ -108,6 +124,8 @@ func TestSeveralTraceStoresAreSaidRatherThanGuessed(t *testing.T) {
 	}.offers(t.Context(), srv.Client())
 	require.NoError(t, err)
 	require.True(t, offers[0].Place.Traces.IsZero())
+	require.Equal(t, []string{"Loki", "Tempo", "Jaeger"}, names(offers),
+		"both stores are declared, whoever ends up naming them")
 	require.Len(t, notes, 1)
 	require.Contains(t, notes[0], "several trace stores")
 }
@@ -148,11 +166,13 @@ datasources:
 
 	offers, notes, err := Grafana{Provisioning: dir}.offers(t.Context(), http.DefaultClient)
 	require.NoError(t, err)
-	require.Equal(t, []string{"Loki", "Guarded"}, names(offers))
+	require.Equal(t, []string{"Loki", "Tempo", "Guarded"}, names(offers))
 	require.Equal(t, "http://loki:3100", offers[0].Place.URL,
 		"there is no grafana to proxy through, so the datasource's own url is it")
 	require.True(t, offers[0].Place.Token.IsZero())
-	require.Equal(t, "http://tempo:3200", offers[0].Place.Traces.URL)
+	require.Equal(t, "Tempo", offers[0].Place.Traces.Name)
+	require.Equal(t, "http://tempo:3200", offers[1].Place.URL,
+		"the store is a place, at its own address")
 	require.Len(t, notes, 1)
 	require.Contains(t, notes[0], "password of its own",
 		"the provisioning file holds it in the clear and telescope will not copy it")
