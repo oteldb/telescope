@@ -1,6 +1,8 @@
 package logs
 
 import (
+	"slices"
+
 	"go.uber.org/zap/zapcore"
 
 	"github.com/oteldb/telescope/internal/query"
@@ -164,7 +166,7 @@ func (v *View) Entries(s *Store) []*Entry {
 	}
 	// Capped, so matching the tail appends into a slice of its own and leaves
 	// what is settled alone.
-	out := v.entries[:len(v.entries):len(v.entries)]
+	out := slices.Clip(v.entries)
 	for _, e := range all[settled:] {
 		if v.filter.Match(e) {
 			out = append(out, e)
