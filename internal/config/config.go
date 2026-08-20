@@ -69,19 +69,8 @@ var Descriptor = figureout.MustDerive(func(c *Config, s *figureout.Schema[Config
 		var errs []error
 		byName := placeIndex(c.Places)
 		for _, p := range c.Places {
-			if !p.Traces.Links() {
-				continue
-			}
-			j, ok := byName[p.Traces.Name]
-			switch {
-			case !ok:
-				errs = append(errs, figureout.At(placePath(p.Name)).Errorf(
-					"names undeclared place %q for its traces", p.Traces.Name))
-			case !c.Places[j].ReadsTraces():
-				errs = append(errs, figureout.At(placePath(p.Name)).Errorf(
-					"names %q for its traces, and %q reads logs: "+
-						"a trace store is a place of type %s",
-					p.Traces.Name, p.Traces.Name, strings.Join(traceTypeNames, " or ")))
+			if _, err := traceStore(c.Places, byName, p); err != nil {
+				errs = append(errs, figureout.At(placePath(p.Name)).Errorf("%s", err))
 			}
 		}
 		return errors.Join(errs...)
@@ -220,24 +209,38 @@ func New(places []Place, groups []Group) (Config, error) {
 func (c *Config) resolveTraces() error {
 	byName := placeIndex(c.Places)
 	for i, p := range c.Places {
-		if !p.Traces.Links() {
+		store, err := traceStore(c.Places, byName, p)
+		switch {
+		case err != nil:
+			return errors.Wrapf(err, "place %q", p.Name)
+		case store == nil:
 			continue
-		}
-		j, ok := byName[p.Traces.Name]
-		if !ok {
-			return errors.Errorf("place %q names undeclared place %q for its traces",
-				p.Name, p.Traces.Name)
-		}
-		store := c.Places[j]
-		if !store.ReadsTraces() {
-			return errors.Errorf(
-				"place %q names %q for its traces, and %q reads logs: "+
-					"a trace store is a place of type %s",
-				p.Name, store.Name, store.Name, strings.Join(traceTypeNames, " or "))
 		}
 		c.Places[i].linked, c.Places[i].linkErr = store.resolved, store.resolveErr
 	}
 	return nil
+}
+
+// traceStore is the place p named for its traces, nil for one that named none,
+// and why what it named cannot be a store.
+//
+// It says nothing about which place did the naming: [Config.resolveTraces] is
+// told by the caller, and the invariant reports it against the entry it was
+// read from, where the path names it already.
+func traceStore(places []Place, byName map[string]int, p Place) (*Place, error) {
+	if !p.Traces.Links() {
+		return nil, nil
+	}
+	j, ok := byName[p.Traces.Name]
+	if !ok {
+		return nil, errors.Errorf("names undeclared place %q for its traces", p.Traces.Name)
+	}
+	if store := &places[j]; store.ReadsTraces() {
+		return store, nil
+	}
+	return nil, errors.Errorf(
+		"names %q for its traces, and %q reads logs: a trace store is a place of type %s",
+		p.Traces.Name, p.Traces.Name, strings.Join(traceTypeNames, " or "))
 }
 
 // resolvePlaces validates each place and reads the endpoint of each one that

@@ -13,25 +13,15 @@ import (
 // TraceStore is where a place's traces are read from: the name of a place that
 // reads them, or a store written out where it is used.
 //
-// Naming one is the way round that scales. A trace store is a system's, not a
-// stream's — every service in an environment writes into the same one, and the
-// environment is several places here — so writing it out on each of them is the
-// same url, token and proxy copied until one of the copies is wrong. A place
-// that reads traces is a place like any other: it has a name, it declares what
-// it needs to be let in, and the places whose lines carry ids into it say so by
-// naming it.
-//
-// The written-out form stays for the one-place case, where a name would be
-// ceremony: it borrows the token, tenant and proxy of the place it is written
-// on, since a system's traces are usually behind the same door as its logs.
+// A store is a system's rather than a stream's, and an environment is several
+// places here, so naming one keeps its url and its token in one entry instead
+// of a copy per place. Written out it borrows the token, tenant and proxy of
+// the place it is on, which is what the single-place case wants.
 //
 // The API is declared rather than discovered, for the reason a place declares
-// whether it is Loki or VictoriaLogs: the paths differ, the query language
-// differs, and what comes back differs — Tempo answers a search with a summary
-// of each trace, Jaeger with the traces themselves. A viewer that probed for it
-// would spend a round trip on every search learning what the config already
-// knew, and would have to guess again the first time a proxy answered 404 for a
-// reason of its own.
+// whether it is Loki or VictoriaLogs: Tempo answers a search with a summary of
+// each trace and Jaeger with the traces themselves, and probing for it would
+// spend a round trip per search learning what the config already knew.
 type TraceStore struct {
 	// Name is a place that reads traces. Exclusive with the rest: a link says
 	// where to look, and the place it names says everything else.

@@ -193,7 +193,7 @@ var logTypes = []string{
 }
 
 // typeNames is every type a place may declare.
-var typeNames = append(append([]string{}, logTypes...), traceTypeNames...)
+var typeNames = slices.Concat(logTypes, traceTypeNames)
 
 // traceScalar reads what `traces:` says when it says one thing. A url is a
 // store written out, and anything else is the name of a place that is one —
