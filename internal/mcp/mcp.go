@@ -37,6 +37,8 @@ func New(cfg config.Config, version string) *sdk.Server {
 	addLogs(s, cfg)
 	addSummary(s, cfg)
 	addTraces(s, cfg)
+	addTraceSearch(s, cfg)
+	addTraceFields(s, cfg)
 	return s
 }
 

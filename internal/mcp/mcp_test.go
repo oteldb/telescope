@@ -40,8 +40,10 @@ func TestServerOffersItsTools(t *testing.T) {
 		require.NotEmpty(t, tool.Description, "%s says nothing about itself", tool.Name)
 		require.True(t, tool.Annotations.ReadOnlyHint, "%s is not marked read-only", tool.Name)
 	}
-	require.ElementsMatch(t,
-		[]string{"places", "fields", "field_values", "logs", "summary", "trace"}, names)
+	require.ElementsMatch(t, []string{
+		"places", "fields", "field_values", "logs", "summary",
+		"trace", "trace_search", "trace_fields", "trace_tag_values",
+	}, names)
 }
 
 // TestServerAnswersOverTheWire: what a tool returns has to survive being

@@ -215,3 +215,24 @@ func TestTheDefaultWindowReadsAsWhatItSearches(t *testing.T) {
 	require.Equal(t, "6h..1h", typed.Window(now).Spec)
 	require.Equal(t, now.Add(-time.Hour), typed.Window(now).Until)
 }
+
+// TestAskedIsWhatTheStoreWasActuallySent: Jaeger takes named parameters and
+// compiles nothing, so the two APIs cannot be reported the same way.
+func TestAskedIsWhatTheStoreWasActuallySent(t *testing.T) {
+	q := TraceQuery{
+		Service:     "checkout",
+		Operation:   "POST /orders",
+		Tags:        []TraceTag{{Key: "error", Value: "true"}},
+		MinDuration: 500 * time.Millisecond,
+	}
+
+	require.Equal(t,
+		`service=checkout operation=POST /orders tags={"error":"true"} minDuration=500ms`,
+		q.Asked(CollectorJaeger))
+	require.Equal(t, q.TraceQL(), q.Asked(CollectorTempo))
+	require.Equal(t, q.TraceQL(), q.Asked(""), "unset is tempo, as it is everywhere else")
+
+	require.Equal(t, "everything in the window", TraceQuery{}.Asked(CollectorJaeger),
+		"a jaeger search that narrows nothing has no parameters to write out")
+	require.Equal(t, "{}", TraceQuery{}.Asked(CollectorTempo))
+}
