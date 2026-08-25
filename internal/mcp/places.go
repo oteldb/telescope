@@ -87,7 +87,9 @@ func placesHandler(cfg config.Config) sdk.ToolHandlerFor[placesInput, placesOutp
 		for _, g := range cfg.Groups {
 			out.Groups = append(out.Groups, describeGroup(g))
 		}
-		return nil, out, nil
+		return &sdk.CallToolResult{
+			Content: []sdk.Content{&sdk.TextContent{Text: drawPlaces(out)}},
+		}, out, nil
 	}
 }
 

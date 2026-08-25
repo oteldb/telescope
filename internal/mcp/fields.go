@@ -57,13 +57,16 @@ func fieldsHandler(cfg config.Config) sdk.ToolHandlerFor[fieldsInput, fieldsOutp
 		}
 		asked, silent := answering(src)
 		out := fieldsOutput{Fields: []string{}, Note: indexNote(asked, silent)}
-		if len(asked) == 0 {
-			return nil, out, nil
+		if len(asked) > 0 {
+			if out.Fields, err = src.FieldNames(ctx); err != nil {
+				return nil, fieldsOutput{}, err
+			}
 		}
-		if out.Fields, err = src.FieldNames(ctx); err != nil {
-			return nil, fieldsOutput{}, err
-		}
-		return nil, out, nil
+		return &sdk.CallToolResult{
+			Content: []sdk.Content{&sdk.TextContent{
+				Text: drawFields("fields of "+plain(in.Place), out.Fields, out.Note),
+			}},
+		}, out, nil
 	}
 }
 
@@ -78,17 +81,20 @@ func valuesHandler(cfg config.Config) sdk.ToolHandlerFor[valuesInput, valuesOutp
 		}
 		asked, silent := answering(src)
 		out := valuesOutput{Values: []string{}, Note: indexNote(asked, silent)}
-		if len(asked) == 0 {
-			return nil, out, nil
+		if len(asked) > 0 {
+			if out.Values, err = src.FieldValues(ctx, in.Field); err != nil {
+				return nil, valuesOutput{}, err
+			}
+			if len(out.Values) >= source.FieldValuesLimit {
+				out.Note = join(out.Note, "the store was asked for "+
+					strconv.Itoa(source.FieldValuesLimit)+" values and returned that many, so there are more")
+			}
 		}
-		if out.Values, err = src.FieldValues(ctx, in.Field); err != nil {
-			return nil, valuesOutput{}, err
-		}
-		if len(out.Values) >= source.FieldValuesLimit {
-			out.Note = join(out.Note, "the store was asked for "+
-				strconv.Itoa(source.FieldValuesLimit)+" values and returned that many, so there are more")
-		}
-		return nil, out, nil
+		return &sdk.CallToolResult{
+			Content: []sdk.Content{&sdk.TextContent{
+				Text: drawFields(plain(in.Field)+" at "+plain(in.Place), out.Values, out.Note),
+			}},
+		}, out, nil
 	}
 }
 
@@ -140,9 +146,16 @@ func indexNote(asked, silent []string) string {
 	return "only " + strings.Join(asked, ", ") + " was asked: " + writes
 }
 
+// join puts two halves of a note together, either of which may be empty: what
+// a note has to say is gathered from several places and most calls have nothing
+// to add from any one of them.
 func join(note, more string) string {
-	if note == "" {
+	switch {
+	case note == "":
 		return more
+	case more == "":
+		return note
+	default:
+		return note + "; " + more
 	}
-	return note + "; " + more
 }

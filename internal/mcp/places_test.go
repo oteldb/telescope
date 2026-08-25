@@ -3,6 +3,7 @@ package mcp
 import (
 	"testing"
 
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 
 	"github.com/oteldb/telescope/internal/config"
@@ -152,4 +153,61 @@ func TestPlacesReportsAStoreAsAPlace(t *testing.T) {
 	require.Equal(t, []string{signalLogs, signalTraces}, api.Reads)
 	require.Equal(t, &store{Place: "prod traces", URL: "https://tempo.example.com", Type: "tempo"},
 		api.Traces, "the link is by the name the tools take, with where it points beside it")
+}
+
+// TestPlacesIsNotItsOwnStructuredContentTwice: a tool that leaves the text to
+// the SDK gets the JSON of its facts as the text block, which is the same bytes
+// said again under another key. places is the tool every session calls first,
+// so it is the one worth not paying double for.
+func TestPlacesIsNotItsOwnStructuredContentTwice(t *testing.T) {
+	cfg := testConfig(t, []config.Place{
+		{Name: "node", Type: "journalctl", Unit: "nginx", Via: "ssh://ops@node-1"},
+		{
+			Name: "prod", Type: "victorialogs", URL: "https://logs.example.com",
+			Target: "app:api", Query: "level>=warn",
+			Traces: config.TraceStore{Name: "prod traces"},
+		},
+		{Name: "prod traces", Type: "tempo", URL: "https://tempo.example.com"},
+	}, []config.Group{{Name: "everything", Places: []string{"node", "prod"}}})
+
+	res, out, err := placesHandler(cfg)(t.Context(), nil, placesInput{})
+	require.NoError(t, err)
+	require.NotEmpty(t, out.Places, "the facts are still answered")
+
+	text := res.Content[0].(*sdk.TextContent).Text
+	require.NotContains(t, text, `{"places"`, "and the text is not those facts serialized")
+	require.NotContains(t, text, `"name":`)
+
+	require.Contains(t, text, "node         journalctl    reads logs  nginx  via ssh://ops@node-1")
+	require.Contains(t, text, "prod         victorialogs  reads logs,traces")
+	require.Contains(t, text, "      filtered by level>=warn")
+	require.Contains(t, text, "      traces: prod traces — https://tempo.example.com (tempo)",
+		"named as the place it is, since that is what the trace tools take")
+	require.Contains(t, text, "prod traces  tempo         reads traces")
+	require.Contains(t, text, "everything   node + prod")
+}
+
+// TestAPlaceThatDoesNotOpenSaysWhatItNeeds: it is not an error
+// and not a place to skip, and a column for it would be empty on everything
+// that works.
+func TestAPlaceThatDoesNotOpenSaysWhatItNeeds(t *testing.T) {
+	cfg := testConfig(t, []config.Place{
+		{Name: "checkout", Type: "kubectl"},
+	}, nil)
+
+	res, out, err := placesHandler(cfg)(t.Context(), nil, placesInput{})
+	require.NoError(t, err)
+	require.False(t, out.Places[0].Ready)
+
+	text := res.Content[0].(*sdk.TextContent).Text
+	require.Contains(t, text, "needs ")
+	require.Contains(t, text, out.Places[0].Needs)
+}
+
+// TestNoPlacesSaysWhatToDoAboutIt: an empty list is the one answer a reader
+// cannot act on.
+func TestNoPlacesSaysWhatToDoAboutIt(t *testing.T) {
+	res, _, err := placesHandler(testConfig(t, nil, nil))(t.Context(), nil, placesInput{})
+	require.NoError(t, err)
+	require.Contains(t, res.Content[0].(*sdk.TextContent).Text, "telescope init")
 }

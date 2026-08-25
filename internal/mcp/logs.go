@@ -104,12 +104,9 @@ func logsHandler(cfg config.Config) sdk.ToolHandlerFor[logsInput, logsOutput] {
 				"%q cannot be read on request: it is a command telescope can only follow", in.Place)
 		}
 
-		limit := in.Limit
-		switch {
-		case limit <= 0:
-			limit = defaultLogsLimit
-		case limit > maxLogsLimit:
-			limit = maxLogsLimit
+		limit, capped, err := capLimit(in.Limit, defaultLogsLimit, maxLogsLimit)
+		if err != nil {
+			return nil, logsOutput{}, err
 		}
 		asked := src.WithFilter(filter.Expr())
 		read, err := readBack(ctx, asked, filter, limit)
@@ -132,7 +129,7 @@ func logsHandler(cfg config.Config) sdk.ToolHandlerFor[logsInput, logsOutput] {
 		}
 		rows := fold(shown)
 		out.Common, out.Varies = split(shown)
-		out.Note = logsNote(out, limit)
+		out.Note = join(capped, logsNote(out, limit))
 		return &sdk.CallToolResult{
 			Content: []sdk.Content{&sdk.TextContent{Text: draw(out, rows)}},
 		}, out, nil
@@ -219,7 +216,7 @@ func logsNote(out logsOutput, limit int) string {
 		}
 		return ""
 	case out.Returned >= limit:
-		return "this is as many as was asked for, and the window holds more before them: " +
+		return "this is the whole of the limit, and the window holds more before them: " +
 			"ask again over an earlier window, as in 6h..1h"
 	default:
 		return "the read stopped " + strconv.Itoa(out.Read) +

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"testing"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -40,7 +41,10 @@ func TestServerOffersItsTools(t *testing.T) {
 		require.NotEmpty(t, tool.Description, "%s says nothing about itself", tool.Name)
 		require.True(t, tool.Annotations.ReadOnlyHint, "%s is not marked read-only", tool.Name)
 	}
-	require.ElementsMatch(t, []string{"places", "fields", "field_values", "logs", "summary"}, names)
+	require.ElementsMatch(t, []string{
+		"places", "fields", "field_values", "logs", "summary",
+		"trace", "trace_search", "trace_fields", "trace_tag_values",
+	}, names)
 }
 
 // TestServerAnswersOverTheWire: what a tool returns has to survive being
@@ -60,6 +64,15 @@ func TestServerAnswersOverTheWire(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, places, 1)
 	require.Equal(t, "node", places[0].(map[string]any)["name"])
+
+	// Both halves reach the caller, and they are not the same half twice: the
+	// facts are the structured content and the text is a reading of them.
+	require.Len(t, res.Content, 1)
+	text := res.Content[0].(*sdk.TextContent).Text
+	require.NotEmpty(t, text)
+	require.False(t, json.Valid([]byte(text)),
+		"the text block is the answer read out, not the answer serialized again")
+	require.Contains(t, text, "node")
 }
 
 // TestServerReportsAWrongNameToTheCaller: a tool that was asked for a place

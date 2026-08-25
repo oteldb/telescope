@@ -189,6 +189,44 @@ func traceQLDuration(d time.Duration) string {
 	return d.String()
 }
 
+// Asked is the query as the given API was actually asked it, for reporting
+// back to whoever asked.
+//
+// It is not always TraceQL. Jaeger takes named parameters and never compiles a
+// query at all, so showing it a TraceQL string would be telling a reader the
+// store was sent something it has never seen — and the whole point of saying
+// what was asked is that a reader can tell what the store did from what was
+// filtered afterwards.
+//
+// The window and the limit are left out of both: they are reported beside this
+// rather than inside it, and a caller that showed them twice would be paying
+// for the same fact twice.
+func (q TraceQuery) Asked(api Collector) string {
+	if api != CollectorJaeger {
+		return q.TraceQL()
+	}
+	var said []string
+	for _, kv := range [][2]string{
+		{"service", strings.TrimSpace(q.Service)},
+		{"operation", strings.TrimSpace(q.Operation)},
+		{"tags", q.tagObject()},
+	} {
+		if kv[1] != "" {
+			said = append(said, kv[0]+"="+kv[1])
+		}
+	}
+	if q.MinDuration > 0 {
+		said = append(said, "minDuration="+q.MinDuration.String())
+	}
+	if q.MaxDuration > 0 {
+		said = append(said, "maxDuration="+q.MaxDuration.String())
+	}
+	if len(said) == 0 {
+		return "everything in the window"
+	}
+	return strings.Join(said, " ")
+}
+
 // jaegerParams compiles the query into the parameters Jaeger's /api/traces
 // reads.
 //

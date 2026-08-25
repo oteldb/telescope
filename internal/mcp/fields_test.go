@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 
 	"github.com/oteldb/telescope/internal/config"
@@ -164,4 +165,55 @@ func TestFieldsOverAnAbsoluteWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "2026-08-17T12:00:00Z", asked.Get("start"))
 	require.Equal(t, "2026-08-17T12:05:00Z", asked.Get("end"))
+}
+
+// TestFieldListingsAreNotTheirOwnStructuredContentTwice: the same bargain
+// places makes — the text is a reading of the answer, not the answer's JSON.
+func TestFieldListingsAreNotTheirOwnStructuredContentTwice(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "field_names"):
+			_, _ = w.Write([]byte(`{"values":[{"value":"pod"},{"value":"namespace"}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"values":[{"value":"api-1"},{"value":"api-2"}]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := testConfig(t, []config.Place{
+		{Name: "prod", Type: "victorialogs", URL: srv.URL},
+	}, nil)
+
+	res, out, err := fieldsHandler(cfg)(t.Context(), nil, fieldsInput{Place: "prod"})
+	require.NoError(t, err)
+	require.NotEmpty(t, out.Fields)
+	text := res.Content[0].(*sdk.TextContent).Text
+	require.NotContains(t, text, `{"fields"`)
+	require.Contains(t, text, "fields of prod (2):")
+	require.Contains(t, text, "pod")
+
+	res, values, err := valuesHandler(cfg)(t.Context(), nil, valuesInput{Place: "prod", Field: "pod"})
+	require.NoError(t, err)
+	require.NotEmpty(t, values.Values)
+	text = res.Content[0].(*sdk.TextContent).Text
+	require.NotContains(t, text, `{"values"`)
+	require.Contains(t, text, "pod at prod (2):")
+	require.Contains(t, text, "api-1  api-2")
+}
+
+// TestAPlaceThatIndexesNothingStillSaysWhy: a collector answers no listing, and
+// an empty list on its own reads as a database with no fields in it.
+func TestAPlaceThatIndexesNothingStillSaysWhy(t *testing.T) {
+	cfg := testConfig(t, []config.Place{
+		{Name: "node", Type: "journalctl", Unit: "nginx"},
+	}, nil)
+
+	res, out, err := fieldsHandler(cfg)(t.Context(), nil, fieldsInput{Place: "node"})
+	require.NoError(t, err)
+	require.Empty(t, out.Fields)
+
+	text := res.Content[0].(*sdk.TextContent).Text
+	require.Contains(t, text, "fields of node (0): none")
+	require.Contains(t, text, "note: node writes lines rather than indexing them")
 }
