@@ -78,7 +78,7 @@ func searchHandler(cfg config.Config) sdk.ToolHandlerFor[searchInput, searchOutp
 		if err != nil {
 			return nil, searchOutput{}, err
 		}
-		q, err := searchQuery(in)
+		q, capped, err := searchQuery(in)
 		if err != nil {
 			return nil, searchOutput{}, err
 		}
@@ -97,6 +97,7 @@ func searchHandler(cfg config.Config) sdk.ToolHandlerFor[searchInput, searchOutp
 		trace.SortResults(results)
 
 		out := describeSearch(at, q, results)
+		out.Note = join(capped, out.Note)
 		return &sdk.CallToolResult{
 			Content: []sdk.Content{&sdk.TextContent{Text: drawSearch(out)}},
 		}, out, nil
@@ -122,31 +123,31 @@ func searchResults(at source.Endpoint, data []byte) ([]trace.Result, error) {
 	return out, nil
 }
 
-func searchQuery(in searchInput) (source.TraceQuery, error) {
+func searchQuery(in searchInput) (source.TraceQuery, string, error) {
 	q := source.TraceQuery{
 		Service:   strings.TrimSpace(in.Service),
 		Operation: strings.TrimSpace(in.Operation),
-		Limit:     min(max(in.Limit, 0), maxSearchLimit),
 	}
-	if q.Limit == 0 {
-		q.Limit = defaultSearchLimit
+	limit, capped, err := capLimit(in.Limit, defaultSearchLimit, maxSearchLimit)
+	if err != nil {
+		return source.TraceQuery{}, "", err
 	}
-	var err error
+	q.Limit = limit
 	if q.Tags, err = source.ParseTags(in.Tags); err != nil {
-		return source.TraceQuery{}, err
+		return source.TraceQuery{}, "", err
 	}
 	if q.MinDuration, err = bound(in.MinDuration, "min_duration"); err != nil {
-		return source.TraceQuery{}, err
+		return source.TraceQuery{}, "", err
 	}
 	if q.MaxDuration, err = bound(in.MaxDuration, "max_duration"); err != nil {
-		return source.TraceQuery{}, err
+		return source.TraceQuery{}, "", err
 	}
 	if spec := strings.TrimSpace(in.Range); spec != "" {
 		if q.Range, err = source.ParseRange(spec, time.Now()); err != nil {
-			return source.TraceQuery{}, err
+			return source.TraceQuery{}, "", err
 		}
 	}
-	return q, nil
+	return q, capped, nil
 }
 
 func bound(s, name string) (time.Duration, error) {
@@ -204,8 +205,8 @@ func searchNote(out searchOutput, q source.TraceQuery) string {
 			"database does, and a sampled one never had most of them"
 	}
 	if out.Returned >= q.Limit {
-		note = join(note, "this is as many as was asked for ("+strconv.Itoa(q.Limit)+
-			"), so the window holds more: narrow it, or raise limit")
+		note = join(note, "this is the whole of the limit ("+strconv.Itoa(q.Limit)+
+			"), so the window holds more: narrow it, or ask for more")
 	}
 	return note
 }

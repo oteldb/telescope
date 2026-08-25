@@ -140,9 +140,16 @@ func indexNote(asked, silent []string) string {
 	return "only " + strings.Join(asked, ", ") + " was asked: " + writes
 }
 
+// join puts two halves of a note together, either of which may be empty: what
+// a note has to say is gathered from several places and most calls have nothing
+// to add from any one of them.
 func join(note, more string) string {
-	if note == "" {
+	switch {
+	case note == "":
 		return more
+	case more == "":
+		return note
+	default:
+		return note + "; " + more
 	}
-	return note + "; " + more
 }

@@ -168,7 +168,7 @@ func TestLogsSaysTheWindowWasNotFinished(t *testing.T) {
 	require.Equal(t, 2, out.Returned)
 	require.False(t, out.Covered)
 	require.Contains(t, out.Note, "the window holds more before them")
-	require.Contains(t, text, "note: this is as many as was asked for")
+	require.Contains(t, text, "note: this is the whole of the limit")
 
 	_, all := logsOf(t, cfg, logsInput{Place: "prod", Limit: 50})
 	require.True(t, all.Covered, "a place that answered everything it had said so")
@@ -233,4 +233,26 @@ func TestLogsRefusesAStore(t *testing.T) {
 	require.ErrorContains(t, err, "reads traces rather than lines")
 	require.NotContains(t, err.Error(), "telescope trace --from",
 		"a tool answers with what its caller can do, not with a command line")
+}
+
+// TestLogsSaysWhenTheLimitWasLowered: the note about reaching the limit would
+// otherwise be quoting a number nobody asked for.
+func TestLogsSaysWhenTheLimitWasLowered(t *testing.T) {
+	limit, capped, err := capLimit(9000, defaultLogsLimit, maxLogsLimit)
+	require.NoError(t, err)
+	require.Equal(t, maxLogsLimit, limit)
+	require.Contains(t, capped, "limit 9000 was lowered to 500")
+
+	limit, capped, err = capLimit(0, defaultLogsLimit, maxLogsLimit)
+	require.NoError(t, err)
+	require.Equal(t, defaultLogsLimit, limit)
+	require.Empty(t, capped, "nothing asked is not something cut")
+
+	limit, capped, err = capLimit(10, defaultLogsLimit, maxLogsLimit)
+	require.NoError(t, err)
+	require.Equal(t, 10, limit)
+	require.Empty(t, capped)
+
+	_, _, err = capLimit(-1, defaultLogsLimit, maxLogsLimit)
+	require.ErrorContains(t, err, "negative")
 }

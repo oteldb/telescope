@@ -140,8 +140,8 @@ func TestASearchSaysWhenTheWindowHoldsMore(t *testing.T) {
 	text, out, err := callSearch(t, cfg, searchInput{Service: "checkout", Limit: 2})
 	require.NoError(t, err)
 	require.Equal(t, 2, out.Returned)
-	require.Contains(t, out.Note, "as many as was asked for")
-	require.Contains(t, text, "note: this is as many as was asked for")
+	require.Contains(t, out.Note, "the whole of the limit")
+	require.Contains(t, text, "note: this is the whole of the limit")
 }
 
 // TestAnEmptySearchSaysWhatThatMeans: nothing matching is the usual answer at a
@@ -253,4 +253,34 @@ func TestAJaegerStoreIsNotToldItWasAskedTraceQL(t *testing.T) {
 	_, out, err = callSearch(t, cfg, in)
 	require.NoError(t, err)
 	require.Contains(t, out.Asked, `resource.service.name="checkout"`)
+}
+
+// TestALoweredLimitIsSaidOutLoud: a caller comparing what it asked for against
+// what it got would otherwise read the cap as the store having run out, and the
+// note about reaching the limit would be quoting a number nobody asked for.
+func TestALoweredLimitIsSaidOutLoud(t *testing.T) {
+	srv, got := searchServer(t, tempoFound)
+	cfg := testConfig(t, []config.Place{
+		{Name: "prod traces", Type: "tempo", URL: srv.URL},
+	}, nil)
+
+	text, out, err := callSearch(t, cfg, searchInput{Service: "checkout", Limit: 5000})
+	require.NoError(t, err)
+	require.Contains(t, out.Note, "limit 5000 was lowered to 100")
+	require.Contains(t, text, "limit 5000 was lowered to 100")
+
+	_, params := got.got()
+	require.Equal(t, "100", params.Get("limit"), "and the store was asked for what it will answer")
+}
+
+// TestANegativeLimitIsRefusedRatherThanRead: turning it into the default would
+// answer a question that was never put.
+func TestANegativeLimitIsRefusedRatherThanRead(t *testing.T) {
+	cfg := testConfig(t, []config.Place{
+		{Name: "prod traces", Type: "tempo", URL: "https://tempo.example.com"},
+	}, nil)
+
+	_, _, err := callSearch(t, cfg, searchInput{Service: "checkout", Limit: -5})
+	require.ErrorContains(t, err, "limit -5 is negative")
+	require.ErrorContains(t, err, "up to 100")
 }
