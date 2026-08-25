@@ -209,14 +209,16 @@ $ claude mcp add telescope -- telescope mcp
 Any MCP client will do; the command takes no arguments and reads the same
 config file.
 
-Five tools. `places` lists what the config declares, what speaks at each and
+Six tools. `places` lists what the config declares, what speaks at each and
 whether it opens as it stands — trace stores among them, since a store is a
 place and the places whose lines carry ids into it name it. `summary` counts a window rather than listing it
 — lines by level, where the volume went, the messages that repeat most, the
 values of a field — which is the cheap first question about an incident.
 `logs` reads the lines, through the same filter language the `/` prompt takes.
 `fields` and `field_values` say what can be filtered on, out of the database's
-own index.
+own index. `trace` reads one trace by the id a log line carried, and draws it as
+what called what and when each began — with whatever failed listed above the
+tree rather than buried in it, and one span's attributes read on request.
 
 What comes back is written for something that reads rather than looks: labels
 every line shares are hoisted out and said once, repetitions are folded with a
