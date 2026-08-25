@@ -197,6 +197,37 @@ place says it in the config. A file says nothing and needs to: which format it
 holds is worked out from what comes out of it, and OTLP arrives as JSON or as
 protobuf with both understood.
 
+## For an agent
+
+`telescope mcp` speaks the Model Context Protocol on stdin and stdout, so a
+coding agent can read the same places the screen does:
+
+```console
+$ claude mcp add telescope -- telescope mcp
+```
+
+Any MCP client will do; the command takes no arguments and reads the same
+config file.
+
+Five tools. `places` lists what the config declares, what speaks at each and
+whether it opens as it stands — trace stores among them, since a store is a
+place and the places whose lines carry ids into it name it. `summary` counts a window rather than listing it
+— lines by level, where the volume went, the messages that repeat most, the
+values of a field — which is the cheap first question about an incident.
+`logs` reads the lines, through the same filter language the `/` prompt takes.
+`fields` and `field_values` say what can be filtered on, out of the database's
+own index.
+
+What comes back is written for something that reads rather than looks: labels
+every line shares are hoisted out and said once, repetitions are folded with a
+count, and an answer that was cut says so and says what to ask instead. The
+counts a screen would show by scrolling are reported as numbers.
+
+A tool names a place the config declares, and none of them takes a command
+line. An agent reaches what the file already said telescope may run, over the
+same ssh hosts and behind the same tokens, and nothing else — the guarantee the
+start screen gives a person. Nothing here writes.
+
 ## Configuration
 
 Places live in `$XDG_CONFIG_HOME/telescope/config.yaml`, by default

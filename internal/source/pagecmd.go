@@ -70,10 +70,19 @@ func readPage(ctx context.Context, cfg Config, before time.Time, limit int, opt 
 		return nil, err
 	}
 
+	// Closing is what stops a collector that is still writing, and it is also
+	// how a stream is told its exit status does not matter: a canceled stream
+	// reports no error, since the canceling was ours. A collector that ended on
+	// its own has an exit status worth reading — it is how a place says it is
+	// not there — so closing waits until it has been read, and only a reading
+	// cut short does it early.
+	defer s.Close()
+
 	var (
-		kept []Line
-		said []Line
-		past int
+		kept   []Line
+		said   []Line
+		past   int
+		cutOff bool
 	)
 	for l := range s.Lines() {
 		if l.Stderr || l.Kind.IsNote() {
@@ -89,6 +98,7 @@ func readPage(ctx context.Context, cfg Config, before time.Time, limit int, opt 
 			if !at.Before(before) {
 				past++
 				if past > pageOverrun {
+					cutOff = true
 					break
 				}
 				continue
@@ -100,8 +110,10 @@ func readPage(ctx context.Context, cfg Config, before time.Time, limit int, opt 
 			kept = kept[1:]
 		}
 	}
-	s.Close()
-	for range s.Lines() {
+	if cutOff {
+		s.Close()
+		for range s.Lines() {
+		}
 	}
 	err = <-s.Done()
 

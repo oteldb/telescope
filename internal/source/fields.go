@@ -25,10 +25,15 @@ const (
 // cost more than the answer is worth.
 const fieldsTimeout = 5 * time.Second
 
-// fieldValuesLimit bounds how many values one field is asked for. A prompt
+// FieldValuesLimit bounds how many values one field is asked for. A prompt
 // cannot show more than a screenful, and a field with more distinct values than
 // this was not going to be completed by reading them all.
-const fieldValuesLimit = 200
+//
+// It is exported because a reader that is not a prompt has to be told that the
+// answer was cut: a screen shows the cut by scrolling to the end of a list,
+// and an agent reading exactly this many values would otherwise conclude that
+// it had seen them all.
+const FieldValuesLimit = 200
 
 // FieldNames asks the source which names its lines are labeled with, so the
 // filter prompt can offer them before a line carrying one has arrived.
@@ -65,7 +70,7 @@ func (c Config) FieldValues(ctx context.Context, field string) ([]string, error)
 			return c.vlogsFieldList(ctx, vlogsFieldValuesPath, url.Values{
 				"query": {c.vlogsSelector()},
 				"field": {vlogsFieldName(field)},
-				"limit": {strconv.Itoa(fieldValuesLimit)},
+				"limit": {strconv.Itoa(FieldValuesLimit)},
 			})
 		case CollectorLoki:
 			return c.lokiLabelList(ctx, lokiLabelValuesPath+url.PathEscape(field)+"/values")
