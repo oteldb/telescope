@@ -267,6 +267,43 @@ func TestParseWorkload(t *testing.T) {
 			line: "Deployment oteldb api",
 			want: []Candidate{{Value: "oteldb/deployment/api", Detail: "deployment"}},
 		},
+		{
+			name: "the selector reads every pod the workload has",
+			line: "Deployment oteldb api api 2 2 <none> <none> map[app:api]",
+			want: []Candidate{
+				{Value: "oteldb/deployment/api", Detail: "deployment · 2/2 ready"},
+				{Value: "oteldb/app=api", Detail: "deployment · all pods"},
+			},
+		},
+		{
+			name: "a selector of several labels keeps them all",
+			line: "DaemonSet kube-system cilium cilium-agent <none> <none> 2 2 " +
+				"map[app.kubernetes.io/name:cilium k8s-app:cilium]",
+			want: []Candidate{
+				{Value: "kube-system/daemonset/cilium", Detail: "daemonset · 2/2 ready"},
+				{
+					Value:  "kube-system/app.kubernetes.io/name=cilium,k8s-app=cilium",
+					Detail: "daemonset · all pods",
+				},
+			},
+		},
+		{
+			name: "every pod is offered per container too",
+			line: "StatefulSet oteldb storage clickhouse,clickhouse-log 1 1 <none> <none> map[app:storage]",
+			want: []Candidate{
+				{Value: "oteldb/statefulset/storage", Detail: "statefulset · 1/1 ready"},
+				{Value: "oteldb/statefulset/storage:clickhouse", Detail: "statefulset container"},
+				{Value: "oteldb/statefulset/storage:clickhouse-log", Detail: "statefulset container"},
+				{Value: "oteldb/app=storage", Detail: "statefulset · all pods"},
+				{Value: "oteldb/app=storage:clickhouse", Detail: "statefulset container · all pods"},
+				{Value: "oteldb/app=storage:clickhouse-log", Detail: "statefulset container · all pods"},
+			},
+		},
+		{
+			name: "a selector of expressions alone is not one",
+			line: "Deployment oteldb api api 1 1 <none> <none> <none>",
+			want: []Candidate{{Value: "oteldb/deployment/api", Detail: "deployment · 1/1 ready"}},
+		},
 		{"not a kind kubectl logs reads", "ConfigMap ns name", nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -418,4 +455,27 @@ func values(items []Candidate) []string {
 		out = append(out, c.Value)
 	}
 	return out
+}
+
+// TestKubeSelector: what custom-columns prints for a label map is Go's, not
+// JSON, and half of one is not an answer.
+func TestKubeSelector(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"one label", "map[app:api]", "app=api"},
+		{"sorted, as fmt printed them", "map[a:1 b:2]", "a=1,b=2"},
+		{"a prefixed key keeps its slash", "map[app.kubernetes.io/name:api]", "app.kubernetes.io/name=api"},
+		{"the column was absent", none, ""},
+		{"nothing was printed", "", ""},
+		{"an empty map selects everything and is not offered", "map[]", ""},
+		{"a label with no value", "map[app:]", ""},
+		{"a word that is not a pair", "map[app]", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, kubeSelector(tt.in))
+		})
+	}
 }
