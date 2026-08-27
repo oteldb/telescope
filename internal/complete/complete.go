@@ -14,8 +14,15 @@ import (
 	"github.com/oteldb/telescope/internal/source"
 )
 
-// Timeout bounds how long a listing command may run.
+// Timeout bounds how long a listing command may run locally, where the only
+// cost is the tool itself.
 const Timeout = 5 * time.Second
+
+// TimeoutSSH bounds the same listing run over ssh, where a connection has to be
+// made before the tool starts. It is longer than the ConnectTimeout the
+// transport gives that connection, which a shorter budget would cut short: a
+// host slow to answer would then look like a host with nothing to list.
+const TimeoutSSH = 30 * time.Second
 
 // Candidate is one suggestion.
 type Candidate struct {
@@ -66,6 +73,16 @@ func (r Request) Key() string {
 	}
 	return fmt.Sprintf("%d|%s|%s|%s|%t|%s|%s",
 		r.Field, r.Transport, r.Host, r.Collector, r.Elevate, r.KubeConfig, r.KubeContext)
+}
+
+// timeout is the budget one listing source gets. Each gets its own rather than
+// sharing the request's, so a first source that hangs to the deadline does not
+// leave the second nothing to run in.
+func (r Request) timeout() time.Duration {
+	if r.Transport == source.TransportSSH {
+		return TimeoutSSH
+	}
+	return Timeout
 }
 
 // Fetch collects the candidates for r. Hosts are read locally; everything else
