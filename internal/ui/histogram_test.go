@@ -222,3 +222,49 @@ func markColumn(t *testing.T, out string) int {
 	t.Fatal("the cursor is not marked on the chart")
 	return -1
 }
+
+// TestTheChartFillsThePanelItWasGiven: a chart that stops a bucket short of its
+// own border reads as a log that stopped, and the step is picked to be a round
+// number so the division hardly ever comes out even.
+func TestTheChartFillsThePanelItWasGiven(t *testing.T) {
+	at := time.Date(2026, 8, 10, 15, 16, 0, 0, time.Local)
+	var entries []*logs.Entry
+	for i := range 1200 {
+		entries = append(entries, volEntry(at.Add(time.Duration(i)*4*time.Second), zapcore.InfoLevel))
+	}
+
+	for _, width := range []int{40, 96, 150, 220, 278, 279, 280} {
+		c, ok := bucketVolume(entries, width, nil)
+		require.True(t, ok)
+		require.LessOrEqual(t, len(c.bars), width)
+
+		require.Equal(t, width, c.left(len(c.bars), width),
+			"the last bucket ends on the far edge, whatever the remainder was")
+
+		for _, height := range []int{1, volBars} {
+			for _, row := range c.rows(width, height) {
+				require.Equal(t, width, ansi.StringWidth(row), "width=%d", width)
+			}
+		}
+		require.Equal(t, width, ansi.StringWidth(ansi.Strip(c.axis(width))), "width=%d", width)
+	}
+}
+
+// TestTheSpareColumnsGoIntoTheGaps: a bar's width says nothing here — its
+// height does — so the remainder must not land in the bars themselves.
+func TestTheSpareColumnsGoIntoTheGaps(t *testing.T) {
+	at := time.Date(2026, 8, 10, 15, 16, 0, 0, time.Local)
+	var entries []*logs.Entry
+	for i := range 1200 {
+		entries = append(entries, volEntry(at.Add(time.Duration(i)*4*time.Second), zapcore.InfoLevel))
+	}
+	c, ok := bucketVolume(entries, 278, nil)
+	require.True(t, ok)
+	require.NotZero(t, 278%len(c.bars), "a width the buckets do not divide, or this proves nothing")
+
+	widths := map[int]bool{}
+	for run := range strings.FieldsSeq(ansi.Strip(c.rows(278, volBars)[volBars-1])) {
+		widths[utf8.RuneCountInString(run)] = true
+	}
+	require.Len(t, widths, 1, "every bar is the same width: %v", widths)
+}
