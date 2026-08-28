@@ -76,8 +76,20 @@ func repeats(a, b *logs.Entry) bool {
 // finished: a key that reads the same on all of it is constant for this
 // question, whatever the stream does next.
 func split(entries []*logs.Entry) (common map[string]string, varies []string) {
-	if len(entries) < 2 {
-		return nil, keysOf(entries)
+	switch len(entries) {
+	case 0:
+		return nil, nil
+	case 1:
+		// One line agrees with itself about everything. Calling its fields
+		// varying was a rendering decision — there is nothing to hoist out of a
+		// single row — leaking into the facts, where it read as seven fields
+		// that differ across one line, and left their values in the row alone.
+		// A reader of the facts got the names and none of the values.
+		shared := fieldsOf(entries[0])
+		if len(shared) == 0 {
+			return nil, nil
+		}
+		return shared, nil
 	}
 	shared := maps.Clone(fieldsOf(entries[0]))
 	for _, e := range entries[1:] {
