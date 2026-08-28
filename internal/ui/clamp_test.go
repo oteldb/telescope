@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -199,4 +200,79 @@ func TestALineWithNoMessageIsStillARow(t *testing.T) {
 	rows := rowsOf(t, m)
 	require.Equal(t, 3, countRows(rows, "(empty)"), "one row each, not one run of three")
 	require.Contains(t, strings.Join(rows, "\n"), "3 lines")
+}
+
+// fieldsAt is a line that said one thing and was labeled with another.
+func fieldsAt(at time.Time, msg string, kv ...string) source.Line {
+	b := &strings.Builder{}
+	fmt.Fprintf(b, `{"msg":%q`, msg)
+	for i := 0; i+1 < len(kv); i += 2 {
+		fmt.Fprintf(b, `,%q:%q`, kv[i], kv[i+1])
+	}
+	b.WriteString("}")
+	return source.Line{Data: []byte(b.String()), At: at}
+}
+
+// TestAFoldedRowWillNotSpeakForFieldsItsLinesDisagreedOn: nine lines of
+// "updated resource" are nine different resources, and drawing the first one's
+// name beside a ×9 says the nine were one.
+func TestAFoldedRowWillNotSpeakForFieldsItsLinesDisagreedOn(t *testing.T) {
+	at := time.Date(2026, 8, 11, 15, 16, 44, 0, time.Local)
+	m := timedModel(t,
+		fieldsAt(at, "updated resource", "caller", "capi/client.go:81", "name", "capi-templates"),
+		fieldsAt(at.Add(time.Second), "updated resource", "caller", "capi/client.go:81", "name", "clusters"),
+		fieldsAt(at.Add(2*time.Second), "updated resource", "caller", "capi/client.go:81", "name", "capv-system"),
+		// Somewhere else in the log, so that caller is a field the list draws
+		// at all: one that never varies is dropped before the fold sees it.
+		fieldsAt(at.Add(3*time.Second), "ensuring", "caller", "vsphere/precursor.go:492"),
+	)
+
+	rows := rowsOf(t, m)
+	require.Equal(t, 1, countRows(rows, "×3"))
+	folded := rows[countRowsBefore(rows, "×3")]
+	require.Contains(t, folded, "name=capi-templates…",
+		"one of the three names, marked as one of them")
+	require.NotContains(t, folded, "name=capi-templates ",
+		"and never as though the row had a name")
+	require.Contains(t, folded, "caller=capi/client.go:81",
+		"what all three agreed on is the row's, and is drawn as it always was")
+}
+
+// TestAFieldTheFoldCannotStandBehindIsGreyed: the ellipsis says there are
+// others and the grey says this is not the row's value; the color a name is
+// usually written in would be saying it is.
+func TestAFieldTheFoldCannotStandBehindIsGreyed(t *testing.T) {
+	at := time.Date(2026, 8, 11, 15, 16, 44, 0, time.Local)
+	m := timedModel(t,
+		fieldsAt(at, "updated resource", "name", "capi-templates"),
+		fieldsAt(at.Add(time.Second), "updated resource", "name", "clusters"),
+		// The cursor washes the row it is on, so the fold is asked about
+		// somewhere the coloring is only its own.
+		fieldsAt(at.Add(2*time.Second), "ensuring", "name", "shared"),
+	)
+	require.Contains(t, m.View(), styleDim.Render("name=capi-templates…"))
+}
+
+// TestAnUnfoldedRowKeepsItsFields: the row stands for one line, which said all
+// of it.
+func TestAnUnfoldedRowKeepsItsFields(t *testing.T) {
+	at := time.Date(2026, 8, 11, 15, 16, 44, 0, time.Local)
+	m := timedModel(t,
+		fieldsAt(at, "updated resource", "name", "capi-templates"),
+		fieldsAt(at.Add(time.Second), "ensuring", "name", "clusters"),
+	)
+	rows := rowsOf(t, m)
+	require.Zero(t, countRows(rows, "capi-templates…"), "nothing was folded, so nothing is a sample")
+	require.Equal(t, 1, countRows(rows, "name=capi-templates"))
+	require.Equal(t, 1, countRows(rows, "name=clusters"))
+}
+
+// countRowsBefore is the index of the first row holding word.
+func countRowsBefore(rows []string, word string) int {
+	for i, r := range rows {
+		if strings.Contains(r, word) {
+			return i
+		}
+	}
+	return -1
 }
