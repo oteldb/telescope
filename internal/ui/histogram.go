@@ -273,10 +273,21 @@ func (c volumeChart) segments(b volBar, height int) [volLevels]int {
 	return out
 }
 
-// cell is how many columns one bucket is drawn in. A chart of twenty buckets
-// across a wide screen is twenty bars and not twenty needles: the step is
-// chosen to be a number a reader can do arithmetic in, and what is left over is
-// spent making the bars wide enough to see.
+// left is the column bucket i begins in, worked out by dividing the panel
+// rather than by multiplying a width up.
+//
+// The step is chosen to be a number a reader can do arithmetic in, so it hardly
+// ever divides the screen: thirty-seven buckets of a two-hundred-and-eighty
+// column panel are seven columns each and twenty-one columns of nothing, and a
+// chart that stops short of its own border reads as a log that stopped. What
+// the division leaves over is given back to the buckets a column at a time.
+func (c volumeChart) left(i, width int) int {
+	return i * width / max(len(c.bars), 1)
+}
+
+// cell is the narrowest a bucket is drawn in. A chart of twenty buckets across
+// a wide screen is twenty bars and not twenty needles: what is left over after
+// the step is chosen is spent making the bars wide enough to see.
 func (c volumeChart) cell(width int) int {
 	return max(width/max(len(c.bars), 1), 1)
 }
@@ -298,18 +309,19 @@ func (c volumeChart) rows(width, height int) []string {
 		segs[i] = c.segments(b, height)
 	}
 
-	cell := c.cell(width)
-	bar, air := c.bar(cell), ""
-	if gap := cell - c.bar(cell); gap > 0 {
-		air = strings.Repeat(" ", gap)
-	}
+	// The bars are all one width and the spare columns go into the gaps between
+	// them. A bar's width says nothing here — its height does — so bars a
+	// column wider than their neighbors would be the chart marking some
+	// buckets out for no reason a reader could act on.
+	bar := c.bar(c.cell(width))
 	rows := make([]string, height)
 	for r := range height {
 		// r counts down from the top row, base up from the bottom of the chart.
 		base := (height - 1 - r) * 8
 		var out strings.Builder
 		for i := range c.bars {
-			if (i+1)*cell > width {
+			at := c.left(i, width)
+			if at+bar > width {
 				break
 			}
 			filled := 0
@@ -317,13 +329,15 @@ func (c volumeChart) rows(width, height int) []string {
 				filled += n
 			}
 			if filled <= base {
-				out.WriteString(strings.Repeat(" ", cell))
-				continue
+				out.WriteString(strings.Repeat(" ", bar))
+			} else {
+				fill := min(filled-base, 8)
+				out.WriteString(volTint(segs[i], base, fill, i == c.cursor).
+					Render(strings.Repeat(string(volBlocks[fill]), bar)))
 			}
-			fill := min(filled-base, 8)
-			out.WriteString(volTint(segs[i], base, fill, i == c.cursor).
-				Render(strings.Repeat(string(volBlocks[fill]), bar)))
-			out.WriteString(air)
+			if gap := c.left(i+1, width) - at - bar; gap > 0 {
+				out.WriteString(strings.Repeat(" ", gap))
+			}
 		}
 		rows[r] = out.String()
 	}
@@ -372,13 +386,13 @@ func (c volumeChart) axis(width int) string {
 	every := max((len(layout)+2+cell-1)/cell, int((tick+c.step-1)/c.step))
 
 	mark := -1
-	if c.cursor >= 0 && c.cursor*cell < width {
-		mark = c.cursor * cell
+	if c.cursor >= 0 && c.left(c.cursor, width) < width {
+		mark = c.left(c.cursor, width)
 	}
 
 	row := []byte(strings.Repeat(" ", width))
 	for i := 0; i < len(c.bars); i += every {
-		at := i * cell
+		at := c.left(i, width)
 		label := c.bars[i].at.Local().Format(layout)
 		if at+len(label) > width {
 			break

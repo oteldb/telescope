@@ -545,7 +545,8 @@ func (m logModel) View() string {
 				}
 			}
 		}
-		row := renderLine(e, originRow(m.origins, m.store.Row(e)), originCell(m.palette, m.origins, e), m.gutter(e), r.n, i == m.cursor, m.hoff, inner)
+		fields := clampedRow(originRow(m.origins, m.store.Row(e)), entries, r)
+		row := renderLine(e, fields, originCell(m.palette, m.origins, e), m.gutter(e), r.n, i == m.cursor, m.hoff, inner)
 		switch {
 		case i == m.cursor:
 			row = cursorRow(row, inner)
@@ -666,7 +667,7 @@ func (m logModel) filterBar() string {
 // of them there is room for is decided here, on the width the terminal is now.
 // A rendering that spent the width when the line arrived could not survive the
 // window being dragged wider.
-func renderLine(e *logs.Entry, fields []logs.RowField, tag, gutter string, repeat int, selected bool, hoff, width int) string {
+func renderLine(e *logs.Entry, fields []rowField, tag, gutter string, repeat int, selected bool, hoff, width int) string {
 	marker := "  "
 	if selected {
 		marker = styleSelected.Render("▎ ")
@@ -708,13 +709,13 @@ func renderLine(e *logs.Entry, fields []logs.RowField, tag, gutter string, repea
 // would read as a line with two fields, and the reader would have no reason to
 // open it. It is the same promise the ⏎ and × marks make about the lines this
 // row stands for.
-func spendFields(fields []logs.RowField, room int) string {
+func spendFields(fields []rowField, room int) string {
 	var (
 		out   strings.Builder
 		spent int
 	)
 	for i, f := range fields {
-		text := "  " + f.Render()
+		text := "  " + f.render()
 		// Whatever is written must leave room to say what is not, unless this
 		// is the last one and there will be nothing left to say.
 		reserve := 0

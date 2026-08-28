@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/oteldb/telescope/internal/logs"
+import (
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/oteldb/telescope/internal/logs"
+)
 
 // A run is one row of the list: a line, and the lines straight after it that
 // said the same thing.
@@ -84,4 +88,82 @@ func runAt(runs []run, i int) int {
 		}
 	}
 	return max(len(runs)-1, 0)
+}
+
+// rowField is one of a row's fields and whether the row can stand behind it.
+//
+// The clamp folds lines that said the same sentence, and a well-instrumented
+// service puts what actually happened in its attributes: nine lines of "updated
+// resource" are nine different resources, and the row drew the first one's name
+// as if it were the row's. The count beside it said nine and every field beside
+// that said one thing, which is the fold claiming more than it folded.
+type rowField struct {
+	logs.RowField
+	// varies says the lines under this row disagreed about the value, so what
+	// is drawn is one of them and not the row's.
+	varies bool
+}
+
+// clampedRow marks the fields the lines of a run did not agree on.
+//
+// Only the run is compared, not the source: [logs.Store.Row] has already
+// dropped what never varies anywhere, and a key that differs across the log but
+// reads the same on all nine of these lines is a fact about this row and is
+// drawn as one.
+func clampedRow(fields []logs.RowField, entries []*logs.Entry, r run) []rowField {
+	out := make([]rowField, len(fields))
+	for i, f := range fields {
+		out[i] = rowField{RowField: f}
+	}
+	if r.n < 2 {
+		return out
+	}
+	left := len(out)
+	for _, e := range entries[r.first+1 : r.first+r.n] {
+		if left == 0 {
+			break
+		}
+		for i := range out {
+			if out[i].varies {
+				continue
+			}
+			if valueOf(e, out[i].Key) != out[i].Value {
+				out[i].varies, left = true, left-1
+			}
+		}
+	}
+	return out
+}
+
+// valueOf is what e said for a key, empty where it said nothing: a line that
+// left a field out disagrees with one that filled it in.
+func valueOf(e *logs.Entry, key string) string {
+	for _, f := range e.Row {
+		if f.Key == key {
+			return f.Value
+		}
+	}
+	return ""
+}
+
+// render draws the field as the row can honestly show it.
+//
+// A value the row cannot stand behind is greyed and given an ellipsis: it is
+// still worth seeing — one of nine names says what kind of thing the nine were
+// — but it is a sample and not the answer, and the coloring that would say what
+// kind of value it is would be saying it about a value the row does not have.
+// The key is written even where the field is normally drawn without one, since
+// an ellipsis on its own names nothing.
+func (f rowField) render() string {
+	if !f.varies {
+		return f.Render()
+	}
+	text := f.Value + "…"
+	if f.Key != "" {
+		text = f.Key + "=" + text
+	}
+	// Escaped, then stripped of the coloring the escaping carries: grey here
+	// means the whole field is a sample, and a reset in the middle of it would
+	// hand the rest of the value back its usual colors.
+	return styleDim.Render(ansi.Strip(logs.Escape(text)))
 }
