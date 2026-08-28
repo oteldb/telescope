@@ -24,8 +24,9 @@ const valuesDescription = "Lists the values one field has been seen with at a " 
 var errNoField = errors.New("name a field: fields lists the ones a place indexes")
 
 type fieldsInput struct {
-	Place string `json:"place" jsonschema:"The name of a place or group that reads logs, as places reports it"`
-	Range string `json:"range,omitempty" jsonschema:"The window, relative or absolute: 1h, today, yesterday, 6h..1h, 10:00..12:00, 2026-01-02 10:00..2026-01-02 12:00, or two RFC 3339 instants. Empty reads the place's own window, and all removes every bound"`
+	Place  string `json:"place" jsonschema:"The name of a place or group that reads logs, as places reports it"`
+	Target string `json:"target,omitempty" jsonschema:"What to read there, for a place that does not name one itself: a pod or workload for kubectl, a unit for journalctl, a container for docker. places says which places need one"`
+	Range  string `json:"range,omitempty" jsonschema:"The window, relative or absolute: 1h, today, yesterday, 6h..1h, 10:00..12:00, 2026-01-02 10:00..2026-01-02 12:00, or two RFC 3339 instants. Empty reads the place's own window, and all removes every bound"`
 }
 
 type fieldsOutput struct {
@@ -34,9 +35,10 @@ type fieldsOutput struct {
 }
 
 type valuesInput struct {
-	Place string `json:"place" jsonschema:"The name of a place or group that reads logs, as places reports it"`
-	Field string `json:"field" jsonschema:"The field to list, as fields names it"`
-	Range string `json:"range,omitempty" jsonschema:"The window, relative or absolute: 1h, today, yesterday, 6h..1h, 10:00..12:00, 2026-01-02 10:00..2026-01-02 12:00, or two RFC 3339 instants. Empty reads the place's own window, and all removes every bound"`
+	Place  string `json:"place" jsonschema:"The name of a place or group that reads logs, as places reports it"`
+	Field  string `json:"field" jsonschema:"The field to list, as fields names it"`
+	Target string `json:"target,omitempty" jsonschema:"What to read there, for a place that does not name one itself: a pod or workload for kubectl, a unit for journalctl, a container for docker. places says which places need one"`
+	Range  string `json:"range,omitempty" jsonschema:"The window, relative or absolute: 1h, today, yesterday, 6h..1h, 10:00..12:00, 2026-01-02 10:00..2026-01-02 12:00, or two RFC 3339 instants. Empty reads the place's own window, and all removes every bound"`
 }
 
 type valuesOutput struct {
@@ -51,7 +53,7 @@ func addFields(s *sdk.Server, cfg config.Config) {
 
 func fieldsHandler(cfg config.Config) sdk.ToolHandlerFor[fieldsInput, fieldsOutput] {
 	return func(ctx context.Context, _ *sdk.CallToolRequest, in fieldsInput) (*sdk.CallToolResult, fieldsOutput, error) {
-		src, err := resolveOver(cfg, in.Place, in.Range)
+		src, err := resolveOver(cfg, in.Place, in.Target, in.Range)
 		if err != nil {
 			return nil, fieldsOutput{}, err
 		}
@@ -75,7 +77,7 @@ func valuesHandler(cfg config.Config) sdk.ToolHandlerFor[valuesInput, valuesOutp
 		if strings.TrimSpace(in.Field) == "" {
 			return nil, valuesOutput{}, errNoField
 		}
-		src, err := resolveOver(cfg, in.Place, in.Range)
+		src, err := resolveOver(cfg, in.Place, in.Target, in.Range)
 		if err != nil {
 			return nil, valuesOutput{}, err
 		}
@@ -98,8 +100,8 @@ func valuesHandler(cfg config.Config) sdk.ToolHandlerFor[valuesInput, valuesOutp
 	}
 }
 
-func resolveOver(cfg config.Config, place, spec string) (source.Config, error) {
-	src, err := stream(cfg, place)
+func resolveOver(cfg config.Config, place, target, spec string) (source.Config, error) {
+	src, err := streamOf(cfg, place, target)
 	if err != nil {
 		return source.Config{}, err
 	}

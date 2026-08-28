@@ -21,10 +21,11 @@ const linkDescription = "Writes the command that opens a view of what you have "
 	"runs nothing."
 
 type linkInput struct {
-	Place string `json:"place,omitempty" jsonschema:"The place, group or trace store to open, as places reports it"`
-	Query string `json:"query,omitempty" jsonschema:"The filter to open on, in the same language the logs tool takes. Say level>=error here rather than asking for a level toggle"`
-	Range string `json:"range,omitempty" jsonschema:"The window to open on: 1h, today, 6h..1h, 10:00..12:00, or two RFC 3339 instants"`
-	Trace string `json:"trace,omitempty" jsonschema:"A trace id to draw instead of a list. With a store and no id, opens that store's trace search"`
+	Place  string `json:"place,omitempty" jsonschema:"The place, group or trace store to open, as places reports it"`
+	Target string `json:"target,omitempty" jsonschema:"What to read there, for a place that does not name one itself: a pod or workload for kubectl, a unit for journalctl. The link carries it, so whoever runs it gets the same view"`
+	Query  string `json:"query,omitempty" jsonschema:"The filter to open on, in the same language the logs tool takes. Say level>=error here rather than asking for a level toggle"`
+	Range  string `json:"range,omitempty" jsonschema:"The window to open on: 1h, today, 6h..1h, 10:00..12:00, or two RFC 3339 instants"`
+	Trace  string `json:"trace,omitempty" jsonschema:"A trace id to draw instead of a list. With a store and no id, opens that store's trace search"`
 }
 
 type linkOutput struct {
@@ -90,7 +91,7 @@ func linkView(cfg config.Config, in linkInput) (view.View, error) {
 	}
 	// Resolved for the same reason: what cannot be opened here cannot be opened
 	// there either, and the refusal is worth more now than later.
-	if _, err := stream(cfg, place); err != nil {
+	if _, err := streamOf(cfg, place, in.Target); err != nil {
 		return view.View{}, err
 	}
 	if q := strings.TrimSpace(in.Query); q != "" {
@@ -104,10 +105,11 @@ func linkView(cfg config.Config, in linkInput) (view.View, error) {
 		}
 	}
 	return view.View{
-		Kind:  view.KindLogs,
-		Place: place,
-		Query: strings.TrimSpace(in.Query),
-		Range: strings.TrimSpace(in.Range),
+		Kind:   view.KindLogs,
+		Place:  place,
+		Target: strings.TrimSpace(in.Target),
+		Query:  strings.TrimSpace(in.Query),
+		Range:  strings.TrimSpace(in.Range),
 	}, nil
 }
 

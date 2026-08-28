@@ -35,6 +35,7 @@ const summaryDescription = "Counts what a place holds rather than listing it: " 
 
 type summaryInput struct {
 	Place  string `json:"place" jsonschema:"The name of a place or group that reads logs, as places reports it"`
+	Target string `json:"target,omitempty" jsonschema:"What to read there, for a place that does not name one itself: a pod or workload for kubectl, a unit for journalctl, a container for docker. places says which places need one"`
 	Filter string `json:"filter,omitempty" jsonschema:"Count only the lines this filter selects, in telescope's filter language"`
 	Range  string `json:"range,omitempty" jsonschema:"The window, relative or absolute: 1h, today, yesterday, 6h..1h, 10:00..12:00, 2026-01-02 10:00..2026-01-02 12:00, or two RFC 3339 instants. Empty reads the place's own window, and all removes every bound"`
 	By     string `json:"by,omitempty" jsonschema:"Also count the values of this field, as fields names it"`
@@ -74,7 +75,7 @@ func addSummary(s *sdk.Server, cfg config.Config) {
 
 func summaryHandler(cfg config.Config) sdk.ToolHandlerFor[summaryInput, summaryOutput] {
 	return func(ctx context.Context, _ *sdk.CallToolRequest, in summaryInput) (*sdk.CallToolResult, summaryOutput, error) {
-		src, err := resolveOver(cfg, in.Place, in.Range)
+		src, err := resolveOver(cfg, in.Place, in.Target, in.Range)
 		if err != nil {
 			return nil, summaryOutput{}, err
 		}

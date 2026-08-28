@@ -23,9 +23,10 @@ import (
 // The flags a link is written with, named once so that whoever writes one and
 // whoever binds them cannot drift apart.
 const (
-	FlagQuery = "query"
-	FlagRange = "range"
-	FlagFrom  = "from"
+	FlagQuery  = "query"
+	FlagTarget = "target"
+	FlagRange  = "range"
+	FlagFrom   = "from"
 )
 
 // Program is the command a link invokes. A link is pasted into a shell, so it
@@ -61,6 +62,11 @@ type View struct {
 	Query string
 	// Range is the window, in the form [source.ParseRange] reads.
 	Range string
+	// Target is what to read at the place, where the place does not name it
+	// itself: a pod for kubectl, a unit for journalctl. It is what changes
+	// between one question and the next, which is why the config declares the
+	// rest and not this.
+	Target string
 	// Trace is the id of the trace to draw, for [KindTrace].
 	Trace string
 }
@@ -79,6 +85,9 @@ func (v View) Link() string {
 		}
 	default:
 		argv = append(argv, v.Place)
+		if v.Target != "" {
+			argv = append(argv, "--"+FlagTarget, v.Target)
+		}
 		if v.Query != "" {
 			argv = append(argv, "--"+FlagQuery, v.Query)
 		}

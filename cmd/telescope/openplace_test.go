@@ -60,3 +60,15 @@ func TestAPlaceMissingItsTargetIsUnfinishedRatherThanWrong(t *testing.T) {
 	require.NoError(t, err, "the place is declared and fine")
 	require.False(t, ready, "it just has not been told what to read")
 }
+
+// TestATargetOnTheCommandLineFinishesThePlace: it is what a link written by
+// telescope mcp carries, so what the link says has to be what the flag takes.
+func TestATargetOnTheCommandLineFinishesThePlace(t *testing.T) {
+	src, ready, err := placeStream(openConfig(t), "checkout")
+	require.NoError(t, err)
+	require.False(t, ready)
+
+	src = src.WithTarget("app=octo-api")
+	require.NoError(t, src.Validate(), "and now it opens")
+	require.Contains(t, src.Command(), "app=octo-api")
+}

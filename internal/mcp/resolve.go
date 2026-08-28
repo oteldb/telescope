@@ -18,6 +18,22 @@ import (
 // A place that does not open as it stands is still returned: what it is missing
 // is a target to read, and a database asked what its fields are needs none.
 func stream(cfg config.Config, name string) (source.Config, error) {
+	return streamOf(cfg, name, "")
+}
+
+// streamOf is the same, given what to read there.
+//
+// A kubectl place is half a place until it is told which workload: the config
+// declares the cluster and the namespace because those are the parts that stay
+// still, and the pod is what changes between one question and the next. The
+// start screen asks a person for it, and this is where a tool is asked — the
+// alternative is that a place declared without a target: line can be listed and
+// never read, which is a place an agent can see and cannot use.
+//
+// What it is not is a way in for a command. The target reaches [source.Config]
+// through WithTarget, which puts it in the field its collector reads — a unit,
+// a pod, a container — and never into the argv of something to run.
+func streamOf(cfg config.Config, name, target string) (source.Config, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return source.Config{}, errors.Errorf("name a place: %s", declared(cfg))
@@ -34,26 +50,78 @@ func stream(cfg config.Config, name string) (source.Config, error) {
 				"%q reads traces rather than lines: it is what the places whose logs "+
 					"carry trace ids name, and places says which those are", name)
 		}
-		src, _, err := p.Stream()
+		src, ready, err := p.Stream()
 		if err != nil {
 			// Unwrapped: the caller named the place a moment ago, and what a
 			// place says about itself already names it where the name is not
 			// obvious — see the token it could not read.
 			return source.Config{}, err
 		}
-		return src, nil
+		return targeted(src, ready, name, target)
 	}
 	for _, g := range cfg.Groups {
 		if g.Name != name {
 			continue
 		}
-		src, _, err := g.Stream()
+		src, ready, err := g.Stream()
 		if err != nil {
 			return source.Config{}, err
 		}
-		return src, nil
+		return targeted(src, ready, name, target)
+	}
+	if place, target, ok := splitTarget(cfg, name); ok {
+		return source.Config{}, errors.Errorf(
+			"no place named %q. %q is one, so %q is probably what to read there: "+
+				"pass it as the target argument rather than in the name",
+			name, place, target)
 	}
 	return source.Config{}, errors.Errorf("no place named %q: %s", name, declared(cfg))
+}
+
+// splitTarget reads a name that is a declared place with something after it.
+//
+// The start screen takes the two run together — a place is picked and the
+// target typed after it — so a name arriving that way is somebody carrying that
+// habit over rather than a name that is simply wrong. It cannot be split on the
+// space and read: a place is named by a person and "humo observer" is an
+// ordinary name, so the longest declared prefix is what decides, and only
+// naming one is what makes this a guess worth printing.
+func splitTarget(cfg config.Config, name string) (place, target string, ok bool) {
+	for _, p := range cfg.Places {
+		rest, found := strings.CutPrefix(name, p.Name+" ")
+		if !found {
+			continue
+		}
+		if rest = strings.TrimSpace(rest); rest != "" && len(p.Name) > len(place) {
+			place, target, ok = p.Name, rest, true
+		}
+	}
+	return place, target, ok
+}
+
+// targeted applies what to read and says what is still missing.
+//
+// A place that will not open is refused here rather than passed on, because
+// what a collector says when it is run without a target is about its own
+// command line — "error: expected 'logs (POD | TYPE/NAME)'" — and the caller
+// has a place name and a tool schema, not a kubectl invocation.
+func targeted(src source.Config, ready bool, name, target string) (source.Config, error) {
+	if target = strings.TrimSpace(target); target != "" {
+		src = src.WithTarget(target)
+		ready = src.Validate() == nil
+	}
+	if ready {
+		return src, nil
+	}
+	err := src.Validate()
+	if err == nil {
+		return src, nil
+	}
+	if target != "" {
+		return source.Config{}, errors.Wrapf(err, "%q with target %q", name, target)
+	}
+	return source.Config{}, errors.Wrapf(err,
+		"%q needs a target: give one as the target argument", name)
 }
 
 // declared is what could have been named instead, since a wrong name is most

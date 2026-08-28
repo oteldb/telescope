@@ -31,7 +31,7 @@ func main() {
 }
 
 func root() *cobra.Command {
-	var query, timeRange string
+	var query, timeRange, target string
 	cmd := &cobra.Command{
 		Use:   "telescope [place]",
 		Short: "A terminal log viewer",
@@ -52,7 +52,7 @@ func root() *cobra.Command {
 			model := ui.New()
 			if len(args) > 0 {
 				var err error
-				if model, err = openPlace(args[0], query, timeRange); err != nil {
+				if model, err = openPlace(args[0], target, query, timeRange); err != nil {
 					return err
 				}
 			}
@@ -64,6 +64,8 @@ func root() *cobra.Command {
 		"the filter to open on, in the language the / prompt takes")
 	cmd.Flags().StringVar(&timeRange, view.FlagRange, "",
 		"the window to read: 1h, today, 6h..1h, or two RFC 3339 instants")
+	cmd.Flags().StringVar(&target, view.FlagTarget, "",
+		"what to read there, for a place that does not name one: a pod, a unit, a container")
 	// cliversion writes the word "version" itself, and cobra's default template
 	// writes it too.
 	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
@@ -159,7 +161,7 @@ func traceCmd() *cobra.Command {
 // Only a declared place, never a command: what is typed here is as likely to
 // have been pasted out of a chat window as typed by whoever is running it, and
 // a name that could be a command line would run it.
-func openPlace(name, query, timeRange string) (ui.Model, error) {
+func openPlace(name, target, query, timeRange string) (ui.Model, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return ui.Model{}, err
@@ -167,6 +169,10 @@ func openPlace(name, query, timeRange string) (ui.Model, error) {
 	src, ready, err := placeStream(cfg, name)
 	if err != nil {
 		return ui.Model{}, err
+	}
+	if target = strings.TrimSpace(target); target != "" {
+		src = src.WithTarget(target)
+		ready = src.Validate() == nil
 	}
 	if timeRange != "" {
 		r, err := source.ParseRange(timeRange, time.Now())
@@ -180,10 +186,10 @@ func openPlace(name, query, timeRange string) (ui.Model, error) {
 	}
 	if !ready {
 		// The place needs something the config did not give it — a pod, a
-		// container — and the start screen is the thing that asks for it. What
-		// was named is not wrong, it is unfinished.
+		// container. What was named is not wrong, it is unfinished.
 		return ui.Model{}, errors.Errorf(
-			"%q needs a target before it can be read: open it from the start screen", name)
+			"%q needs a target before it can be read: pass --%s, "+
+				"or open it from the start screen, which asks", name, view.FlagTarget)
 	}
 	return ui.NewLogs(src, query), nil
 }

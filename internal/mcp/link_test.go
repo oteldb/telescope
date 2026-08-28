@@ -144,3 +144,22 @@ func viewOf(argv []string) view.View {
 	}
 	return v
 }
+
+// TestALinkCarriesTheTargetItWasGiven: a link to a place that needs one and
+// does not carry it opens nothing, which is worse than not writing it.
+func TestALinkCarriesTheTargetItWasGiven(t *testing.T) {
+	cfg := testConfig(t, []config.Place{
+		{Name: "atompve-operations", Type: "kubectl", Namespace: "octo"},
+	}, nil)
+
+	_, out, err := callLink(t, cfg, linkInput{
+		Place: "atompve-operations", Target: "app=octo-api", Query: "500", Range: "3h",
+	})
+	require.NoError(t, err)
+	require.Equal(t,
+		`telescope atompve-operations --target app=octo-api --query 500 --range 3h`, out.Link)
+
+	_, _, err = callLink(t, cfg, linkInput{Place: "atompve-operations", Query: "500"})
+	require.ErrorContains(t, err, "needs a target",
+		"refused here rather than opening nothing there")
+}
