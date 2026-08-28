@@ -71,7 +71,7 @@ type traceOutput struct {
 }
 
 func addTraces(s *sdk.Server, cfg config.Config) {
-	addTool(s, "trace", traceDescription, traceHandler(cfg))
+	addTool(s, "trace", traceDescription, textOnly(traceHandler(cfg)))
 }
 
 func traceHandler(cfg config.Config) sdk.ToolHandlerFor[traceInput, traceOutput] {

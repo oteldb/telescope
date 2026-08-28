@@ -84,7 +84,7 @@ type window struct {
 }
 
 func addLogs(s *sdk.Server, cfg config.Config) {
-	addTool(s, "logs", logsDescription, logsHandler(cfg))
+	addTool(s, "logs", logsDescription, textOnly(logsHandler(cfg)))
 }
 
 func logsHandler(cfg config.Config) sdk.ToolHandlerFor[logsInput, logsOutput] {

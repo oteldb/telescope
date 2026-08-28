@@ -90,3 +90,38 @@ func TestServerReportsAWrongNameToTheCaller(t *testing.T) {
 	require.True(t, res.IsError)
 	require.Contains(t, res.Content[0].(*sdk.TextContent).Text, "the ones declared are prod")
 }
+
+// TestTheAnswerCannotBePickedWrong: a client picks a half rather than merging
+// them, so a half that cannot stand on its own must not be offered. logs and
+// trace are the two whose payload is the text — the lines and the tree — and
+// they answer with that alone; every other tool carries its whole answer in
+// both, so either one serves.
+func TestTheAnswerCannotBePickedWrong(t *testing.T) {
+	url, _ := logStore(t, []entry{
+		{at: "2026-08-17T12:00:01Z", level: "info", pod: "api-1", msg: "started"},
+		{at: "2026-08-17T12:00:02Z", level: "error", pod: "api-2", msg: "connect: connection refused"},
+	})
+	session := connect(t, testConfig(t, []config.Place{
+		{Name: "prod", Type: "victorialogs", URL: url},
+	}, nil))
+
+	res, err := session.CallTool(t.Context(), &sdk.CallToolParams{
+		Name: "logs", Arguments: map[string]any{"place": "prod", "range": "all"},
+	})
+	require.NoError(t, err)
+	require.Nil(t, res.StructuredContent,
+		"no second half to be rendered instead of the lines")
+	require.Len(t, res.Content, 1)
+
+	text := res.Content[0].(*sdk.TextContent).Text
+	require.Contains(t, text, "connect: connection refused", "the lines are the answer")
+	require.Contains(t, text, "matched=2", "and every count the facts carried is on it")
+	require.Contains(t, text, "asked prod:")
+
+	// The tools whose structured half is the whole answer keep it.
+	res, err = session.CallTool(t.Context(), &sdk.CallToolParams{
+		Name: "summary", Arguments: map[string]any{"place": "prod", "range": "all"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res.StructuredContent, "summary's facts are its answer")
+}

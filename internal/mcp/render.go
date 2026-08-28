@@ -156,14 +156,21 @@ func draw(out logsOutput, rows []row) string {
 	fmt.Fprintf(b, "place=%s  read=%d matched=%d shown=%d\n",
 		out.Place, out.Read, out.Matched, out.Returned)
 
+	// The window asked for and the stretch the lines actually cover are two
+	// different facts, and calling both of them the window was a way of saying
+	// neither: a place read over "all" has no asked window and six minutes of
+	// lines, which read as a contradiction.
+	if w := out.Window; w.Since != "" || w.Until != "" {
+		fmt.Fprintf(b, "asked window: %s..%s\n", w.Since, w.Until)
+	}
 	stamp := clockStamp
 	if first, last, ok := span(rows); ok {
 		if first.Format(time.DateOnly) == last.Format(time.DateOnly) {
-			fmt.Fprintf(b, "window: %s %s..%s\n", first.Format(time.DateOnly),
+			fmt.Fprintf(b, "spanning: %s %s..%s\n", first.Format(time.DateOnly),
 				first.Format(clockStamp), last.Format(clockStamp))
 		} else {
 			stamp = dateStamp
-			fmt.Fprintf(b, "window: %s..%s\n", first.Format(dateStamp), last.Format(dateStamp))
+			fmt.Fprintf(b, "spanning: %s..%s\n", first.Format(dateStamp), last.Format(dateStamp))
 		}
 	}
 	for _, p := range out.Pushed {
