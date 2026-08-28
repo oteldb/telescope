@@ -16,6 +16,7 @@ import (
 	"github.com/oteldb/telescope/internal/source"
 	"github.com/oteldb/telescope/internal/trace"
 	"github.com/oteldb/telescope/internal/ui"
+	"github.com/oteldb/telescope/internal/view"
 )
 
 // fetchTimeout bounds a trace fetch. A trace is one request with an end, unlike
@@ -30,21 +31,41 @@ func main() {
 }
 
 func root() *cobra.Command {
+	var query, timeRange, target string
 	cmd := &cobra.Command{
-		Use:   "telescope",
+		Use:   "telescope [place]",
 		Short: "A terminal log viewer",
 		Long: "Opens one stream — a systemd unit, a Kubernetes workload, a container,\n" +
 			"any command, or a query against VictoriaLogs or Loki — and renders it as a\n" +
-			"filterable list.",
+			"filterable list.\n\n" +
+			"With no argument it opens the start screen, which picks a place. Naming one\n" +
+			"the config declares opens its list directly, which is what a link written by\n" +
+			"telescope mcp is.",
+		Example: "  telescope\n" +
+			"  telescope prod\n" +
+			"  telescope prod --query 'level>=error pod=api-*' --range 6h..1h",
 		Version:       buildVersion(),
-		Args:          cobra.NoArgs,
+		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: false,
-		RunE: func(*cobra.Command, []string) error {
-			_, err := tea.NewProgram(ui.New(), tea.WithAltScreen()).Run()
+		RunE: func(_ *cobra.Command, args []string) error {
+			model := ui.New()
+			if len(args) > 0 {
+				var err error
+				if model, err = openPlace(args[0], target, query, timeRange); err != nil {
+					return err
+				}
+			}
+			_, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
 			return err
 		},
 	}
+	cmd.Flags().StringVarP(&query, view.FlagQuery, "q", "",
+		"the filter to open on, in the language the / prompt takes")
+	cmd.Flags().StringVar(&timeRange, view.FlagRange, "",
+		"the window to read: 1h, today, 6h..1h, or two RFC 3339 instants")
+	cmd.Flags().StringVar(&target, view.FlagTarget, "",
+		"what to read there, for a place that does not name one: a pod, a unit, a container")
 	// cliversion writes the word "version" itself, and cobra's default template
 	// writes it too.
 	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
@@ -133,6 +154,66 @@ func traceCmd() *cobra.Command {
 	cmd.Flags().StringVar(&api, "api", "",
 		"what answers there: tempo or jaeger. A named place declares its own")
 	return cmd
+}
+
+// openPlace resolves a name the config declares into the list it opens.
+//
+// Only a declared place, never a command: what is typed here is as likely to
+// have been pasted out of a chat window as typed by whoever is running it, and
+// a name that could be a command line would run it.
+func openPlace(name, target, query, timeRange string) (ui.Model, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return ui.Model{}, err
+	}
+	src, ready, err := placeStream(cfg, name)
+	if err != nil {
+		return ui.Model{}, err
+	}
+	if target = strings.TrimSpace(target); target != "" {
+		src = src.WithTarget(target)
+		ready = src.Validate() == nil
+	}
+	if timeRange != "" {
+		r, err := source.ParseRange(timeRange, time.Now())
+		if err != nil {
+			return ui.Model{}, err
+		}
+		src.Range = r
+		for i := range src.Merge {
+			src.Merge[i].Range = r
+		}
+	}
+	if !ready {
+		// The place needs something the config did not give it — a pod, a
+		// container. What was named is not wrong, it is unfinished.
+		return ui.Model{}, errors.Errorf(
+			"%q needs a target before it can be read: pass --%s, "+
+				"or open it from the start screen, which asks", name, view.FlagTarget)
+	}
+	return ui.NewLogs(src, query), nil
+}
+
+// placeStream finds a place or a group by name, since either is a thing to open
+// and whoever wrote the link should not have had to say which it was.
+func placeStream(cfg config.Config, name string) (source.Config, bool, error) {
+	for _, p := range cfg.Places {
+		if p.Name != name {
+			continue
+		}
+		if p.ReadsTraces() {
+			return source.Config{}, false, errors.Errorf(
+				"%q reads traces rather than lines: telescope trace --from %q", name, name)
+		}
+		return p.Stream()
+	}
+	for _, g := range cfg.Groups {
+		if g.Name == name {
+			return g.Stream()
+		}
+	}
+	return source.Config{}, false, errors.Errorf(
+		"no place named %q: run telescope with no argument to see what there is", name)
 }
 
 // readTrace reads a trace from wherever it was named: an endpoint, if one was,

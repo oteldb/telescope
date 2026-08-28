@@ -214,6 +214,12 @@ func (c Config) WithFilter(f query.Expr) Config {
 // For a merge it answers every child that was still being asked, and only
 // those: a group of clusters running the same deployment is asked once, while a
 // place that already named a pod keeps it.
+//
+// A kubectl target names up to three things — namespace, workload, container —
+// and what it does not name is left as the config declared it. A place that
+// says "namespace: octo" and is then asked for "app=octo-api" is being told
+// which workload and not being told to forget which namespace; naming one in
+// the target still wins, since the argument is more specific than the file.
 func (c Config) WithTarget(target string) Config {
 	if c.Collector == CollectorMerge {
 		merged := make([]Config, 0, len(c.Merge))
@@ -230,7 +236,14 @@ func (c Config) WithTarget(target string) Config {
 	case CollectorJournal:
 		c.Unit, c.UserUnit = ParseJournalTarget(target)
 	case CollectorKubectl:
-		c.Namespace, c.Target, c.Container = ParseKubeTarget(target)
+		namespace, workload, container := ParseKubeTarget(target)
+		c.Target = workload
+		if namespace != "" {
+			c.Namespace = namespace
+		}
+		if container != "" {
+			c.Container = container
+		}
 	case CollectorDocker:
 		c.Container = target
 	case CollectorCommand:

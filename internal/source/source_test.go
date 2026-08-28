@@ -216,3 +216,20 @@ func TestParseKubeTarget(t *testing.T) {
 		})
 	}
 }
+
+// TestATargetDoesNotUnsayTheConfig: a place declaring "namespace: octo" asked
+// for "app=octo-api" is being told which workload, not told to forget which
+// namespace.
+func TestATargetDoesNotUnsayTheConfig(t *testing.T) {
+	declared := Config{Collector: CollectorKubectl, Namespace: "octo", Container: "app"}
+
+	got := declared.WithTarget("app=octo-api")
+	require.Equal(t, "octo", got.Namespace, "kept, since the target named none")
+	require.Equal(t, "app", got.Container)
+	require.Equal(t, "app=octo-api", got.Target)
+
+	got = declared.WithTarget("kube-system/app=coredns:sidecar")
+	require.Equal(t, "kube-system", got.Namespace, "the argument is more specific than the file")
+	require.Equal(t, "sidecar", got.Container)
+	require.Equal(t, "app=coredns", got.Target)
+}

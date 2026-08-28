@@ -256,3 +256,35 @@ func TestLogsSaysWhenTheLimitWasLowered(t *testing.T) {
 	_, _, err = capLimit(-1, defaultLogsLimit, maxLogsLimit)
 	require.ErrorContains(t, err, "negative")
 }
+
+// TestOneLineAgreesWithItself: calling a single line's fields varying was a
+// rendering decision — there is nothing to hoist out of one row — leaking into
+// the facts, where it claimed seven fields differ across one line and left
+// their values in the row alone. A reader of the facts got names and no values.
+func TestOneLineAgreesWithItself(t *testing.T) {
+	url, _ := logStore(t, []entry{
+		{at: "2026-08-17T12:00:02Z", level: "error", pod: "api-2", msg: "connect: connection refused"},
+	})
+	cfg := testConfig(t, []config.Place{{Name: "prod", Type: "victorialogs", URL: url}}, nil)
+
+	text, out := logsOf(t, cfg, logsInput{Place: "prod", Range: "all"})
+	require.Equal(t, 1, out.Returned)
+	require.Empty(t, out.Varies, "nothing can vary across one line")
+	require.Equal(t, map[string]string{"namespace": "prod", "pod": "api-2"}, out.Common,
+		"and the values reach a reader of the facts, not only the row")
+	require.Contains(t, text, "common: namespace=prod pod=api-2")
+	require.Contains(t, text, "connect: connection refused")
+}
+
+// TestNoLinesClaimNothingEitherWay: an empty answer has no fields to be common
+// and none to vary, and a list of names with no lines under them reads as
+// fields whose values were dropped.
+func TestNoLinesClaimNothingEitherWay(t *testing.T) {
+	url, _ := logStore(t, nil)
+	cfg := testConfig(t, []config.Place{{Name: "prod", Type: "victorialogs", URL: url}}, nil)
+
+	_, out := logsOf(t, cfg, logsInput{Place: "prod", Range: "all"})
+	require.Zero(t, out.Returned)
+	require.Empty(t, out.Varies)
+	require.Empty(t, out.Common)
+}

@@ -209,7 +209,7 @@ $ claude mcp add telescope -- telescope mcp
 Any MCP client will do; the command takes no arguments and reads the same
 config file.
 
-Nine tools. `places` lists what the config declares, what speaks at each and
+Ten tools. `places` lists what the config declares, what speaks at each and
 whether it opens as it stands — trace stores among them, since a store is a
 place and the places whose lines carry ids into it name it. `summary` counts a window rather than listing it
 — lines by level, where the volume went, the messages that repeat most, the
@@ -221,6 +221,15 @@ what called what and when each began — with whatever failed listed above the
 tree rather than buried in it, and one span's attributes read on request.
 `trace_search` finds a trace when there is no log line to lift an id from, and
 `trace_fields` and `trace_tag_values` say what a store can be searched by.
+
+`link` is how it points back: it writes the command that opens what it found on
+your own screen, scrollable, instead of describing it. `y` in the list copies
+the same thing the other way, for handing a view to an agent or to a colleague.
+Naming a place opens it directly, which is what such a link is:
+
+```console
+$ telescope prod --query 'level>=error pod=api-*' --range 6h..1h
+```
 
 What comes back is written for something that reads rather than looks: labels
 every line shares are hoisted out and said once, repetitions are folded with a

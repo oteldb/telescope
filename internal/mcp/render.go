@@ -76,8 +76,20 @@ func repeats(a, b *logs.Entry) bool {
 // finished: a key that reads the same on all of it is constant for this
 // question, whatever the stream does next.
 func split(entries []*logs.Entry) (common map[string]string, varies []string) {
-	if len(entries) < 2 {
-		return nil, keysOf(entries)
+	switch len(entries) {
+	case 0:
+		return nil, nil
+	case 1:
+		// One line agrees with itself about everything. Calling its fields
+		// varying was a rendering decision — there is nothing to hoist out of a
+		// single row — leaking into the facts, where it read as seven fields
+		// that differ across one line, and left their values in the row alone.
+		// A reader of the facts got the names and none of the values.
+		shared := fieldsOf(entries[0])
+		if len(shared) == 0 {
+			return nil, nil
+		}
+		return shared, nil
 	}
 	shared := maps.Clone(fieldsOf(entries[0]))
 	for _, e := range entries[1:] {
@@ -144,14 +156,21 @@ func draw(out logsOutput, rows []row) string {
 	fmt.Fprintf(b, "place=%s  read=%d matched=%d shown=%d\n",
 		out.Place, out.Read, out.Matched, out.Returned)
 
+	// The window asked for and the stretch the lines actually cover are two
+	// different facts, and calling both of them the window was a way of saying
+	// neither: a place read over "all" has no asked window and six minutes of
+	// lines, which read as a contradiction.
+	if w := out.Window; w.Since != "" || w.Until != "" {
+		fmt.Fprintf(b, "asked window: %s..%s\n", w.Since, w.Until)
+	}
 	stamp := clockStamp
 	if first, last, ok := span(rows); ok {
 		if first.Format(time.DateOnly) == last.Format(time.DateOnly) {
-			fmt.Fprintf(b, "window: %s %s..%s\n", first.Format(time.DateOnly),
+			fmt.Fprintf(b, "spanning: %s %s..%s\n", first.Format(time.DateOnly),
 				first.Format(clockStamp), last.Format(clockStamp))
 		} else {
 			stamp = dateStamp
-			fmt.Fprintf(b, "window: %s..%s\n", first.Format(dateStamp), last.Format(dateStamp))
+			fmt.Fprintf(b, "spanning: %s..%s\n", first.Format(dateStamp), last.Format(dateStamp))
 		}
 	}
 	for _, p := range out.Pushed {
