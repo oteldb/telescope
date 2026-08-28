@@ -125,7 +125,10 @@ var listers = map[source.Collector]lister{
 					":.kind,:.metadata.namespace,:.metadata.name," +
 					":.spec.template.spec.containers[*].name," +
 					":.status.readyReplicas,:.status.replicas," +
-					":.status.numberReady,:.status.desiredNumberScheduled"
+					":.status.numberReady,:.status.desiredNumberScheduled," +
+					// Last, because it is the one column that prints a space
+					// inside itself and so cannot have another after it.
+					":.spec.selector.matchLabels"
 			},
 			parse: parseWorkload,
 		},
@@ -144,6 +147,13 @@ const (
 	noSystemctl   = "systemctl is not installed"
 )
 
+// runBounded runs one source under its own deadline; see [Request.timeout].
+func runBounded(ctx context.Context, r Request, src listSource, limit int) ([]Candidate, error) {
+	ctx, cancel := context.WithTimeout(ctx, r.timeout())
+	defer cancel()
+	return run(ctx, r, src, limit)
+}
+
 // list merges every source of the collector's lister. An error is only
 // reported when nothing at all could be listed: a host without a user session
 // still completes its system units.
@@ -159,15 +169,12 @@ func list(ctx context.Context, r Request) ([]Candidate, error) {
 		return nil, nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, Timeout)
-	defer cancel()
-
 	var (
 		out      []Candidate
 		firstErr error
 	)
 	for _, src := range l.sources {
-		items, err := run(ctx, r, src, maxCandidates-len(out))
+		items, err := runBounded(ctx, r, src, maxCandidates-len(out))
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -292,8 +299,9 @@ func parsePod(line string) []Candidate {
 }
 
 // parseWorkload reads "kind namespace name containers ready replicas
-// numberReady desiredNumberScheduled" and emits the "ns/kind/name" target that
-// kubectl logs accepts in place of a pod.
+// numberReady desiredNumberScheduled selector" and emits the "ns/kind/name"
+// target that kubectl logs accepts in place of a pod, and the selector under
+// it as a target of its own.
 //
 // The two pairs of replica counts are the deployment and daemonset spellings of
 // the same thing; whichever the kind fills in is the one reported.
@@ -323,12 +331,56 @@ func parseWorkload(line string) []Candidate {
 	}
 
 	out := []Candidate{{Value: name, Detail: detail}}
-	if containers := splitColumn(get(f, 3)); len(containers) > 1 {
+	containers := splitColumn(get(f, 3))
+	if len(containers) > 1 {
 		for _, c := range containers {
 			out = append(out, Candidate{Value: name + ":" + c, Detail: kind + " container"})
 		}
 	}
+	// The workload's own selector, which is the same pods asked for the other
+	// way: "kubectl logs deployment/api" tails one of them and "-l app=api"
+	// tails all of them, and only the second is a thing the prompt can be
+	// typed towards blind.
+	if sel := kubeSelector(strings.Join(f[min(8, len(f)):], " ")); sel != "" {
+		all := f[1] + "/" + sel
+		out = append(out, Candidate{Value: all, Detail: kind + " · all pods"})
+		if len(containers) > 1 {
+			for _, c := range containers {
+				out = append(out, Candidate{Value: all + ":" + c, Detail: kind + " container · all pods"})
+			}
+		}
+	}
 	return out
+}
+
+// kubeSelector turns the "map[app:api tier:backend]" that custom-columns prints
+// for a label map into the "app=api,tier=backend" that "kubectl logs -l" takes.
+//
+// The printer runs the map through fmt rather than serializing it, which is why
+// this reads Go's map syntax and why the keys arrive sorted. A label value
+// cannot hold a space, so the entries split on one.
+//
+// Anything it cannot read whole is dropped rather than half-read: a selector
+// missing one of its labels is not a narrower answer, it is a different set of
+// pods, and offering it would be worse than offering nothing.
+func kubeSelector(s string) string {
+	inside, ok := strings.CutPrefix(strings.TrimSpace(s), "map[")
+	if !ok {
+		return ""
+	}
+	inside, ok = strings.CutSuffix(inside, "]")
+	if !ok {
+		return ""
+	}
+	var pairs []string
+	for e := range strings.FieldsSeq(inside) {
+		k, v, ok := strings.Cut(e, ":")
+		if !ok || k == "" || v == "" {
+			return ""
+		}
+		pairs = append(pairs, k+"="+v)
+	}
+	return strings.Join(pairs, ",")
 }
 
 // splitColumn reads a custom-columns list, which is comma separated and prints
