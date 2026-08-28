@@ -292,6 +292,8 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 		}
 		m.clamped = !m.clamped
 		m.cursor = runAt(m.runs(entries), line)
+	case "y":
+		return m.copyLink()
 	case "l":
 		f := m.view.Filter()
 		f.MinLevel = f.MinLevel.Next()
@@ -753,6 +755,7 @@ func (m logModel) footer(entries []*logs.Entry) string {
 		key("c", "clamp"),
 		key("t", "time"),
 		key("v", "volume"),
+		key("y", "link"),
 		key("←→", "scroll"),
 		key("home/end", "ends"),
 		key("esc", "sources"),

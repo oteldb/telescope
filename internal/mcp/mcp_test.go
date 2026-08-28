@@ -43,7 +43,7 @@ func TestServerOffersItsTools(t *testing.T) {
 	}
 	require.ElementsMatch(t, []string{
 		"places", "fields", "field_values", "logs", "summary",
-		"trace", "trace_search", "trace_fields", "trace_tag_values",
+		"trace", "trace_search", "trace_fields", "trace_tag_values", "link",
 	}, names)
 }
 

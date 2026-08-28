@@ -60,6 +60,11 @@ type Model struct {
 	asked  traceAsk
 
 	stream *source.Stream
+
+	// opening is the view telescope was started on, when it was started on one
+	// rather than on the start screen. It is delivered by Init and then done
+	// with; the screen it opens is reached the same way every other one is.
+	opening *connectMsg
 }
 
 // New returns the root model, opening on the start screen.
@@ -90,7 +95,7 @@ func NewSearch(at source.Endpoint) Model {
 // than started here: Init cannot record what it asked for on its value
 // receiver, and a request nobody remembers is a request that runs twice.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textinputBlink, func() tea.Msg { return initMsg{} })
+	return tea.Batch(textinputBlink, m.opened(), func() tea.Msg { return initMsg{} })
 }
 
 // Update implements [tea.Model].
