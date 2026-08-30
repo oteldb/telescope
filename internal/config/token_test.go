@@ -1,6 +1,7 @@
 package config
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -175,4 +176,35 @@ func TestTokenExecEmpty(t *testing.T) {
 		_, err := loadFrom(write(t, content))
 		require.ErrorContains(t, err, "exec is empty")
 	}
+}
+
+// Under "telescope mcp" standard input is the MCP protocol stream, and a token
+// command that read from it would eat the message the server was about to
+// answer — so a run whose input is a pipe hands the command nothing.
+func TestTokenCommandIsNotGivenAPipeToRead(t *testing.T) {
+	needsShell(t)
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = r.Close()
+		_ = w.Close()
+	})
+
+	const protocol = `{"jsonrpc":"2.0","id":1,"method":"initialize"}` + "\n"
+	go func() {
+		_, _ = w.WriteString(protocol)
+	}()
+
+	stdin := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = stdin })
+
+	got, err := Argv{"sh", "-c", "cat; printf s3cret"}.run(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "s3cret", got, "the command read the pipe and printed it back")
+
+	buf := make([]byte, len(protocol))
+	_, err = io.ReadFull(r, buf)
+	require.NoError(t, err)
+	require.Equal(t, protocol, string(buf), "the message was consumed by the token command")
 }
