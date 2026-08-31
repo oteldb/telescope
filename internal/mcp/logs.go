@@ -26,6 +26,13 @@ const (
 	maxLogsLimit     = 500
 	logsReachFactor  = 20
 	maxLogsReach     = 2000
+	// logsRampFactor is how fast a page grows when the one before it did not
+	// find enough. The first ask is the limit itself, so a filter the place
+	// answers densely still costs one round trip; growing from there is what
+	// keeps a filter it answers sparsely from costing a round trip per page of
+	// the reach. It is the number a kubectl page widens its window by, for the
+	// same reason: each attempt is asked because the last one was too small.
+	logsRampFactor = 4
 )
 
 const logsDescription = "Reads the lines of a place, newest last. " +
@@ -152,6 +159,12 @@ type page struct {
 // not, one page is however many lines the place happened to write last, of
 // which a narrow filter keeps none — and answering "nothing matched" after
 // reading a minute of a busy stream would be a lie told confidently.
+//
+// Each page asked for is larger than the last, because the reason to ask again
+// is the answer that the first size was the wrong one. Reading the reach a
+// limit at a time was a round trip per fifty lines — twenty requests of a
+// database that would have answered one, and twenty ssh connections where the
+// place is reached over one.
 func readBack(ctx context.Context, src source.Config, filter logs.Filter, limit int) (page, error) {
 	reach := min(max(limit*logsReachFactor, limit), maxLogsReach)
 	var (
@@ -165,8 +178,8 @@ func readBack(ctx context.Context, src source.Config, filter logs.Filter, limit 
 	if before.IsZero() {
 		before = time.Now()
 	}
-	for out.read < reach {
-		lines, err := src.Page(ctx, before, min(limit, reach-out.read), source.WithTimeFunc(logs.LineTime))
+	for want := limit; out.read < reach; want *= logsRampFactor {
+		lines, err := src.Page(ctx, before, min(want, reach-out.read), source.WithTimeFunc(logs.LineTime))
 		if err != nil {
 			return page{}, err
 		}

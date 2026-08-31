@@ -47,7 +47,18 @@ func (e entry) time(t *testing.T) time.Time {
 // the one thing paging back must not do.
 func logStore(t *testing.T, entries []entry) (endpoint string, asked *url.Values) {
 	t.Helper()
-	var got url.Values
+	endpoint, asked, _ = countedLogStore(t, entries)
+	return endpoint, asked
+}
+
+// countedLogStore is [logStore] keeping the limit of every request in order,
+// which is what says how many round trips reading back cost.
+func countedLogStore(t *testing.T, entries []entry) (endpoint string, asked *url.Values, limits *[]int) {
+	t.Helper()
+	var (
+		got    url.Values
+		wanted []int
+	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.URL.Query()
 		end, err := time.Parse(time.RFC3339Nano, got.Get("end"))
@@ -55,6 +66,7 @@ func logStore(t *testing.T, entries []entry) (endpoint string, asked *url.Values
 
 		limit, err := strconv.Atoi(got.Get("limit"))
 		require.NoError(t, err)
+		wanted = append(wanted, limit)
 
 		var body strings.Builder
 		for i := len(entries) - 1; i >= 0 && limit > 0; i-- {
@@ -67,7 +79,7 @@ func logStore(t *testing.T, entries []entry) (endpoint string, asked *url.Values
 		_, _ = w.Write([]byte(body.String()))
 	}))
 	t.Cleanup(srv.Close)
-	return srv.URL, &got
+	return srv.URL, &got, &wanted
 }
 
 func logsOf(t *testing.T, cfg config.Config, in logsInput) (string, logsOutput) {
@@ -287,4 +299,28 @@ func TestNoLinesClaimNothingEitherWay(t *testing.T) {
 	require.Zero(t, out.Returned)
 	require.Empty(t, out.Varies)
 	require.Empty(t, out.Common)
+}
+
+// TestLogsAsksForBiggerPagesAsItGoesBack: the reason to ask a second time is
+// that the first size was the wrong one, so the reach is walked in a few
+// growing pages rather than in a round trip per limit.
+func TestLogsAsksForBiggerPagesAsItGoesBack(t *testing.T) {
+	var entries []entry
+	at := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	for i := range maxLogsReach + defaultLogsLimit {
+		entries = append(entries, entry{
+			at:    at.Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano),
+			level: "info", pod: "api-1", msg: "started",
+		})
+	}
+	srv, _, limits := countedLogStore(t, entries)
+	cfg := testConfig(t, []config.Place{
+		{Name: "prod", Type: "victorialogs", URL: srv},
+	}, nil)
+
+	_, out := logsOf(t, cfg, logsInput{Place: "prod", Filter: "msg~nothing-here"})
+	require.Zero(t, out.Matched, "the walk went the whole reach without a match")
+	require.Equal(t, defaultLogsLimit*logsReachFactor, out.Read, "and stopped at the reach")
+	require.Equal(t, []int{50, 200, 750}, *limits,
+		"each page is bigger than the last, and the last is only what is left of the reach")
 }
