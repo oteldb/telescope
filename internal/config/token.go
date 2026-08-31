@@ -157,16 +157,20 @@ func (argvDecoder) DecodeValue(raw any) (any, error) {
 
 // run executes the command and returns what it wrote to stdout.
 //
-// The command inherits the terminal: telescope reads its config before the
-// alternate screen opens, so a keyring that asks for a passphrase can still
-// ask. What it writes to stderr is kept for the error, since that is where a
-// password manager explains itself.
+// The command inherits the terminal when there is one: telescope reads its
+// config before the alternate screen opens, so a keyring that asks for a
+// passphrase can still ask. What it writes to stderr is kept for the error,
+// since that is where a password manager explains itself.
 func (a Argv) run(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, tokenTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, a[0], a[1:]...)
-	cmd.Stdin = os.Stdin
+	// Assigned only when there is one: a nil *os.File in an io.Reader is not a
+	// nil reader, and exec would take it for input it could read.
+	if tty := askOn(); tty != nil {
+		cmd.Stdin = tty
+	}
 	out, err := cmd.Output()
 	if err != nil {
 		var exit *exec.ExitError
@@ -185,6 +189,27 @@ func (a Argv) run(ctx context.Context) (string, error) {
 		return "", errors.Errorf("%s printed no token", a[0])
 	}
 	return token, nil
+}
+
+// askOn is where a token command may ask its question, and nil wherever that
+// is not a person.
+//
+// Only a terminal is handed over. Standard input is the terminal when somebody
+// ran telescope at one, and under "telescope mcp" it is the protocol stream
+// itself: a helper that read one byte of that would eat the message the server
+// was about to answer, and the client would see a server that started, went
+// quiet and died. Nothing distinguishes the two at the point the command is
+// run — the config is read the same way either way — so the question is asked
+// of the file descriptor rather than of the caller.
+//
+// A command given no input that wanted some fails, which is the right answer:
+// there is nobody to type it.
+func askOn() *os.File {
+	info, err := os.Stdin.Stat()
+	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		return nil
+	}
+	return os.Stdin
 }
 
 // oneLine folds a command's complaint onto one line, so it fits where it is
