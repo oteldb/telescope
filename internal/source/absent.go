@@ -1,6 +1,9 @@
 package source
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // absentSaid is how a collector says the place does not have what it was
 // pointed at. Each tool words it its own way, so this is a list of what they
@@ -24,12 +27,27 @@ var absentSaid = []string{
 // saying so in the middle of the timeline is noise the reader has to learn to
 // skip.
 func absent(lines []Line) bool {
-	for _, l := range lines {
-		said := strings.ToLower(string(l.Data))
-		for _, s := range absentSaid {
-			if strings.Contains(said, s) {
-				return true
-			}
+	return slices.ContainsFunc(lines, absentLine)
+}
+
+// absentSearched bounds what one line is searched for the phrase.
+//
+// Every tool here writes it at the head of the line, and this runs on each line
+// of every stream that is working: lowercasing the whole of somebody's JSON to
+// find a phrase that is never past its first few words would be a copy of the
+// log per line of it.
+const absentSearched = 256
+
+// absentLine is [absent] for one line.
+func absentLine(l Line) bool {
+	data := l.Data
+	if len(data) > absentSearched {
+		data = data[:absentSearched]
+	}
+	said := strings.ToLower(string(data))
+	for _, s := range absentSaid {
+		if strings.Contains(said, s) {
+			return true
 		}
 	}
 	return false
