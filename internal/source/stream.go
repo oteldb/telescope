@@ -72,6 +72,7 @@ type Stream struct {
 	mu     sync.Mutex
 	nread  int
 	lastAt time.Time
+	gone   bool
 }
 
 // read is how many lines the collector has written to stdout, which is what
@@ -88,6 +89,20 @@ func (s *Stream) since() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lastAt
+}
+
+// missing records the collector saying the place does not have what it was
+// pointed at, and missed reports it.
+func (s *Stream) missing() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gone = true
+}
+
+func (s *Stream) missed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.gone
 }
 
 // saw records a line the collector wrote.
@@ -224,12 +239,11 @@ func (s *Stream) follow(ctx context.Context, cfg Config, cmd *exec.Cmd, stdout, 
 		err := cmd.Wait()
 
 		switch {
-		case ctx.Err() != nil, !cfg.reopens():
+		case ctx.Err() != nil, !cfg.reopens(), s.missed():
 			return err
 		}
-		// Only what came back on stdout counts as having read something: a
-		// place that answers "no such resource" writes on stderr every time,
-		// and reopening it forever is a way to never say so.
+		// Only what came back on stdout counts as having read something, so a
+		// collector that complains and exits still runs out of attempts.
 		if s.read() > before {
 			attempt = 0
 		} else {
@@ -297,7 +311,15 @@ func (s *Stream) scan(ctx context.Context, r io.Reader, isErr bool, wg *sync.Wai
 		if s.cfg.Stamps() {
 			line.Data, line.At = unstamp(line.Data)
 		}
-		if !isErr {
+		// A collector naming a resource the place does not have has said the
+		// one thing it will go on saying, and it says it on stdout as readily
+		// as on stderr: an ssh follow runs under a pty, which folds the two
+		// together. Counting it as a line read is what let the reopening treat
+		// a place with nothing in it as a place worth asking again.
+		switch {
+		case absentLine(line):
+			s.missing()
+		case !isErr:
 			s.saw(line)
 		}
 		select {

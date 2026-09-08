@@ -82,9 +82,9 @@ func TestAContainerComingBackDoesNotEndTheStream(t *testing.T) {
 	require.Zero(t, last.Load().Tail, "and the tail was how far back to start, which is behind us")
 }
 
-// TestAPlaceThatOnlyComplainsIsNotReopenedForever: a target the cluster does not
-// have writes its refusal on stderr every time round.
-func TestAPlaceThatOnlyComplainsIsNotReopenedForever(t *testing.T) {
+// TestAPlaceThatHasNothingIsAskedOnce: a target the cluster does not have will
+// say so again for as long as it is asked, so it is asked once.
+func TestAPlaceThatHasNothingIsAskedOnce(t *testing.T) {
 	opened, _ := fakeCollector(t, func(int) string {
 		return `echo 'Error from server (NotFound): pods "api-7d9f" not found' >&2; exit 1`
 	})
@@ -99,8 +99,41 @@ func TestAPlaceThatOnlyComplainsIsNotReopenedForever(t *testing.T) {
 		}
 	}
 	require.Error(t, <-s.Done(), "and the reader is told why in the end")
+	require.EqualValues(t, 1, opened.Load())
+	require.Equal(t, 1, said, "which it said once")
+}
+
+// TestAPlaceThatHasNothingIsAskedOnceOverAPty: an ssh follow runs under a pty,
+// which folds the remote stderr into stdout — so the refusal arrives as a line
+// read, and counting it as one is what kept the place being asked again twice a
+// second for as long as the view was open.
+func TestAPlaceThatHasNothingIsAskedOnceOverAPty(t *testing.T) {
+	opened, _ := fakeCollector(t, func(int) string {
+		return `echo 'error: error from server (NotFound): deployments.apps "api" not found in namespace "octo"'; exit 1`
+	})
+
+	s, err := Start(t.Context(), kubeFollow())
+	require.NoError(t, err)
+	for range s.Lines() {
+	}
+	require.Error(t, <-s.Done())
+	require.EqualValues(t, 1, opened.Load())
+}
+
+// TestAPlaceThatCannotBeReadRunsOutOfAttempts: only a tool saying the resource
+// is not there ends the reading at once. Everything else it might complain
+// about could be over by the next attempt.
+func TestAPlaceThatCannotBeReadRunsOutOfAttempts(t *testing.T) {
+	opened, _ := fakeCollector(t, func(int) string {
+		return `echo 'error: You must be logged in to the server (Unauthorized)' >&2; exit 1`
+	})
+
+	s, err := Start(t.Context(), kubeFollow())
+	require.NoError(t, err)
+	for range s.Lines() {
+	}
+	require.Error(t, <-s.Done())
 	require.EqualValues(t, maxReopen, opened.Load())
-	require.Equal(t, maxReopen, said, "each attempt said its piece")
 }
 
 // TestACommandThatWasAskedToRunOnceRunsOnce: only kubectl ends before what it
