@@ -14,7 +14,7 @@ require (
 	github.com/go-faster/pl v0.5.0
 	github.com/go-faster/sdk v0.39.1
 	github.com/go-faster/yaml v0.4.6
-	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/muesli/termenv v0.16.0
 	github.com/sahilm/fuzzy v0.1.3
 	github.com/spf13/cobra v1.10.2
