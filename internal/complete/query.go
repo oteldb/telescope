@@ -84,6 +84,9 @@ func QueryText(query string) string {
 // prefix of the real namespace fills in that prefix, so the text always wins
 // where the two disagree.
 func Target(query string, c source.Collector) string {
+	if c == source.CollectorKubeWatch {
+		return strings.TrimSpace(query)
+	}
 	if literal(c) {
 		return strings.TrimSpace(query)
 	}
@@ -190,7 +193,7 @@ type Attr func(c Candidate, field string) string
 // It is nil for a collector whose target is a query language of its own, where
 // "field:value" is the user's query and not a filter over it.
 func AttrFor(c source.Collector) Attr {
-	if literal(c) {
+	if literal(c) || c == source.CollectorKubeWatch {
 		return nil
 	}
 	switch c {

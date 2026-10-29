@@ -82,7 +82,7 @@ func (c Config) SourceLabels(from string) []Label {
 		if c.UserUnit {
 			add("journal", "user")
 		}
-	case CollectorKubectl:
+	case CollectorKubectl, CollectorKubeWatch:
 		add("namespace", c.Namespace)
 		add("target", c.Target)
 		add("container", c.Container)

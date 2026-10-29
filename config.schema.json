@@ -135,7 +135,7 @@
             "type": "string"
           },
           "namespace": {
-            "description": "Kubernetes namespace.",
+            "description": "Kubernetes namespace; * watches all namespaces for kubectl-watch.",
             "type": [
               "string",
               "null"
@@ -179,7 +179,7 @@
             ]
           },
           "target": {
-            "description": "Pod name or label selector, ns/pod:container accepted; the LogsQL query for VictoriaLogs.",
+            "description": "Pod name or label selector, ns/pod:container accepted; resource[/name] for kubectl-watch (defaults to events); the LogsQL query for VictoriaLogs.",
             "type": [
               "string",
               "null"
@@ -269,6 +269,7 @@
             "enum": [
               "journalctl",
               "kubectl",
+              "kubectl-watch",
               "docker",
               "command",
               "victorialogs",

@@ -33,7 +33,7 @@ type History struct {
 func Scope(cfg source.Config) string {
 	parts := []string{string(cfg.Transport), cfg.Host, string(cfg.Collector)}
 	switch {
-	case cfg.Collector == source.CollectorKubectl:
+	case cfg.Collector == source.CollectorKubectl || cfg.Collector == source.CollectorKubeWatch:
 		parts = append(parts, cfg.KubeConfig, cfg.KubeContext)
 	case cfg.Collector.IsRemoteAPI():
 		// A query belongs to the database it was written for, and never to the

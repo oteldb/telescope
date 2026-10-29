@@ -133,6 +133,17 @@ var listers = map[source.Collector]lister{
 			parse: parseWorkload,
 		},
 	}},
+	source.CollectorKubeWatch: {sources: []listSource{{
+		build: func(r Request) string {
+			return kubectl(r) + " api-resources --verbs=list,watch -o name"
+		},
+		parse: func(line string) []Candidate {
+			if value := strings.TrimSpace(line); value != "" {
+				return []Candidate{{Value: value}}
+			}
+			return nil
+		},
+	}}},
 	source.CollectorDocker: {sources: []listSource{{
 		build: func(r Request) string {
 			return guard("command -v docker", "docker is not installed",

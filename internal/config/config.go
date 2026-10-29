@@ -326,6 +326,11 @@ func Target(cfg source.Config) string {
 			target += ":" + cfg.Container
 		}
 		return target
+	case source.CollectorKubeWatch:
+		if cfg.Namespace != "" {
+			return "ns:" + cfg.Namespace + " " + cfg.Target
+		}
+		return cfg.Target
 	case source.CollectorDocker:
 		return cfg.Container
 	case source.CollectorVictoriaLogs, source.CollectorLoki:
