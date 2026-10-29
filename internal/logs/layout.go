@@ -47,7 +47,11 @@ func rowFields(rec Record, labels []source.Label) []RowField {
 	}
 	// What the line said about itself first, then what the source said about
 	// the line, which is the order the rest of the reading resolves a name in.
+	resource := hasResourceEvent(rec)
 	for _, f := range rec.Fields {
+		if resource && (f.Key == "object" || f.Key == "changes") {
+			continue
+		}
 		add(f.Key, f.String())
 	}
 	for _, l := range labels {
@@ -83,6 +87,9 @@ func (s *Store) Row(e *Entry) []RowField {
 // and nothing it was labeled with. pl bolds a message and so does this, since
 // it is the one part of a row that is a sentence.
 func message(rec Record) string {
+	if text, ok := resourceMessage(rec); ok {
+		return text
+	}
 	if rec.Body == "" {
 		return ""
 	}

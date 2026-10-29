@@ -61,10 +61,11 @@ func WithTimeFunc(f func(Line) time.Time) Option {
 
 // Stream is a running collector command.
 type Stream struct {
-	cfg    Config
-	lines  chan Line
-	done   chan error
-	cancel context.CancelFunc
+	cfg       Config
+	lines     chan Line
+	done      chan error
+	cancel    context.CancelFunc
+	resources resourceWatch
 
 	// mu guards what the reopen loop needs to know about what has already been
 	// read: how much of it there was, and how far it got. Both scanners write
@@ -233,7 +234,11 @@ func (s *Stream) follow(ctx context.Context, cfg Config, cmd *exec.Cmd, stdout, 
 
 		var wg sync.WaitGroup
 		wg.Add(2)
-		go s.scan(ctx, stdout, false, &wg)
+		if cfg.Collector == CollectorKubeWatch {
+			go s.scanResources(ctx, stdout, &wg)
+		} else {
+			go s.scan(ctx, stdout, false, &wg)
+		}
 		go s.scan(ctx, stderr, true, &wg)
 		wg.Wait()
 		err := cmd.Wait()

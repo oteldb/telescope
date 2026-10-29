@@ -82,6 +82,7 @@ var collectors = []source.Collector{
 	source.CollectorCommand,
 	source.CollectorVictoriaLogs,
 	source.CollectorLoki,
+	source.CollectorKubeWatch,
 }
 
 const (
@@ -505,7 +506,9 @@ func (m startModel) rangeErr() error {
 
 // rangeSupported reports whether the collector can be given a window. A
 // free-form command is whatever was typed, so its bounds belong in it.
-func rangeSupported(c source.Collector) bool { return c != source.CollectorCommand }
+func rangeSupported(c source.Collector) bool {
+	return c != source.CollectorCommand && c != source.CollectorKubeWatch
+}
 
 // rangePresets are the windows offered when the range prompt opens. They are
 // suggestions, not the whole language: anything [source.ParseRange] reads can
@@ -922,6 +925,9 @@ func (m *startModel) refilter() {
 func (m startModel) narrowing() string {
 	value := m.input().Value()
 	if m.detail == detailNone {
+		if m.collectorAt() == source.CollectorKubeWatch && m.step == stepCollector {
+			_, value = complete.ParseQuery(value)
+		}
 		return value
 	}
 	for _, c := range m.candidates {
@@ -1026,11 +1032,16 @@ func (m *startModel) accept() tea.Cmd {
 	in := m.input()
 	// A target is the whole value; a filter is one term of several, so what is
 	// accepted there replaces the term being typed and nothing around it.
-	if m.filtersInPlace() && m.detail == detailNone {
+	switch {
+	case m.filtersInPlace() && m.detail == detailNone:
 		value, pos := m.at.apply(in.Value(), m.filtered[m.sel].Value, m.at.Key == "")
 		in.SetValue(value)
 		in.SetCursor(pos)
-	} else {
+	case m.step == stepCollector && m.detail == detailNone && m.collectorAt() == source.CollectorKubeWatch:
+		cfg := m.config().WithTarget(m.filtered[m.sel].Value)
+		in.SetValue(config.Target(cfg))
+		in.CursorEnd()
+	default:
 		in.SetValue(m.filtered[m.sel].Value)
 		in.CursorEnd()
 	}
@@ -1079,7 +1090,7 @@ func (m startModel) filtersInPlace() bool {
 
 // kubectlSelected reports whether the kubeconfig applies to the current choice.
 func (m startModel) kubectlSelected() bool {
-	return m.collectorAt() == source.CollectorKubectl
+	return m.collectorAt() == source.CollectorKubectl || m.collectorAt() == source.CollectorKubeWatch
 }
 
 // active reports whether the current step accepts text. Every step does now
@@ -1110,6 +1121,8 @@ func (m *startModel) syncPlaceholder() {
 		m.target.Placeholder = "[user/]unit, e.g. kubelet — empty for the whole journal"
 	case source.CollectorKubectl:
 		m.target.Placeholder = "[namespace/]pod-or-kind/name[:container] or [ns/]app=name"
+	case source.CollectorKubeWatch:
+		m.target.Placeholder = "[ns:namespace] resource[/name], e.g. ns:* events or ns:octo clusters.cluster.x-k8s.io"
 	case source.CollectorDocker:
 		m.target.Placeholder = "container name or id"
 	case source.CollectorCommand:
@@ -1949,6 +1962,13 @@ func (m startModel) hints() string {
 			}
 		case source.CollectorDocker:
 			lines = []string{"clickhouse", "3f1a0c2b9d44"}
+		case source.CollectorKubeWatch:
+			lines = []string{
+				"(empty)                         Kubernetes Events",
+				"ns:* events                     events across all namespaces",
+				"ns:octo clusters.cluster.x-k8s.io  watch custom resources",
+				"ns:octo deployments/api          watch one resource",
+			}
 		case source.CollectorCommand:
 			lines = []string{"tail -F /var/log/app.log", "dmesg -w"}
 		case source.CollectorVictoriaLogs:

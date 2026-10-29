@@ -49,8 +49,11 @@ func (c Config) Label() string {
 		if what == "" {
 			what = "journal"
 		}
-	case CollectorKubectl:
+	case CollectorKubectl, CollectorKubeWatch:
 		what = strings.TrimSpace(c.Target)
+		if what == "" && c.Collector == CollectorKubeWatch {
+			what = "events"
+		}
 		if ns := strings.TrimSpace(c.Namespace); ns != "" {
 			what = ns + "/" + what
 		}

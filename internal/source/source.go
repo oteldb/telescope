@@ -33,6 +33,7 @@ type Collector string
 const (
 	CollectorJournal      Collector = "journalctl"
 	CollectorKubectl      Collector = "kubectl"
+	CollectorKubeWatch    Collector = "kubectl-watch"
 	CollectorDocker       Collector = "docker"
 	CollectorCommand      Collector = "command"
 	CollectorVictoriaLogs Collector = "victorialogs"
@@ -162,6 +163,10 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(c.Target) == "" {
 			return fmt.Errorf("kubectl requires a pod, a resource such as deploy/name, or a label selector")
 		}
+	case CollectorKubeWatch:
+		if err := c.validateResource(); err != nil {
+			return err
+		}
 	case CollectorDocker:
 		if strings.TrimSpace(c.Container) == "" {
 			return fmt.Errorf("docker requires a container")
@@ -191,6 +196,8 @@ func (c Config) Validate() error {
 		switch c.Collector {
 		case CollectorCommand:
 			return fmt.Errorf("a command has no time range: bound it in the command itself")
+		case CollectorKubeWatch:
+			return fmt.Errorf("a resource watch has no historical time range")
 		case CollectorKubectl:
 			if c.Range.Closed() {
 				// kubectl logs takes --since-time and nothing that ends it.
@@ -243,6 +250,11 @@ func (c Config) WithTarget(target string) Config {
 		}
 		if container != "" {
 			c.Container = container
+		}
+	case CollectorKubeWatch:
+		c.Target = strings.TrimSpace(target)
+		if ns, resource, _ := strings.Cut(c.Target, " "); strings.HasPrefix(ns, "ns:") {
+			c.Namespace, c.Target = strings.TrimPrefix(ns, "ns:"), strings.TrimSpace(resource)
 		}
 	case CollectorDocker:
 		c.Container = target
@@ -362,6 +374,8 @@ func (c Config) Command() string {
 			args = append(args, "-f")
 		}
 		return c.elevated(args)
+	case CollectorKubeWatch:
+		return c.resourceCommand()
 	case CollectorDocker:
 		args := []string{"docker", "logs"}
 		if c.Stamps() {

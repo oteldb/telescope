@@ -179,12 +179,15 @@ func watchEvent(frame []byte) (kind string, obj []byte) {
 // exit is an exit — journalctl -f does not stop while the journal exists, and a
 // command a place named is a command that was asked to run once.
 func (c Config) reopens() bool {
-	return c.Collector == CollectorKubectl && c.following()
+	return (c.Collector == CollectorKubectl || c.Collector == CollectorKubeWatch) && c.following()
 }
 
 // resume is this config asked for what comes after at, which is how a collector
 // is opened again without replaying what has been read.
 func (c Config) resume(at time.Time) Config {
+	if c.Collector == CollectorKubeWatch {
+		return c
+	}
 	if at.IsZero() {
 		// Nothing dated has been read, so there is nothing to ask after: a
 		// place not stamping its lines opens again as it opened.

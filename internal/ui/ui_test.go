@@ -816,6 +816,7 @@ func TestCompletionPreloadsAndCaches(t *testing.T) {
 		targetKey(source.CollectorKubectl),
 		targetKey(source.CollectorDocker),
 		targetKey(source.CollectorCommand),
+		targetKey(source.CollectorKubeWatch),
 	}, keysOf(*calls))
 	for key, n := range *calls {
 		require.Equal(t, 1, n, "%s was looked up more than once", key)
@@ -1684,7 +1685,7 @@ func TestEndpointIsPickedFromAList(t *testing.T) {
 	// tab leaves the picker for the manual flow; the chips are the collectors
 	// themselves, one per kind and never one per endpoint.
 	m := send(t, New(), size(), k("tab"))
-	require.Len(t, collectors, 6)
+	require.Len(t, collectors, 7)
 	m = send(t, m, tabs(4)...) // victorialogs
 	require.Equal(t, source.CollectorVictoriaLogs, m.(Model).start.collectorAt())
 	require.Equal(t, detailEndpoint, m.(Model).start.detail,

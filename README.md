@@ -60,14 +60,15 @@ see [Configuration](#configuration).
 | --- | --- |
 | `journalctl` | a systemd unit, or the whole journal |
 | `kubectl` | a pod, a container, or a label selector |
+| `kubectl-watch` | Kubernetes Events or changes to any resource, including CRDs |
 | `docker` | a container |
 | `command` | anything writing to stdout |
 | `victorialogs` | a [LogsQL][logsql] query, over HTTP |
 | `loki` | a Loki endpoint, over HTTP; the filter selects the stream |
 | `tempo`, `jaeger` | traces rather than lines: a store other places name, see [Traces](#traces) |
 
-The first four run a command, on this machine unless you name an ssh host with
-`ctrl+o` (or `via: ssh://host`). The last two query a database over HTTP and
+The command sources run on this machine unless you name an ssh host with
+`ctrl+o` (or `via: ssh://host`). VictoriaLogs and Loki query a database over HTTP and
 need a URL and usually a token; see [Endpoints](#endpoints).
 
 Targets are written the same way in the prompt and in the config file:
@@ -83,6 +84,47 @@ Targets are written the same way in the prompt and in the config file:
 | `oteldb/app=oteldb` | a label selector (`kubectl logs -l`) |
 
 Naming a workload rather than a pod survives a restart.
+
+### Kubernetes Events and resource changes
+
+Choose `kubectl-watch` to read Kubernetes Events as logs. An empty target reads
+`events`; `ns:* events` reads them across all namespaces, and `ns:octo events`
+selects one. The same kubeconfig, context, SSH and sudo settings as `kubectl`
+apply.
+
+Any resource type can be watched instead, including the custom resources a CRD
+defines: `ns:octo clusters.cluster.x-k8s.io` or `ns:octo deployments/api`.
+Resource types are suggested from the cluster's API discovery. One view watches
+one type; merge saved places to watch several together.
+
+```yaml
+places:
+  - name: cluster-events
+    type: kubectl-watch
+    namespace: "*"
+  - name: clusters
+    type: kubectl-watch
+    namespace: octo
+    target: clusters.cluster.x-k8s.io
+```
+
+Open either by name, for example:
+
+```console
+$ telescope cluster-events --query 'namespace=octo resource_kind=Cluster'
+$ telescope clusters --query 'kind=Cluster'
+```
+
+Events carry their reason, severity, count and the kind and name of the resource
+they concern (`resource_kind` and `resource_name`). Resource watches mark adds,
+updates and deletes in green, yellow and red. Updates show changed JSON paths
+with old values in red and new values in green; the entry holds the full object.
+Changes to `resourceVersion` and `managedFields` alone are ignored.
+
+A watch starts with the objects that exist now and follows their changes.
+`follow: false` reads a snapshot. Historical time ranges and backwards paging
+are unavailable, and `tail` does not limit the initial objects. Previous states
+are bounded in memory; an update whose baseline was evicted says so explicitly.
 
 ### Merging
 

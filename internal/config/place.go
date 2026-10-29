@@ -128,10 +128,10 @@ var placeDescriptor = figureout.MustDerive(func(p *Place, s *figureout.Schema[Pl
 	figureout.Value(s, &p.UserUnit, "user_unit").
 		Doc("Read the user journal.")
 	figureout.Value(s, &p.Namespace, "namespace").
-		Doc("Kubernetes namespace.")
+		Doc("Kubernetes namespace; * watches all namespaces for kubectl-watch.")
 	figureout.Value(s, &p.Target, "target").
 		Doc("Pod name or label selector, ns/pod:container accepted; " +
-			"the LogsQL query for VictoriaLogs.")
+			"resource[/name] for kubectl-watch (defaults to events); the LogsQL query for VictoriaLogs.")
 	figureout.Value(s, &p.Container, "container").
 		Doc("Container, for kubectl or docker.")
 	figureout.Value(s, &p.Args, "args").
@@ -186,6 +186,7 @@ var placeDescriptor = figureout.MustDerive(func(p *Place, s *figureout.Schema[Pl
 var logTypes = []string{
 	string(source.CollectorJournal),
 	string(source.CollectorKubectl),
+	string(source.CollectorKubeWatch),
 	string(source.CollectorDocker),
 	string(source.CollectorCommand),
 	string(source.CollectorVictoriaLogs),
@@ -341,6 +342,12 @@ func (p Place) Stream() (cfg source.Config, ready bool, err error) {
 	if collector == source.CollectorKubectl && cfg.Namespace == "" && cfg.Container == "" {
 		if ns, target, container := source.ParseKubeTarget(cfg.Target); ns != "" || container != "" {
 			cfg.Namespace, cfg.Target, cfg.Container = ns, target, container
+		}
+	}
+	if collector == source.CollectorKubeWatch {
+		cfg = cfg.WithTarget(cfg.Target)
+		if err := cfg.Validate(); err != nil {
+			return cfg, false, err
 		}
 	}
 	// Anything still missing is something the prompt can ask for.
