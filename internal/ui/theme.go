@@ -37,6 +37,7 @@ var (
 	styleKey  = lipgloss.NewStyle().Foreground(colorAccent)
 	styleErr  = lipgloss.NewStyle().Foreground(colorErr)
 	styleOK   = lipgloss.NewStyle().Foreground(colorOK)
+	styleWarn = lipgloss.NewStyle().Foreground(colorWarn).Bold(true)
 	styleDim  = lipgloss.NewStyle().Foreground(colorMuted)
 
 	styleBox = lipgloss.NewStyle().

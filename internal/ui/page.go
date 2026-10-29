@@ -146,3 +146,30 @@ func (m logModel) olderText() string {
 		return ""
 	}
 }
+
+func (m logModel) pageLimit() string {
+	if m.cursor > 0 || m.top > 0 {
+		return ""
+	}
+	switch {
+	case !m.cfg.CanPage():
+		switch m.cfg.Collector {
+		case source.CollectorCommand:
+			return "cannot load older entries: command sources have no backfill"
+		case source.CollectorKubeWatch:
+			return "cannot load older entries: Kubernetes watches show current objects and live changes"
+		case source.CollectorMerge:
+			return "cannot load older entries: a merged source has no backfill"
+		default:
+			return "cannot load older entries: this source has no backfill"
+		}
+	case m.atCap:
+		return "cannot load older entries: the buffer is full"
+	case m.atStart:
+		return "no older entries in this source"
+	}
+	if held := m.store.Entries(); len(held) > 0 && !held[0].HasTime {
+		return "cannot load older entries: the oldest entry has no timestamp"
+	}
+	return ""
+}

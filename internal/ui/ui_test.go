@@ -109,6 +109,10 @@ func k(s string) tea.Msg {
 		"esc":    tea.KeyEsc,
 		"down":   tea.KeyDown,
 		"up":     tea.KeyUp,
+		"pgup":   tea.KeyPgUp,
+		"pgdown": tea.KeyPgDown,
+		"home":   tea.KeyHome,
+		"end":    tea.KeyEnd,
 		"ctrl+n": tea.KeyCtrlN,
 		"ctrl+p": tea.KeyCtrlP,
 	}[s]}

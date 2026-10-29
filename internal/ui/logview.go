@@ -84,6 +84,8 @@ type logModel struct {
 	atStart bool
 	atCap   bool
 	pageErr error
+	// pageHint explains a paging limit until the next key is pressed.
+	pageHint string
 
 	status string
 	err    error
@@ -242,6 +244,7 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 		return m.updateSearch(km)
 	}
 	m.note = ""
+	m.pageHint = ""
 	entries := m.view.Entries(m.store)
 	runs := m.runs(entries)
 	// at is the line a row draws, which is what every key that works from the
@@ -335,7 +338,12 @@ func (m logModel) Update(msg tea.Msg) (logModel, tea.Cmd) {
 		m.hoff = 0
 	}
 	m.clamp()
-	return m, m.wantPage()
+	cmd := m.wantPage()
+	switch km.String() {
+	case "up", "k", "pgup", "home", "g", "H":
+		m.pageHint = m.pageLimit()
+	}
+	return m, cmd
 }
 
 func (m logModel) updateSearch(km tea.KeyMsg) (logModel, tea.Cmd) {
@@ -737,6 +745,9 @@ func moreFields(n int) string { return fmt.Sprintf("  +%d", n) }
 func (m logModel) footer(entries []*logs.Entry) string {
 	if m.note != "" && !m.searching {
 		return ansi.Truncate(styleOK.Render(m.note), m.width(), "")
+	}
+	if m.pageHint != "" && !m.searching {
+		return ansi.Truncate(styleWarn.Render(m.pageHint), m.width(), "")
 	}
 	if m.searching {
 		keys := []string{key("enter", "apply")}
