@@ -16,7 +16,7 @@ type ResourceChange struct {
 }
 
 func resourceChanges(before, after map[string]json.RawMessage, path string) []ResourceChange {
-	keys := make([]string, 0, len(before)+len(after))
+	keys := make([]string, 0, len(before))
 	for k := range before {
 		keys = append(keys, k)
 	}
