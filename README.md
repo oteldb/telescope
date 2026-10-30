@@ -183,6 +183,9 @@ the grep it replaces. `?` writes the language out in full, and `tab` completes
 field names and values — including the ones only the database has seen yet. Over
 a log database as much of the filter as the server can answer is sent to it.
 
+Timestamped console logs with trailing JSON context expose fields such as
+`method` and `path` to the same filter.
+
 **Reading backwards.** The tail is where reading starts and not how far back it
 goes: scroll to the first line and the ones before it are fetched. A database
 answers directly, and journalctl, docker and kubectl are run again over the

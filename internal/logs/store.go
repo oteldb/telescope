@@ -212,7 +212,12 @@ func (s *Store) render(l source.Line) *Entry {
 		rec.SpanID = labelValue(l.Labels, spanKeys)
 	}
 
-	text, ok := s.fmt.Format(l.Data)
+	input := l.Data
+	// Console context uses the JSON renderer while Raw retains the source bytes.
+	if rec.Structured && !bytes.HasPrefix(bytes.TrimSpace(input), []byte("{")) {
+		input = recordJSON(rec)
+	}
+	text, ok := s.fmt.Format(input)
 	switch {
 	case ok:
 	case !blank(l.Data):

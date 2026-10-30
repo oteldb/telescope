@@ -24,10 +24,13 @@ var (
 	spanKeys  = []string{"span_id", "spanID", "SpanID", "spanid"}
 )
 
-// Parse decodes a JSON log line. Non-JSON lines yield an unstructured record.
+// Parse decodes JSON and timestamped console logs. Other lines stay unstructured.
 func Parse(line []byte) Record {
 	trimmed := bytes.TrimSpace(line)
 	if len(trimmed) == 0 || trimmed[0] != '{' {
+		if rec, ok := parseConsole(trimmed); ok {
+			return rec
+		}
 		return Record{Body: string(trimmed)}
 	}
 
