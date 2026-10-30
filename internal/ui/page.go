@@ -43,14 +43,10 @@ func (m *logModel) wantPage() tea.Cmd {
 	if m.paging || m.atStart || m.pageErr != nil || !m.cfg.CanPage() {
 		return nil
 	}
-	held := m.store.Entries()
-	if len(held) == 0 {
-		return nil
-	}
 	// An arrival time says when the view was running, not where in the database
 	// to read from, and asking by one would read the wrong lines back.
-	first := held[0]
-	if !first.HasTime {
+	first := m.pageAnchor()
+	if first == nil {
 		return nil
 	}
 	room := m.store.Room()
@@ -64,6 +60,16 @@ func (m *logModel) wantPage() tea.Cmd {
 	}
 	m.paging = true
 	return pageCmd(m.cfg, first.At, min(limit, room))
+}
+
+func (m logModel) pageAnchor() *logs.Entry {
+	// Collector diagnostics may precede the first dated log entry.
+	for _, e := range m.store.Entries() {
+		if e.HasTime && !e.Kind.IsNote() {
+			return e
+		}
+	}
+	return nil
 }
 
 func pageCmd(cfg source.Config, before time.Time, limit int) tea.Cmd {
@@ -168,8 +174,8 @@ func (m logModel) pageLimit() string {
 	case m.atStart:
 		return "no older entries in this source"
 	}
-	if held := m.store.Entries(); len(held) > 0 && !held[0].HasTime {
-		return "cannot load older entries: the oldest entry has no timestamp"
+	if m.store.Len() > 0 && m.pageAnchor() == nil {
+		return "cannot load older entries: no log entries have a timestamp"
 	}
 	return ""
 }

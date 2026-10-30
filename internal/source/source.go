@@ -117,9 +117,8 @@ type Config struct {
 	// cannot be asked, the view still asks of every line it gets back.
 	Filter query.Expr
 
-	// Stamp asks the collector to report the time of each line out of band, in
-	// [Line.At]. It costs a flag the collector may not have, so it is only
-	// asked for where it is needed: ordering a merge.
+	// Stamp requests timestamps where optional, such as Docker in a merge.
+	// Kubernetes logs always stamp for paging and resume.
 	Stamp bool
 
 	// Range bounds the window read. The zero value reads up to now, which is
@@ -130,11 +129,10 @@ type Config struct {
 	Follow bool
 }
 
-// Stamps reports whether the collector was asked to timestamp its lines and can
-// do it. journalctl is read with -o cat, which is the message and nothing else,
-// so a merged journal is ordered by when its lines arrive.
+// Stamps reports whether the collector dates its lines in [Line.At].
+// Kubernetes logs always stamp so plain text can be paged and resumed.
 func (c Config) Stamps() bool {
-	return c.Stamp && (c.Collector == CollectorDocker || c.Collector == CollectorKubectl)
+	return c.Collector == CollectorKubectl || (c.Stamp && c.Collector == CollectorDocker)
 }
 
 // following reports whether the stream stays open. A range with an end is a

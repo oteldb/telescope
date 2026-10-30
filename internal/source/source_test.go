@@ -35,12 +35,12 @@ func TestConfigCommand(t *testing.T) {
 		{
 			name: "kubectl pod",
 			cfg:  Config{Collector: CollectorKubectl, Namespace: "oteldb", Target: "oteldb-0", Follow: true},
-			want: "kubectl logs -n oteldb oteldb-0 -f",
+			want: "kubectl logs -n oteldb oteldb-0 --timestamps -f",
 		},
 		{
 			name: "kubectl selector and container",
 			cfg:  Config{Collector: CollectorKubectl, Target: "app=oteldb", Container: "ch", Tail: 10},
-			want: "kubectl logs -l app=oteldb -c ch --prefix --tail 10",
+			want: "kubectl logs -l app=oteldb -c ch --prefix --timestamps --tail 10",
 		},
 		{
 			name: "docker",
@@ -58,7 +58,7 @@ func TestConfigCommand(t *testing.T) {
 				Collector: CollectorKubectl, Target: "oteldb-0", Namespace: "oteldb",
 				KubeConfig: "/etc/rancher/k3s/k3s.yaml", Follow: true,
 			},
-			want: "kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml logs -n oteldb oteldb-0 -f",
+			want: "kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml logs -n oteldb oteldb-0 --timestamps -f",
 		},
 		{
 			// sudo must name kubectl itself: a sudoers rule for the binary does
@@ -68,7 +68,7 @@ func TestConfigCommand(t *testing.T) {
 				Collector: CollectorKubectl, Target: "oteldb-0",
 				KubeConfig: "/etc/rancher/k3s/k3s.yaml", Elevate: true, Follow: true,
 			},
-			want: "sudo -n kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml logs oteldb-0 -f",
+			want: "sudo -n kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml logs oteldb-0 --timestamps -f",
 		},
 		{
 			name: "journal elevated",
@@ -90,12 +90,12 @@ func TestConfigCommand(t *testing.T) {
 		{
 			name: "kubectl deployment",
 			cfg:  Config{Collector: CollectorKubectl, Namespace: "oteldb", Target: "deployment/api", Follow: true},
-			want: "kubectl logs -n oteldb deployment/api --prefix -f",
+			want: "kubectl logs -n oteldb deployment/api --prefix --timestamps -f",
 		},
 		{
 			name: "kubectl statefulset container",
 			cfg:  Config{Collector: CollectorKubectl, Namespace: "oteldb", Target: "statefulset/oteldb", Container: "clickhouse"},
-			want: "kubectl logs -n oteldb statefulset/oteldb -c clickhouse --prefix",
+			want: "kubectl logs -n oteldb statefulset/oteldb -c clickhouse --prefix --timestamps",
 		},
 		{
 			name: "kubectl with an explicit context",
@@ -103,7 +103,7 @@ func TestConfigCommand(t *testing.T) {
 				Collector: CollectorKubectl, Target: "pod",
 				KubeConfig: "/root/.kube/reader.kubeconfig", KubeContext: "reader",
 			},
-			want: "kubectl --kubeconfig=/root/.kube/reader.kubeconfig --context=reader logs pod",
+			want: "kubectl --kubeconfig=/root/.kube/reader.kubeconfig --context=reader logs pod --timestamps",
 		},
 		{
 			name: "kubeconfig with a space is quoted",
@@ -111,7 +111,7 @@ func TestConfigCommand(t *testing.T) {
 				Collector: CollectorKubectl, Target: "p",
 				KubeConfig: "/home/me/my configs/kube.yaml",
 			},
-			want: `kubectl --kubeconfig='/home/me/my configs/kube.yaml' logs p`,
+			want: `kubectl --kubeconfig='/home/me/my configs/kube.yaml' logs p --timestamps`,
 		},
 		{
 			name: "quotes unsafe unit",

@@ -374,7 +374,7 @@ func TestPartialSavedSourceUnwinds(t *testing.T) {
 	m = send(t, m, k("down"), k("enter"), k("enter"), k("enter"))
 	require.Equal(t,
 		"sudo -n kubectl --kubeconfig=/root/.kube/ops.kubeconfig "+
-			"logs -n oteldb oteldb-0 --tail 1000 -f",
+			"logs -n oteldb oteldb-0 --timestamps --tail 1000 -f",
 		m.(Model).logs.cfg.Command())
 }
 
@@ -414,7 +414,7 @@ func TestKubeContextEditor(t *testing.T) {
 	m = send(t, m, k("enter"), k("enter"))
 	require.Equal(t,
 		"kubectl --kubeconfig=/root/.kube/reader.kubeconfig --context=reader "+
-			"logs -n ns pod --tail 1000 -f",
+			"logs -n ns pod --timestamps --tail 1000 -f",
 		m.(Model).logs.cfg.Command())
 }
 
@@ -634,7 +634,7 @@ func TestCompletionFilterTerms(t *testing.T) {
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 	m = send(t, m, k("enter"), k("enter"))
-	require.Equal(t, "kubectl logs -n oteldb deploy/api --prefix --tail 1000 -f", m.(Model).logs.cfg.Command())
+	require.Equal(t, "kubectl logs -n oteldb deploy/api --prefix --timestamps --tail 1000 -f", m.(Model).logs.cfg.Command())
 }
 
 // TestUnknownFilterFieldIsSearchedFor: a colon in a value is the container
@@ -930,7 +930,7 @@ func TestElevatedKubectlOverSSH(t *testing.T) {
 		"ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
 		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-tt", "node1",
 		"sudo -n kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml logs " +
-			"-n oteldb oteldb-0 --tail 1000 -f",
+			"-n oteldb oteldb-0 --timestamps --tail 1000 -f",
 	}, cfg.Argv())
 }
 

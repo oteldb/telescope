@@ -132,7 +132,7 @@ func TestRangeInCommand(t *testing.T) {
 		{
 			name: "kubectl takes rfc 3339",
 			cfg:  Config{Collector: CollectorKubectl, Target: "api", Range: mustRange(t, "1h"), Follow: true},
-			want: "kubectl logs api --since-time=2026-08-11T13:30:00Z -f",
+			want: "kubectl logs api --timestamps --since-time=2026-08-11T13:30:00Z -f",
 		},
 		{
 			name: "docker bounds both ends",

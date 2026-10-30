@@ -51,7 +51,7 @@ places:
 	require.Equal(t, "error", cfg.Places[0].Query)
 	require.Equal(t,
 		"sudo -n kubectl --kubeconfig=/root/.kube/ops.kubeconfig "+
-			"logs -n oteldb oteldb-0 --tail 1000 -f",
+			"logs -n oteldb oteldb-0 --timestamps --tail 1000 -f",
 		pods.Command())
 
 	docker, ready, err := cfg.Places[1].Stream()

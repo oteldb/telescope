@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
@@ -13,6 +14,29 @@ import (
 	"github.com/oteldb/telescope/internal/logs"
 	"github.com/oteldb/telescope/internal/source"
 )
+
+func TestLeadingUndatedEntriesDoNotBlockKubernetesPaging(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		leading source.Line
+	}{
+		{"stderr diagnostic", source.Line{Data: []byte("Defaulted container api out of: api, sidecar"), Stderr: true}},
+		{"SSH diagnostic", source.Line{Data: []byte("Defaulted container api out of: api, sidecar")}},
+		{"source note", source.Line{Kind: source.KindRestarted, Reason: "api restarted"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newLogs(source.Config{Collector: source.CollectorKubectl, Target: "api-0"}, logs.NewStore(100), "")
+			m.resize(100, 30)
+			m.append(tt.leading)
+			m.append(source.Line{Data: []byte("started listening"), At: time.Date(2026, 10, 30, 0, 10, 0, 0, time.UTC)})
+			require.False(t, m.store.Entries()[0].HasTime)
+			next, cmd := m.Update(k("pgup"))
+			require.NotNil(t, cmd, "a dated log entry should provide the history boundary")
+			require.Empty(t, next.pageLimit())
+			require.Len(t, next.store.Entries(), 2, "diagnostics remain visible")
+		})
+	}
+}
 
 func TestPagingLimitsAreHighlightedWhenReached(t *testing.T) {
 	for _, tt := range []struct {
@@ -45,7 +69,7 @@ func TestPagingLimitsAreHighlightedWhenReached(t *testing.T) {
 		{
 			name: "missing timestamp", cfg: source.Config{Collector: source.CollectorJournal},
 			line: `{"msg":"no timestamp"}`,
-			want: "cannot load older entries: the oldest entry has no timestamp",
+			want: "cannot load older entries: no log entries have a timestamp",
 		},
 		{
 			name: "buffer full", cfg: source.Config{Collector: source.CollectorDocker, Container: "api"}, atCap: true,
