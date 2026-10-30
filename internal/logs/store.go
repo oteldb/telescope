@@ -250,9 +250,9 @@ func (s *Store) render(l source.Line) *Entry {
 	// stacktrace under it.
 	if rec.Structured {
 		head = message(rec)
-		if changed, ok := resourceMessage(rec); ok {
-			text = changed + "\n" + text
-			_, extra = fold(text)
+		if rec.Watch != nil {
+			text = head
+			extra = 0
 		}
 	}
 

@@ -71,6 +71,10 @@ func repeats(a, b *logs.Entry, o logs.Origins) bool {
 		// T opens the trace of the line the row draws, and a fold that spanned
 		// ids would open the oldest of them whatever the cursor was on.
 		return false
+	case a.Record.Watch != nil || b.Record.Watch != nil:
+		// A watch already aggregates Event occurrences and suppresses unchanged
+		// objects. Folding again hides a newer count or a different field change.
+		return false
 	case a.Record.Body == "":
 		// A line with nothing to compare — blank, or a rendering the parser
 		// found no message in — is not a copy of anything.

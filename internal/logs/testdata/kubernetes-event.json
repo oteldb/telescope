@@ -1,0 +1,36 @@
+{
+  "time": "2026-10-29T20:00:52Z",
+  "level": "info",
+  "msg": "ArtifactUpToDate OCIRepository/metrics-server artifact up-to-date with remote revision: '3.13.1@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'",
+  "watch_event": "MODIFIED",
+  "api_version": "v1",
+  "kind": "Event",
+  "namespace": "kube-system",
+  "name": "metrics-server.1234",
+  "reason": "ArtifactUpToDate",
+  "count": 1489,
+  "resource_kind": "OCIRepository",
+  "resource_name": "metrics-server",
+  "changes": [
+    {"path": "/count", "before": 1488, "after": 1489},
+    {"path": "/lastTimestamp", "before": "2026-10-29T19:51:01Z", "after": "2026-10-29T20:00:52Z"}
+  ],
+  "object": {
+    "apiVersion": "v1",
+    "kind": "Event",
+    "metadata": {
+      "name": "metrics-server.1234",
+      "namespace": "kube-system",
+      "creationTimestamp": "2026-10-29T17:49:42Z",
+      "managedFields": [{"manager": "source-controller", "fieldsV1": {"f:count": {}, "f:lastTimestamp": {}}}]
+    },
+    "type": "Normal",
+    "reason": "ArtifactUpToDate",
+    "message": "artifact up-to-date with remote revision: '3.13.1@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'",
+    "count": 1489,
+    "firstTimestamp": "2026-10-29T17:49:42Z",
+    "lastTimestamp": "2026-10-29T20:00:52Z",
+    "reportingComponent": "source-controller",
+    "involvedObject": {"kind": "OCIRepository", "name": "metrics-server", "namespace": "kube-system"}
+  }
+}

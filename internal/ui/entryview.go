@@ -32,7 +32,8 @@ type entryModel struct {
 	// note is what the last copy did, shown until the next key. It is the only
 	// evidence a copy leaves: the clipboard is the terminal's, not ours, and
 	// cannot be read back to confirm.
-	note string
+	note     string
+	expanded map[string]bool
 }
 
 func newEntry(cfg source.Config, e *logs.Entry) entryModel {
@@ -94,12 +95,37 @@ func (m entryModel) Update(msg tea.Msg) (entryModel, tea.Cmd) {
 		m.sel, m.off = 0, 0
 	case "end", "G":
 		m.sel = max(len(sel)-1, 0)
+	case " ", "left", "right":
+		if len(sel) == 0 {
+			return m, nil
+		}
+		section := doc[sel[m.clamp(sel)]].section
+		if section == "" {
+			return m, nil
+		}
+		open := !m.sectionOpen(section)
+		if km.String() == "left" {
+			open = false
+		}
+		if km.String() == "right" {
+			open = true
+		}
+		if m.expanded == nil {
+			m.expanded = make(map[string]bool)
+		}
+		m.expanded[section] = open
+		doc = m.document(m.docWidth())
+		sel = picks(doc)
 	case "y":
 		if len(sel) == 0 {
 			return m, nil
 		}
 		it := doc[sel[m.clamp(sel)]]
-		return m, copyCmd(it.key, it.value)
+		if it.section != "" && it.value == "" && len(it.payload) == 0 {
+			m.note = "expand this section with space"
+			return m, nil
+		}
+		return m, copyCmd(it.key, it.copyValue())
 	case "Y":
 		// The whole entry as it arrived, from wherever the cursor happens to be.
 		return m, copyCmd("entry", string(m.entry.Raw))
@@ -233,8 +259,11 @@ func (m entryModel) help() string {
 	if m.note != "" {
 		return styleOK.Render(m.note)
 	}
-	return strings.Join([]string{
-		key("↑↓", "select"),
+	keys := []string{key("↑↓", "select")}
+	if m.entry != nil && m.entry.Record.Watch != nil {
+		keys = append(keys, key("space", "expand/collapse"))
+	}
+	return strings.Join(append(keys, []string{
 		key("y", "copy"),
 		key("Y", "entry"),
 		key("o", "open"),
@@ -243,7 +272,7 @@ func (m entryModel) help() string {
 		key("?", "syntax"),
 		key("esc", "back"),
 		key("q", "quit"),
-	}, styleHint.Render(" · "))
+	}...), styleHint.Render(" · "))
 }
 
 // noteMsg is what a key just did, or why it could not. Reaching the screen

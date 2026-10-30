@@ -121,6 +121,11 @@ updates and deletes in green, yellow and red. Updates show changed JSON paths
 with old values in red and new values in green; the entry holds the full object.
 Changes to `resourceVersion` and `managedFields` alone are ignored.
 
+An Event opens on its message, resource and occurrence history; changes,
+connection details and the full object expand when wanted. Resource updates
+open on changed paths with separate before and after values. Normal Events
+stay informational as their count increases.
+
 A watch starts with the objects that exist now and follows their changes.
 `follow: false` reads a snapshot. Historical time ranges and backwards paging
 are unavailable, and `tail` does not limit the initial objects. Previous states

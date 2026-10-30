@@ -37,6 +37,7 @@ type Record struct {
 	SpanID  string
 
 	Fields []Field
+	Watch  *WatchRecord
 }
 
 // HasTime reports whether the record carried a usable timestamp.

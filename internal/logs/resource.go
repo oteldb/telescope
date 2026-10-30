@@ -1,40 +1,32 @@
 package logs
 
 import (
-	"encoding/json"
 	"strings"
-
-	"github.com/oteldb/telescope/internal/source"
 )
 
 func hasResourceEvent(rec Record) bool {
-	for _, f := range rec.Fields {
-		if f.Key == "watch_event" {
-			switch f.String() {
-			case "ADDED", "MODIFIED", "DELETED":
-				return true
-			}
-		}
-	}
-	return false
+	return rec.Watch != nil
 }
 
 func resourceMessage(rec Record) (string, bool) {
 	if !hasResourceEvent(rec) {
 		return "", false
 	}
-	var event string
-	var changes []source.ResourceChange
-	for _, f := range rec.Fields {
-		switch f.Key {
-		case "watch_event":
-			event = f.String()
-		case "changes":
-			_ = json.Unmarshal(f.Value, &changes)
+	w := rec.Watch
+	if w.Event != nil {
+		var b strings.Builder
+		b.WriteString(levelColors[rec.Level.String()] + Escape(w.Reason) + ansiReset)
+		if w.ResourceName != "" {
+			b.WriteString(" " + Escape(w.ResourceKind+"/"+w.ResourceName))
 		}
+		b.WriteString(" " + Escape(w.Event.Message))
+		if w.Count > 0 {
+			b.WriteString(" · " + w.OccurrenceText())
+		}
+		return b.String(), true
 	}
 	color := ""
-	switch event {
+	switch w.Action {
 	case "ADDED":
 		color = ansiOK
 	case "MODIFIED":
@@ -46,7 +38,7 @@ func resourceMessage(rec Record) (string, bool) {
 	}
 	var b strings.Builder
 	b.WriteString(color + Escape(rec.Body) + ansiReset)
-	for _, change := range changes {
+	for _, change := range w.Changes {
 		b.WriteString(" · " + Escape(change.Path) + ": ")
 		switch {
 		case len(change.Before) == 0:

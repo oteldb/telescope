@@ -684,6 +684,9 @@ func renderLine(e *logs.Entry, fields []rowField, tag, gutter string, repeat int
 		marker += tag + " "
 	}
 	marker += gutter
+	if e.Record.Watch != nil {
+		return renderWatchLine(e, fields, marker, hoff, width)
+	}
 	text := e.Head
 	if e.Stderr {
 		text = styleErr.Render("!") + " " + text

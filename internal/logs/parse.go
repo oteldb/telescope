@@ -69,6 +69,7 @@ func Parse(line []byte) Record {
 			r.SpanID = asString(f.Value)
 		}
 	}
+	r.Watch = parseWatch(r)
 	return r
 }
 

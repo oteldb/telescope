@@ -20,15 +20,29 @@ import (
 // path with an escape drawn as \e is not a path any editor will open, and a
 // wrapped trace id is not a trace id.
 type item struct {
-	key   string
-	value string
-	lines []string
-	pick  bool
+	key      string
+	value    string
+	lines    []string
+	pick     bool
+	section  string
+	filter   query.Expr
+	noFilter bool
+	payload  []byte
+}
+
+func (it item) copyValue() string {
+	if it.payload != nil {
+		return string(it.payload)
+	}
+	return it.value
 }
 
 // document renders the entry as the rows it is made of. The order is the order
 // on screen, and the pickable ones are what the cursor walks.
 func (m entryModel) document(width int) []item {
+	if m.entry.Record.Watch != nil {
+		return m.watchDocument(width)
+	}
 	e := m.entry
 	var out []item
 
@@ -161,6 +175,12 @@ func block(s string, width int, render func(string) string) []string {
 // came from, and a rendering or a raw line selects itself; what is worth
 // narrowing by is what a line has in common with others.
 func (it item) term() query.Expr {
+	if it.section != "" || it.noFilter {
+		return nil
+	}
+	if it.filter != nil {
+		return it.filter
+	}
 	switch it.key {
 	case "", "time", "received", "body", "rendered", "raw":
 		return nil

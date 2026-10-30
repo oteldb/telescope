@@ -113,6 +113,8 @@ func k(s string) tea.Msg {
 		"pgdown": tea.KeyPgDown,
 		"home":   tea.KeyHome,
 		"end":    tea.KeyEnd,
+		"left":   tea.KeyLeft,
+		"right":  tea.KeyRight,
 		"ctrl+n": tea.KeyCtrlN,
 		"ctrl+p": tea.KeyCtrlP,
 	}[s]}
